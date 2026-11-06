@@ -1,0 +1,77 @@
+name: Release
+
+# Publica uma versão nova: `node scripts/release.mjs 0.2.0` cria o commit e a tag v0.2.0.
+# O app instalado consulta releases/latest/download/latest.json e oferece a atualização.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Publicar versão (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Conferir segredos de assinatura
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::Falta o segredo TAURI_SIGNING_PRIVATE_KEY (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/fetch-ffmpeg.mjs
+
+      - name: Usar o FFmpeg empacotado nos testes
+        shell: pwsh
+        run: |
+          $bin = Resolve-Path apps/desktop/src-tauri/binaries
+          "AMV_FFMPEG=$bin\ffmpeg-x86_64-pc-windows-msvc.exe" | Out-File -Append $env:GITHUB_ENV
+          "AMV_FFPROBE=$bin\ffprobe-x86_64-pc-windows-msvc.exe" | Out-File -Append $env:GITHUB_ENV
+
+      - run: pnpm fixtures
+      - run: pnpm typecheck
+      - run: pnpm test
+
+      - name: Notas da versão (do CHANGELOG.md)
+        id: notes
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="## $version" '$0 ~ "^## " { p = ($0 == v) ; next } p' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Versão $version" > notes.md
+          cat notes.md
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: AMV Studio ${{ github.ref_name }}
+          releaseBodyPath: notes.md
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true

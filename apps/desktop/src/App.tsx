@@ -1,6 +1,6 @@
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Clapperboard, FolderOpen, House, Upload } from 'lucide-react';
+import { Clapperboard, FolderOpen, House, RefreshCw, Upload } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { HomeScreen } from './features/home/HomeScreen';
 import { NewProjectDialog } from './features/home/NewProjectDialog';
@@ -9,6 +9,7 @@ import { ProjectScreen } from './features/project/ProjectScreen';
 import { fileName, useApp } from './store';
 import { Button, Dialog } from './ui/controls';
 import { Toasts } from './ui/Toasts';
+import { UpdateBanner, useUpdate, useUpdateChecker } from './features/update/UpdateBanner';
 
 const AUTOSAVE_MS = 30_000;
 
@@ -42,7 +43,26 @@ function Sidebar() {
       <NavButton label={session ? `Projeto: ${session.project.name}` : 'Nenhum projeto aberto'} active={screen === 'project'} disabled={!session} onClick={() => go('project')}>
         <Clapperboard size={19} />
       </NavButton>
+      <VersionButton />
     </nav>
+  );
+}
+
+function VersionButton() {
+  const { version, phase, update, check } = useUpdate();
+  const checking = phase === 'checking';
+  return (
+    <button
+      type="button"
+      onClick={() => void check(true)}
+      disabled={checking}
+      title={update ? `Versão ${update.version} disponível` : 'Procurar atualizações'}
+      className="mt-auto flex flex-col items-center gap-1 rounded-lg px-1 py-2 text-muted hover:bg-raised/60 hover:text-ink"
+    >
+      <RefreshCw size={14} className={checking ? 'animate-spin' : ''} />
+      <span className="tnum text-2xs">{version ? `v${version}` : ''}</span>
+      {update && <span className="size-1.5 rounded-full bg-violet" />}
+    </button>
   );
 }
 
@@ -170,11 +190,13 @@ export function App() {
   useAutosave();
   useCloseGuard();
   const dragging = useFileDrop();
+  useUpdateChecker();
 
   return (
     <div className="flex h-full">
       <Sidebar />
       <main className="flex min-w-0 flex-1 flex-col">
+        <UpdateBanner />
         <div className="min-h-0 flex-1">{screen === 'project' && session ? <ProjectScreen /> : <HomeScreen />}</div>
         <JobsDock />
       </main>
