@@ -1,10 +1,12 @@
 name: Release
 
-# Publica uma versão nova: `node scripts/release.mjs 0.2.0` cria o commit e a tag v0.2.0.
+# Publica uma versão nova: `node scripts/release.mjs 0.2.0 --push` atualiza a versão,
+# envia para main e para o branch `release`. Este workflow cria a tag v0.2.0 e a Release.
 # O app instalado consulta releases/latest/download/latest.json e oferece a atualização.
 on:
   push:
-    tags: ['v*']
+    branches: [release]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -57,7 +59,7 @@ jobs:
         id: notes
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version=$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")
           awk -v v="## $version" '$0 ~ "^## " { p = ($0 == v) ; next } p' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "Versão $version" > notes.md
           cat notes.md
@@ -69,8 +71,8 @@ jobs:
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
-          tagName: ${{ github.ref_name }}
-          releaseName: AMV Studio ${{ github.ref_name }}
+          tagName: v__VERSION__
+          releaseName: AMV Studio v__VERSION__
           releaseBodyPath: notes.md
           releaseDraft: false
           prerelease: false

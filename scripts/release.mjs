@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Prepara uma versão nova: atualiza a versão em todos os lugares, confere o
- * CHANGELOG, cria o commit e a tag. O push da tag dispara o workflow Release.
+ * CHANGELOG e cria o commit. Com --push, envia para main e para o branch
+ * `release`, que dispara o workflow Release (ele cria a tag e a Release).
  * Uso: node scripts/release.mjs 0.2.0 [--push]
  */
 import { execFileSync } from 'node:child_process';
@@ -31,10 +32,13 @@ edit('apps/desktop/src-tauri/Cargo.toml', (s) => s.replace(/^version = "[^"]+"/m
 
 const git = (...a) => execFileSync('git', a, { cwd: root, stdio: 'inherit' });
 git('add', '-A');
-git('commit', '-m', `release: v${version}`);
-git('tag', '-a', `v${version}`, '-m', `AMV Studio ${version}`);
-if (process.argv.includes('--push')) {
-  git('push');
-  git('push', 'origin', `v${version}`);
+try {
+  git('commit', '-m', `release: v${version}`);
+} catch {
+  // nada mudou (versão já estava nos arquivos)
 }
-console.log(`v${version} pronta${process.argv.includes('--push') ? ' e enviada' : '. Envie com: git push && git push origin v' + version}`);
+if (process.argv.includes('--push')) {
+  git('push', 'origin', 'HEAD:main');
+  git('push', '--force', 'origin', 'HEAD:release');
+}
+console.log(`v${version} pronta${process.argv.includes('--push') ? ' e enviada' : '. Envie com: git push origin HEAD:main && git push --force origin HEAD:release'}`);
