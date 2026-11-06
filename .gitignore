@@ -1,0 +1,14 @@
+node_modules/
+dist/
+target/
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+# binários de sidecar baixados por script
+apps/desktop/src-tauri/binaries/
+# mídia gerada para testes
+fixtures/generated/
+# cache de projetos
+*.amvproj.d/
