@@ -1,6 +1,6 @@
 # Status
 
-Fase atual: **1 — Fundação** (concluída, aguardando verificação no Windows pelo CI e no PC do Bruno).
+Fase atual: **1 — Fundação** — concluída. CI verde no Windows (FFmpeg 9.0.2, 50 testes TS + 3 Python, instalador gerado). Falta só o teste manual no PC do Bruno.
 
 ## Fase 1 — Fundação
 
@@ -23,7 +23,7 @@ Fase atual: **1 — Fundação** (concluída, aguardando verificação no Window
 | Atalhos: Ctrl+N/O/S/Shift+S/I/Z/Shift+Z/Y; bloqueio de atalhos do navegador | feito | código; verificação manual pendente no Windows |
 | Aviso ao fechar com alterações não salvas | feito | código; verificação manual pendente no Windows |
 | Sidecar Python opcional (esqueleto: saúde, módulos, token) | feito | pytest |
-| CI no Windows: testes + instalador NSIS/MSI | feito | ver aba Actions |
+| CI no Windows: testes + instalador NSIS/MSI | feito | run 42305866809 verde; o 1º run pegou uma diferença do FFmpeg 9 nas miniaturas de HEVC, já corrigida |
 
 ### Pendente de verificação no Windows
 - Reprodução do proxy no painel de detalhes (WebView2). No Linux de desenvolvimento não dá para testar: o WebKitGTK não toca mídia pelo protocolo de arquivos do Tauri.

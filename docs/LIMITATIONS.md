@@ -6,3 +6,4 @@
 - **Linux (desenvolvimento)**: o WebKitGTK não reproduz vídeo/áudio servido pelo asset protocol do Tauri. Alvo é Windows (WebView2); no Linux a pré-visualização de mídia fica indisponível.
 - **Preview no painel de detalhes** usa `<video>` com o proxy: é para conferir a mídia, não é preciso quadro a quadro (o preview da timeline vem na Fase 2).
 - **Analisador Python** ainda não é iniciado pelo app (entra na Fase 4).
+- **Tamanho do instalador**: o build GPL completo do FFmpeg tem ~166 MB por executável (ffmpeg + ffprobe). Dá para reduzir com um build enxuto (só os codecs usados) numa fase de polimento.
