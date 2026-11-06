@@ -129,9 +129,18 @@ export async function makeThumbStrip(
       args.splice(args.length - 1, 0, '-f', 'image2', '-c:v', 'mjpeg');
       return args;
     };
-    await runFfmpegWithProgress(runner, build(true), probe.durationUs, report, signal);
-    if (!(await fs.exists(tmp))) {
-      // poucos keyframes (comum em HEVC): refaz decodificando todos os quadros
+    // Atalho rápido: só keyframes. Com poucos keyframes (comum em HEVC) não sai nada:
+    // o FFmpeg 6 termina com sucesso sem arquivo; o 7+ falha com "Could not open
+    // encoder before EOF". Nos dois casos, refaz decodificando todos os quadros.
+    let fastOk = true;
+    try {
+      await runFfmpegWithProgress(runner, build(true), probe.durationUs, report, signal);
+    } catch (e) {
+      if (!(e instanceof ToolError)) throw e;
+      fastOk = false;
+    }
+    if (!fastOk || !(await fs.exists(tmp))) {
+      if (await fs.exists(tmp)) await fs.remove(tmp);
       report(0, 'refazendo miniaturas sem atalho');
       await runFfmpegWithProgress(runner, build(false), probe.durationUs, report, signal);
     }

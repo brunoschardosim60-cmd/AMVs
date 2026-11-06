@@ -141,6 +141,24 @@ describe('miniaturas e waveform', () => {
     expect(img.probe.video!.height).toBe(plan.tileHeight * plan.rows);
   });
 
+  it('miniaturas: se o atalho por keyframes falhar (FFmpeg 7+), refaz decodificando tudo', async () => {
+    const { probe } = await probeFile(runner, f('hevc10_23976.mkv'));
+    const strip = join(tmp, 'strip-fallback.jpg');
+    let fastTried = false;
+    const ffmpeg7: typeof runner = {
+      run: (tool, args, opts) => {
+        if (tool === 'ffmpeg' && args.includes('-skip_frame')) {
+          fastTried = true;
+          return Promise.resolve({ code: 4294967274, stdout: '', stderr: 'Could not open encoder before EOF' });
+        }
+        return runner.run(tool, args, opts);
+      },
+    } as typeof runner;
+    await makeThumbStrip(ffmpeg7, nodeFs, f('hevc10_23976.mkv'), strip, probe, () => undefined);
+    expect(fastTried).toBe(true);
+    expect(await nodeFs.exists(strip)).toBe(true);
+  });
+
   it('waveform encontra os cliques de 120 BPM a cada 0,5 s', async () => {
     const { probe } = await probeFile(runner, f('click_120bpm.wav'));
     const w = await computeWaveform(runner, f('click_120bpm.wav'), probe, () => undefined);

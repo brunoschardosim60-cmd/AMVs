@@ -24,7 +24,7 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - FFmpeg decodifica para PCM mono 8 kHz no stdout; picos min/max calculados em pedaços (memória constante). Base de 10 ms por bucket, níveis 2×. Formato binário próprio `AMVW` v1.
 
 ## 2026-11-06 · Folha de miniaturas com `-skip_frame nokey` + fallback
-- Rápido para episódios inteiros. HEVC com poucos keyframes gera saída vazia com código 0 → o pipeline detecta e refaz decodificando tudo.
+- Rápido para episódios inteiros. HEVC com poucos keyframes não gera nada: no FFmpeg 6 sai com código 0 e sem arquivo; no 7+ falha ("Could not open encoder before EOF", pego pelo CI no Windows). Nos dois casos o pipeline refaz decodificando tudo.
 - Regra geral: FFmpeg com código 0 e sem arquivo de saída é ERRO (`atomicOutput`).
 
 ## 2026-11-06 · Dependências
