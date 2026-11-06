@@ -58,7 +58,7 @@ jobs:
       # confere que o app empacota; a versão assinada para o atualizador sai no workflow Release
       - name: Gerar instalador do app (sem assinatura de atualização)
         working-directory: apps/desktop
-        run: pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: pnpm tauri build --config src-tauri/tauri.ci.conf.json
 
       - name: Publicar instalador
         uses: actions/upload-artifact@v4
