@@ -29,5 +29,11 @@ Fase atual: **1 — Fundação** — concluída. CI verde no Windows (FFmpeg 9.0
 - Reprodução do proxy no painel de detalhes (WebView2). No Linux de desenvolvimento não dá para testar: o WebKitGTK não toca mídia pelo protocolo de arquivos do Tauri.
 - Diálogos nativos de abrir/salvar e o arrastar e soltar no Explorer.
 
+## Distribuição
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Atualização automática (plugin updater, assinatura minisign) | feito | Release v0.1.1 publicada com `latest.json` e `.sig` |
+| Publicar versão: `node scripts/release.mjs x.y.z --push` (branch `release`) | feito | workflow Release verde |
+
 ## Próximo: Fase 2 — Editor
 Timeline multipista, preview sincronizado, cortes, propriedades, snapping.
