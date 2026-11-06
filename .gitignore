@@ -12,3 +12,7 @@ apps/desktop/src-tauri/binaries/
 fixtures/generated/
 # cache de projetos
 *.amvproj.d/
+apps/desktop/dist/
+*.egg-info/
+.pytest_cache/
+fixtures/generated/_*

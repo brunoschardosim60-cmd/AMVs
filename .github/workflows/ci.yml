@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows — testes e instalador
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Instalar dependências
+        run: pnpm install --frozen-lockfile
+
+      - name: Baixar FFmpeg (sidecar) e conferir checksum
+        run: node scripts/fetch-ffmpeg.mjs
+
+      - name: Usar o FFmpeg empacotado nos testes
+        shell: pwsh
+        run: |
+          $bin = Resolve-Path apps/desktop/src-tauri/binaries
+          "AMV_FFMPEG=$bin\ffmpeg-x86_64-pc-windows-msvc.exe" | Out-File -Append $env:GITHUB_ENV
+          "AMV_FFPROBE=$bin\ffprobe-x86_64-pc-windows-msvc.exe" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Gerar mídia de teste sintética
+        run: pnpm fixtures
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Testes (com FFmpeg real)
+        run: pnpm test
+
+      - name: Gerar instalador do app
+        working-directory: apps/desktop
+        run: pnpm tauri build
+
+      - name: Publicar instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: AMV-Studio-Windows
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+            apps/desktop/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+          retention-days: 14
+
+  analyzer:
+    name: Analisador Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/analyzer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e ".[dev]"
+      - run: pytest -q

@@ -1,0 +1,105 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/manrope';
+
+/* Tokens do AMV Studio. Grafite + violeta (ação/seleção) + azul (tempo/áudio). */
+@theme {
+  --color-base: #16171c;
+  --color-panel: #1d1f27;
+  --color-raised: #272a35;
+  --color-hover: #2e3240;
+  --color-line: #30343f;
+  --color-line-soft: #252831;
+  --color-ink: #e7e8ee;
+  --color-ink-soft: #b9bcc9;
+  --color-muted: #8d91a2;
+  --color-faint: #5d6170;
+  --color-violet: #8b6cff;
+  --color-violet-strong: #a68eff;
+  --color-violet-deep: #3a2f6e;
+  --color-azure: #3fa2ff;
+  --color-azure-deep: #183a5c;
+  --color-ok: #3fd08a;
+  --color-warn: #f2b544;
+  --color-danger: #ff5c6c;
+
+  --font-sans: 'Manrope Variable', system-ui, sans-serif;
+
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+
+  --radius-control: 6px;
+  --radius-panel: 10px;
+}
+
+:root {
+  color-scheme: dark;
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv11', 'ss01';
+  background: var(--color-base);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Números de tempo, duração e tamanho não "dançam" */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+input,
+textarea,
+select {
+  user-select: text;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-violet);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}
+
+/* Faixa animada da fila: só se move enquanto há trabalho real */
+@keyframes amv-scan {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 28px 0;
+  }
+}
+.progress-live {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgb(255 255 255 / 0.12) 0 7px,
+    transparent 7px 14px
+  );
+  animation: amv-scan 0.9s linear infinite;
+}

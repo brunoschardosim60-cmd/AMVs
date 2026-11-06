@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Marca do AMV Studio: cortes de timeline que formam uma onda, com o playhead em azul -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="#1D1F27"/>
+  <rect x="16.5" y="16.5" width="479" height="479" rx="111.5" fill="none" stroke="#30343F" stroke-width="3"/>
+  <g fill="#8B6CFF">
+    <rect x="104" y="214" width="44" height="84" rx="14"/>
+    <rect x="168" y="170" width="44" height="172" rx="14"/>
+    <rect x="232" y="118" width="44" height="276" rx="14" fill="#A68EFF"/>
+    <rect x="296" y="186" width="44" height="140" rx="14"/>
+    <rect x="360" y="226" width="44" height="60" rx="14"/>
+  </g>
+  <rect x="249" y="72" width="10" height="368" rx="5" fill="#3FA2FF"/>
+  <circle cx="254" cy="72" r="18" fill="#3FA2FF"/>
+</svg>

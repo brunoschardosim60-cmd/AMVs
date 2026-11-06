@@ -1,0 +1,30 @@
+import type { FileSystem, ProcessRunner } from '@amv/media';
+
+/**
+ * Tudo que o app precisa do sistema operacional. Em produção vem do Tauri
+ * (platform/tauri.ts); nos testes, de Node com FFmpeg real.
+ */
+export interface Dialogs {
+  openProject(): Promise<string | null>;
+  saveProjectAs(defaultName: string): Promise<string | null>;
+  pickMedia(): Promise<string[]>;
+  pickFile(title: string, extensions: string[]): Promise<string | null>;
+  pickFolder(title: string): Promise<string | null>;
+  confirm(message: string, title: string): Promise<boolean>;
+}
+
+export interface Platform {
+  runner: ProcessRunner;
+  fs: FileSystem;
+  dialogs: Dialogs;
+  /** Pasta de cache (proxies, miniaturas, waveforms). */
+  cacheDir(): Promise<string>;
+  /** Pasta de dados do app (lista de recentes). */
+  dataDir(): Promise<string>;
+  /** URL que o webview consegue carregar para um arquivo local. */
+  fileUrl(path: string): string;
+  /** Lista arquivos de uma pasta, recursivamente até `depth` níveis. */
+  listFiles(dir: string, depth: number): Promise<string[]>;
+  /** Abre o arquivo/pasta no gerenciador de arquivos do sistema. */
+  reveal?(path: string): Promise<void>;
+}

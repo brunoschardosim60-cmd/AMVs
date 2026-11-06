@@ -1,0 +1,37 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissões da janela principal",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "dialog:default",
+    {
+      "identifier": "fs:scope",
+      "allow": [{ "path": "**" }]
+    },
+    "fs:allow-exists",
+    "fs:allow-mkdir",
+    "fs:allow-read-file",
+    "fs:allow-write-file",
+    "fs:allow-rename",
+    "fs:allow-remove",
+    "fs:allow-read-dir",
+    "fs:allow-stat",
+    "fs:allow-open",
+    "fs:allow-seek",
+    "fs:allow-read",
+    "fs:allow-size",
+    "core:resources:allow-close",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        { "name": "binaries/ffmpeg", "sidecar": true, "args": true },
+        { "name": "binaries/ffprobe", "sidecar": true, "args": true }
+      ]
+    },
+    "shell:allow-kill"
+  ]
+}

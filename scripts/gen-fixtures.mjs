@@ -67,9 +67,13 @@ const fixtures = [
   {
     // MP3 com capa embutida (stream de vídeo attached_pic) — precisa ser tratado como ÁUDIO
     file: 'musica_capa.mp3',
-    args: ['-f', 'lavfi', '-i', 'sine=frequency=220:duration=5',
-      '-f', 'lavfi', '-i', 'color=c=purple:size=300x300:duration=1',
-      '-map', '0:a', '-map', '1:v', '-frames:v', '1', '-c:a', 'libmp3lame', '-b:a', '128k', '-c:v', 'mjpeg',
+    pre: () =>
+      new Promise((resolve, reject) => {
+        const r = spawnSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=purple:size=300x300', '-frames:v', '1', join(out, '_capa.png')]);
+        r.status === 0 ? resolve() : reject(new Error(String(r.stderr)));
+      }),
+    args: ['-f', 'lavfi', '-i', 'sine=frequency=220:duration=5', '-i', join(out, '_capa.png'),
+      '-map', '0:a', '-map', '1:v', '-c:a', 'libmp3lame', '-b:a', '128k', '-c:v', 'mjpeg',
       '-disposition:v', 'attached_pic', '-id3v2_version', '3',
       '-metadata', 'title=Faixa de Teste', '-metadata', 'artist=AMV Studio', '-metadata', 'genre=Teste'],
   },

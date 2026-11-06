@@ -105,6 +105,28 @@ export class ProjectHistory {
     return this.commit(project);
   }
 
+  /**
+   * Aplica uma mudança do SISTEMA (não do usuário) sem criar passo de undo:
+   * ex.: "proxy terminou, mídia pronta", "arquivo não encontrado ao abrir".
+   * Não marca o projeto como modificado: é estado recalculado ao abrir.
+   * Lança CommandError se inválido.
+   */
+  applySystem(command: Command): Project {
+    const wasClean = !this.dirty;
+    const { project } = applyCommand(this.current, command);
+    this.current = project;
+    this.revision += 1;
+    if (wasClean) this.savedRevision = this.revision;
+    this.emit();
+    return project;
+  }
+
+  /** Força o estado "não salvo" (ex.: projeto recuperado de autosave). */
+  markUnsaved(): void {
+    this.savedRevision = -1;
+    this.emit();
+  }
+
   /** Substitui o projeto sem histórico (abrir arquivo, recuperar autosave). */
   reset(project: Project): void {
     this.current = project;

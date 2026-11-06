@@ -144,3 +144,18 @@ describe('histórico', () => {
     expect(h.project.name).toBe('n1');
   });
 });
+
+describe('mudanças do sistema', () => {
+  it('applySystem não cria undo nem marca como modificado', () => {
+    let p = baseProject();
+    const v = videoAsset({ status: 'processing' });
+    p = applyCommand(p, { type: 'asset.add', asset: v }).project;
+    const h = new ProjectHistory(p);
+    h.applySystem({ type: 'asset.update', assetId: v.id, patch: { status: 'ok' } });
+    expect(h.project.assets[0]!.status).toBe('ok');
+    expect(h.canUndo).toBe(false);
+    expect(h.dirty).toBe(false);
+    h.markUnsaved();
+    expect(h.dirty).toBe(true);
+  });
+});

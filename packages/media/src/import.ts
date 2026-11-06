@@ -1,4 +1,5 @@
 import { newId, partialHash, type Asset, type ProbeInfo } from '@amv/project';
+import { needsAudioProxy } from './args.js';
 import type { JobQueue } from './jobs.js';
 import {
   cachePaths,
@@ -130,7 +131,7 @@ export function prepareArtifacts(
     : Promise.resolve(null);
 
   const audioProxy =
-    asset.kind === 'audio'
+    asset.kind === 'audio' && needsAudioProxy(probe)
       ? (async () => {
           await ready;
           if (await env.fs.exists(paths.audioProxy)) return paths.audioProxy;

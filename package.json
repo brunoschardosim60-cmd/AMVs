@@ -7,7 +7,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "fixtures": "node scripts/gen-fixtures.mjs",
-    "dev": "pnpm --filter @amv/desktop tauri dev"
+    "dev": "pnpm --filter @amv/desktop tauri dev",
+    "ffmpeg": "node scripts/fetch-ffmpeg.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.0",
