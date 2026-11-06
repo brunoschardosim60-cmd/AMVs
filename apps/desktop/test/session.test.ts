@@ -70,8 +70,12 @@ describe('sessão do projeto', () => {
     // tudo vem do cache: nenhum job de proxy novo
     expect(session!.queue.list().filter((j) => j.kind === 'proxy')).toEqual([]);
 
-    await new Promise((r) => setTimeout(r, 50));
-    const recents = await loadRecents(p);
+    // a miniatura entra nos recentes de forma assíncrona: espera até 5 s (CI do Windows é mais lento)
+    let recents = await loadRecents(p);
+    for (let i = 0; i < 100 && !recents[0]?.posterPath; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      recents = await loadRecents(p);
+    }
     expect(recents[0]).toMatchObject({ name: 'Meu AMV', assetCount: 4 });
     expect(recents[0]!.posterPath).toBeTruthy();
   });
