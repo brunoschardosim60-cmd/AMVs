@@ -8,7 +8,10 @@ Este arquivo é lido no início de TODA sessão de desenvolvimento. Ele define o
 
 App desktop para criar Anime Music Videos: o usuário importa episódios e uma música, escolhe o estilo, e pode editar tudo manualmente numa timeline multipista ou pedir para a IA gerar uma primeira montagem — que vira clipes comuns, 100% editáveis, na mesma timeline.
 
-Ao redor do editor existem três módulos integrados (§11): um **assistente de IA** que entende comandos em português e propõe mudanças aprováveis, um **Music Hub** para buscar, ouvir e escolher músicas, e um **Translation Studio** para transcrever, traduzir e legendar.
+Ao redor do editor existem três módulos integrados (§11):
+- **Assistente de IA**: entende comandos em português, responde sobre o clipe selecionado, propõe mudanças com prévia exata, comparação A/B e aprovação parcial, e aprende o estilo do usuário (com controle para desativar).
+- **Music Hub**: biblioteca local forte para importar, ouvir, organizar por gênero, emoção, BPM e intensidade, comparar e escolher músicas sem sair do app.
+- **Translation Studio**: importar letras e legendas, transcrever, sincronizar, traduzir e editar.
 
 **A IA é o editor assistente. O usuário é o diretor.**
 
@@ -252,6 +255,7 @@ Cada fase só termina quando **todos** os critérios passam em teste automatizad
 - Beats/BPM, seções, cortes de cena, VAD — sem IA pesada.
 - Marcadores na timeline, editáveis.
 - Módulos com IA atrás de checagem de instalação e toggle global "desativar IA".
+- **Biblioteca musical local completa** (§11.3 "Biblioteca local"): importar arquivos/pastas, tags, análise automática, organizar, filtros, player persistente, detalhe da faixa e modo comparação. Ela vem aqui, e não na fase do Music Hub, porque depende só da análise de áudio e é usada pelo Auto AMV.
 
 **Fase 5 — Auto AMV**
 - Algoritmo do §5.1 gerando nova versão editável com `reason` por clipe.
@@ -259,16 +263,21 @@ Cada fase só termina quando **todos** os critérios passam em teste automatizad
 
 **Fase 6 — Central de IA + Assistente** (§11.1, §11.2)
 - Central de modelos: provedores, chaves no cofre do sistema, teste de conexão, módulos liga/desliga.
-- Assistente com ferramentas de leitura e de proposta (`ChangeSet`), prévia visual, aprovação, undo em um passo.
+- Assistente com ferramentas de leitura e de proposta (`ChangeSet`).
+- Prévia exata (adicionado/removido/movido/alterado), comparação A/B (lado a lado e alternada), aprovação parcial com dependências e revalidação, undo em um passo.
+- Chat contextual: "Perguntar à IA" em clipe, marcador, intervalo e faixa.
+- Memória criativa (§11.8) com a tela "O que a IA aprendeu" e o interruptor para desativar.
 - Suíte de testes do assistente com LLM simulado (respostas gravadas) — determinística, roda no CI.
 
 **Fase 7 — Music Hub** (§11.3, §11.4)
-- Biblioteca musical local com player persistente, playlists, favoritos, histórico, fila, BPM/energia da análise.
+- Tela completa do Music Hub sobre a biblioteca local já pronta (playlists, histórico, fila, busca).
 - Spike de YouTube e Spotify (risco §3.9) → integrar o que funcionar oficialmente; documentar o que não funcionar.
 - Recomendação contextual com justificativa.
 
 **Fase 8 — Translation Studio** (§11.5)
-- Transcrição + detecção de idioma, tradução, editor lado a lado, SRT/ASS/LRC importar/exportar, legendas na timeline com paridade preview/export.
+- Importar SRT/ASS/VTT/LRC/TXT com detecção de codificação; exportar nos mesmos formatos e ASS bilíngue.
+- Sincronização: alinhamento automático com confiança por linha, modo toque, offset/esticar, ajuste fino na mini-timeline.
+- Transcrição + detecção de idioma, tradução com glossário, editor lado a lado com versões por linha, legendas na timeline com paridade preview/export.
 
 **Fase 9 — Integração e polimento**
 - Fluxo completo do §11.6 funcionando ponta a ponta.
@@ -319,13 +328,37 @@ Painel lateral persistente (§6), conversa em português, histórico salvo por p
 | Proposta | `propose_change(...)`, `propose_replace_scene`, `propose_retime_cuts(ritmo)`, `propose_add_effect(beat)`, `propose_move_clip_before(marker)` | retorna um **`ChangeSet`** |
 | Externa | `translate_text`, `transcribe_range` | delega ao Translation Studio |
 
-**`ChangeSet`** = lista de `Command`s (§4.1) + descrição + `reason` por item. Fluxo:
-1. O assistente propõe; nada muda no projeto.
-2. A UI mostra a prévia: diff na timeline (clipes fantasma em outra cor) e lista legível ("mover fala 'Eu não vou perder' para 01:10,4 — 1,6 s antes do drop").
-3. O usuário aprova tudo, aprova parte ou recusa.
-4. Aplicado como **um único grupo de undo**, com `origin: 'ai'`.
+**`ChangeSet`** = lista de itens; cada item tem `Command`s (§4.1), `kind` (`add` | `remove` | `move` | `modify`), `reason`, `dependsOn: itemId[]` e o `baseVersion` do projeto em que foi gerado. O assistente nunca altera o projeto fora desse fluxo. Não existe ferramenta de escrita direta.
 
-O assistente nunca altera o projeto sem esse fluxo. Não existe ferramenta de escrita direta.
+#### Prévia exata das alterações
+
+Antes de qualquer aprovação, a tela de revisão mostra **tudo** que vai mudar:
+- **Na timeline**, sobre a edição atual: adicionados em verde (clipes fantasma), removidos em vermelho riscado, movidos com seta da posição antiga para a nova, alterados com contorno amarelo.
+- **Na lista de revisão**, um item por mudança, em linguagem clara e com valores exatos: "Adicionar *Golpe final* em V1, 01:12,0–01:13,2", "Remover clipe 14 (00:42,1–00:43,6)", "Mover fala *Eu não vou perder* de 00:58,3 para 01:10,4", "Volume da música: −6 dB → −14 dB entre 01:10,4 e 01:12,0".
+- Resumo no topo: "3 adicionados · 1 removido · 2 movidos · 4 alterados".
+- Clicar num item leva o playhead até ele e destaca o clipe.
+
+#### Comparação A/B
+
+- A proposta é aplicada numa **cópia em memória** do projeto (comandos são puros, então é barato). O projeto real não muda.
+- **Modo lado a lado**: dois previews sincronizados no mesmo playhead — A (atual) e B (proposta) —, em resolução reduzida para caber no desempenho. Áudio de um lado por vez, com troca por tecla.
+- **Modo alternado** (para PCs mais fracos): um preview só, com tecla para alternar A/B no mesmo instante.
+- Botão "tocar só os trechos alterados": monta um loop com as regiões afetadas, com 2 s de margem antes e depois.
+
+#### Aprovação parcial
+
+- Cada item tem caixa de seleção; também dá para aceitar ou recusar por trilha ou por tipo ("aceitar só os cortes", "recusar todos os efeitos").
+- **Dependências são respeitadas**: desmarcar um item desmarca os que dependem dele, explicando o motivo ("o efeito 7 é aplicado no clipe adicionado no item 3"). Nada aplica um comando órfão.
+- Antes de aplicar, o subconjunto escolhido é **revalidado** (sem sobreposições ilegais, clipes dentro da mídia de origem). Se algo ficou inválido, mostrar e não aplicar.
+- A prévia e o A/B se atualizam em tempo real conforme as seleções.
+- Se o projeto mudou desde que a proposta foi gerada (`baseVersion` diferente), reaplicar sobre a versão atual quando não houver conflito; havendo conflito, marcar os itens afetados e oferecer "pedir nova proposta".
+- O que for aplicado vira **um único grupo de undo**, com `origin: 'ai'`. Itens aceitos e recusados ficam registrados para a memória criativa (§11.8).
+
+#### Chat contextual
+
+- Clique direito em clipe, marcador, seleção de intervalo ou faixa da biblioteca → **"Perguntar à IA"**. O painel abre com um chip anexado ao campo de mensagem ("Clipe 14 · V1 · 00:42,1–00:43,6"), que pode ser removido.
+- O contexto do chip inclui: propriedades do clipe, trecho de origem e análise da cena, clipes vizinhos, seção da música e beats naquele tempo, falas no intervalo. Com modelo multimodal, também quadros do clipe — enviados para serviço externo só com a permissão do §11.2 ligada.
+- Perguntas como "como posso melhorar essa cena?" recebem resposta com diagnóstico concreto (corte 0,3 s depois do beat, cena repetida aos 00:31, cena de intensidade baixa num refrão) e terminam com propostas clicáveis, que viram `ChangeSet` com o fluxo acima.
 
 Comandos que precisam funcionar (viram casos de teste): "deixe os cortes mais rápidos", "coloque essa fala antes do drop", "encontre outra cena para esse trecho", "adicione um efeito de câmera nessa batida", "traduza essa frase", "encontre uma música mais agressiva", "analise meu AMV e encontre pontos fracos". Referências como "essa", "esse trecho" e "nessa batida" se resolvem pela seleção e pelo playhead.
 
@@ -370,7 +403,42 @@ Provedores, em ordem de implementação:
 3. **YouTube** — busca via API oficial (chave do usuário), reprodução via player oficial embutido, se o spike do risco §3.9 passar. `importable: false`.
 4. **Spotify** — busca e metadados via API oficial com login OAuth (PKCE); reprodução só se o SDK funcionar no WebView2, senão "abrir no Spotify". `importable: false`.
 
-Funções da tela: busca com filtros (gênero, emoção, intensidade, BPM, duração), player integrado, fila, playlists, favoritos, histórico, página de artista/álbum quando o provedor fornecer.
+Funções gerais da tela: busca com filtros (gênero, emoção, intensidade, BPM, duração), player integrado, fila, playlists, favoritos, histórico, página de artista/álbum quando o provedor fornecer.
+
+#### Biblioteca local — prioridade do Music Hub
+
+É a parte mais importante do Music Hub e precisa funcionar muito bem antes de qualquer provedor de streaming.
+
+**Importar**
+- Arquivos soltos, pastas inteiras (recursivo) e arrastar e soltar. **Pastas monitoradas** opcionais detectam músicas novas sozinhas.
+- Formatos: MP3, WAV, FLAC, M4A/AAC, OGG/Opus.
+- Ler tags embutidas (título, artista, álbum, gênero, ano, capa).
+- Referência ao arquivo original, sem copiar. Duplicatas detectadas por hash. Arquivo movido → relocalizar como nos projetos.
+
+**Analisar** (automático, em background, com cache — §4.2 e §5)
+- BPM com confiança, beats/downbeats, curva de energia, seções (intro, verso, refrão, drop, final), posição do drop, loudness, presença de voz, duração.
+- **Intensidade** = número derivado da curva de energia (real, reproduzível).
+- **Emoção**: etiqueta do usuário. Pode haver sugestão automática, sempre marcada como sugestão e com confiança; nunca vira dado sem o usuário confirmar.
+- Estado visível por faixa: "na fila", "analisando 40%", "pronta", "erro (ver log)".
+
+**Organizar**
+- Gênero, emoção, tags livres, favoritos, nota (1–5), observações, playlists e coleções por projeto ("músicas candidatas do AMV X").
+- Editar vários de uma vez (selecionar 20 faixas → marcar "épica").
+- Colunas: "usada em quais projetos" e "data de importação".
+
+**Encontrar**
+- Filtros combináveis: faixa de BPM, faixa de intensidade, emoção, gênero, tags, duração, "tem drop", favoritas, não usadas ainda.
+- Ordenar por qualquer coluna. Visão em lista (tabela) e em grade (capas).
+- Desempenho com milhares de faixas: lista virtualizada e índices no SQLite.
+
+**Ouvir**
+- Player persistente (§6) com fila, sem sair do app.
+- Detalhe da faixa: waveform com seções e drop marcados, curva de energia, clicar numa seção para tocar dali, loop de seção.
+
+**Comparar e escolher**
+- Selecionar de 2 a 4 faixas → **modo comparação**: curvas de energia lado a lado (alinhadas pelo início ou pelo drop), BPM, seções, duração e pontuação de compatibilidade com o projeto atual (§11.4).
+- Audição A/B: pular para a mesma seção em cada faixa ("ouvir o drop de cada uma") com uma tecla.
+- "Escolher para o projeto" coloca a faixa na trilha de música e já traz os marcadores de beats e seções.
 
 BPM e intensidade só aparecem quando vierem de **análise real** do arquivo local ou de campo oficial do provedor. Para faixas de streaming sem esses dados, mostrar "não disponível" — nunca estimar e exibir como fato.
 
@@ -391,10 +459,33 @@ Pipeline:
 1. **Transcrição + idioma**: faster-whisper com timestamps por palavra sobre o áudio de um asset ou de um intervalo (com separação de voz opcional antes).
 2. **Tradução**: segmento a segmento, com contexto (falas vizinhas, glossário de nomes do anime definido pelo usuário para não traduzir nomes próprios e golpes).
 3. **Editor lado a lado**: original × tradução, edição manual, ajuste de tempos arrastando, marcação "revisado".
-4. **Arquivos**: importar/exportar SRT, ASS e LRC (`packages/subtitles`, com teste de round-trip). ASS preserva estilos.
+4. **Arquivos**: importar/exportar (`packages/subtitles`, com teste de round-trip para cada formato).
 5. **Timeline**: legendas viram clipes de texto numa trilha de legendas. Preview e exportação usam o **mesmo renderizador ASS** (libass no FFmpeg; no preview, libass compilado para WebAssembly) para paridade.
 
-Para músicas: letras só das fontes do §7. Original e tradução lado a lado, sincronizadas quando houver `.lrc` ou transcrição. "Explicar significado" e "sugerir frases curtas para o AMV" via LLM, sobre o texto que o usuário forneceu.
+#### Importar letras e legendas
+
+- Formatos: **SRT, ASS/SSA, VTT, LRC** (incluindo LRC com tempo por palavra), **TXT** (letra sem tempo) e texto colado.
+- Detectar a codificação do arquivo (UTF-8, UTF-8 com BOM, Shift-JIS, Windows-1252 — legendas de anime vêm em todas essas) e mostrar uma prévia antes de confirmar.
+- ASS: preservar estilos, posições e efeitos de karaokê ao importar e exportar.
+- Uma legenda/letra importada fica ligada a um asset (episódio ou música). Pode haver várias por asset (idiomas, versões).
+
+#### Sincronizar
+
+- **Alinhamento automático** de texto sem tempo (letra em TXT): transcrever com timestamps por palavra (com separação de voz antes, para música), casar o texto conhecido com o reconhecido e gerar tempos por linha. Cada linha recebe confiança; as de confiança baixa ficam destacadas para revisão.
+- **Modo toque**: tocar o áudio e apertar uma tecla no início de cada linha (outra no fim, opcional), com opção de reduzir a velocidade da reprodução.
+- **Ajuste global**: deslocar tudo (offset) e esticar/comprimir (corrige legendas feitas para outra taxa de quadros, como 23,976 × 25).
+- **Ajuste fino**: arrastar início e fim de cada linha numa mini-timeline com waveform, com snapping para início de voz e beats; deslocar linhas selecionadas.
+
+#### Editar traduções
+
+- Original e tradução lado a lado, linha a linha, tocando o trecho ao selecionar a linha.
+- Mais de uma versão por linha (ex.: "literal" e "adaptada para AMV"), escolhendo qual vai para a timeline.
+- Glossário do projeto (nomes, golpes, termos que não se traduzem), aplicado na tradução automática.
+- Avisos de legibilidade: caracteres por segundo, linhas longas, sobreposição de tempos.
+- Marcação de linha "revisada"; tradução automática nunca sobrescreve linha revisada.
+- Exportar: SRT/VTT por idioma, LRC, ASS bilíngue (dois estilos) e "queimar" na exportação do vídeo.
+
+Para músicas: letras só das fontes do §7. Original e tradução lado a lado, sincronizadas e acompanhando a reprodução. "Explicar significado" e "sugerir frases curtas para o AMV" via LLM, sobre o texto que o usuário forneceu.
 
 ### 11.6 Fluxo integrado (teste de aceitação ponta a ponta)
 
@@ -413,3 +504,33 @@ Esse fluxo vira um teste automatizado com fixtures sintéticas e LLM simulado, m
 - Nenhuma tela de provedor sem integração real: se um provedor não está configurado ou o spike falhou, ele não aparece (ou aparece como "não configurado", com o motivo).
 - Toda chamada externa é visível num log de atividade da Central de IA (o quê, para quem, quando, tamanho), sem conteúdo de chaves.
 - Falha de rede ou de provedor nunca trava o editor nem corrompe o projeto.
+
+### 11.8 Memória criativa
+
+A IA aprende o estilo do usuário a partir do que ele **faz**, não de adivinhação. É estatística local e transparente, não treinamento de modelo.
+
+**O que é observado** (eventos gravados localmente, em SQLite):
+- itens de `ChangeSet` aceitos e recusados, por tipo (corte, efeito, transição, troca de cena, música);
+- edições manuais feitas logo depois de uma montagem da IA (ex.: encurtou os clipes do drop → prefere cortes mais rápidos ali);
+- músicas escolhidas e descartadas (BPM, intensidade, gênero, emoção);
+- efeitos e transições usados, com frequência e parâmetros;
+- duração média de clipe por seção da música e por estilo.
+
+**O que é derivado** — preferências legíveis, cada uma com quantidade de evidências:
+- "Em drops de AMVs de luta, prefere cortes de 2 beats (18 edições)";
+- "Raramente aceita glitch (aceitou 1 de 9)";
+- "Escolhe músicas entre 130 e 150 BPM com drop antes de 1:20 (7 escolhas)".
+
+Uma preferência só passa a valer depois de um mínimo de evidências (configurável, padrão 5). O cálculo é determinístico e tem testes.
+
+**Onde é usada**
+- Ajusta os pesos e os parâmetros padrão do Auto AMV (§5.1) e a pontuação de músicas (§11.4).
+- Entra como um resumo curto no contexto do assistente.
+- Toda proposta influenciada por ela diz isso no `reason` ("cortes de 2 beats — sua preferência em drops de luta").
+
+**Controle do usuário** (tela "O que a IA aprendeu")
+- Ver todas as preferências em linguagem simples, com as evidências.
+- Editar, desativar ou apagar cada uma; "esquecer tudo".
+- Interruptor geral para **desativar** a memória criativa (para de registrar e para de usar).
+- Opção por projeto: "não aprender com este projeto".
+- Fica só no computador. O resumo só vai para um LLM externo se a permissão de envio externo (§11.2) estiver ligada.
