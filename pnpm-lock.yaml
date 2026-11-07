@@ -88,6 +88,15 @@ importers:
         specifier: ^7.3.7
         version: 7.3.7(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.33.0)
 
+  packages/analysis:
+    dependencies:
+      '@amv/media':
+        specifier: workspace:*
+        version: link:../media
+      '@amv/project':
+        specifier: workspace:*
+        version: link:../project
+
   packages/media:
     dependencies:
       '@amv/project':
