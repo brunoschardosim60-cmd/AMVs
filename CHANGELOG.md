@@ -1,6 +1,6 @@
 # Novidades
 
-## 0.5.3
+## 0.5.4
 
 Correção: a análise de episódios longos parava em 33% ("Analisando cenas e falas"). Agora o FFmpeg grava os dados num arquivo temporário em vez de mandar mais de 1 milhão de mensagens para a tela.
 

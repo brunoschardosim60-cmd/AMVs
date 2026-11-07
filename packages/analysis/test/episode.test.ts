@@ -37,8 +37,8 @@ beforeAll(async () => {
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('episódio', () => {
-  it('valores por quadro via arquivo temporário: mesmo resultado, caminho com espaço, acento, dois-pontos e apóstrofo', async () => {
-    const odd = join(dir, "pasta d'água: teste");
+  it('valores por quadro via arquivo temporário: mesmo resultado, caminho com espaço, acento, vírgula, colchetes e apóstrofo', async () => {
+    const odd = join(dir, "pasta d'água, teste [1]"); // no Windows o dois-pontos é o do disco (C:)
     mkdirSync(odd, { recursive: true });
     const file = join(odd, 'quadros.txt');
     const fr: number[] = [];
