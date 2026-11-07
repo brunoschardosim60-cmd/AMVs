@@ -5,7 +5,8 @@
  * O preview usa os PROXIES (H.264 leve). É "melhor esforço": a exportação (Fase 3)
  * usa os originais e é exata. O tempo do projeto é sempre a fonte da verdade.
  */
-import { clipEndUs, projectDurationUs, type Clip, type Project, type Track } from '@amv/project';
+import { drawTextLayer } from './textLayer';
+import { clipEndUs, evalClipLook, projectDurationUs, transitionUnderlay, type Clip, type ClipLook, type Project, type Track } from '@amv/project';
 
 export interface MediaSource {
   /** URL do proxy de vídeo (vídeos) ou do arquivo/proxy de áudio. */
@@ -44,7 +45,7 @@ export function activeClips(project: Project, atUs: number, track: Track): Clip 
 /** Ganho efetivo (0..1) de um clipe de áudio no instante, com fades. */
 export function clipVolume(clip: Clip, track: Track, atUs: number, anySolo: boolean): number {
   if (track.muted || (anySolo && !track.solo)) return 0;
-  const db = clip.audio.gainDb + track.gainDb;
+  const db = clip.audio.gainDb + track.gainDb + keyframeGainDb(clip, atUs - clip.timelineStartUs);
   let v = Math.pow(10, db / 20);
   const into = atUs - clip.timelineStartUs;
   const left = clipEndUs(clip) - atUs;
@@ -52,6 +53,24 @@ export function clipVolume(clip: Clip, track: Track, atUs: number, anySolo: bool
   if (clip.audio.fadeOutUs > 0 && left < clip.audio.fadeOutUs) v *= left / clip.audio.fadeOutUs;
   // elementos de mídia só aceitam 0..1; ganho acima de 0 dB fica para o mixer (Fase 3)
   return Math.max(0, Math.min(1, v));
+}
+
+/** Ganho extra (dB) dos keyframes "audio.gainDb" no tempo local — interpolação linear em amplitude, como no render. */
+export function keyframeGainDb(clip: Clip, localUs: number): number {
+  const kf = clip.keyframes['audio.gainDb'];
+  if (!kf || !kf.length) return 0;
+  const pts = [...kf].sort((a, b) => a.atUs - b.atUs);
+  const lin = (db: number) => Math.pow(10, db / 20);
+  if (localUs <= pts[0]!.atUs) return pts[0]!.value;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const a = pts[i]!;
+    const b = pts[i + 1]!;
+    if (localUs < b.atUs) {
+      const x = (localUs - a.atUs) / (b.atUs - a.atUs);
+      return 20 * Math.log10(Math.max(1e-6, lin(a.value) + (lin(b.value) - lin(a.value)) * x));
+    }
+  }
+  return pts.at(-1)!.value;
 }
 
 export class Player {
@@ -262,38 +281,31 @@ export class Player {
     for (let i = visual.length - 1; i >= 0; i--) {
       const track = visual[i]!;
       if (track.hidden) continue;
-      for (const c of p.clips) {
-        if (c.trackId !== track.id) continue;
+      const trackClips = p.clips.filter((c) => c.trackId === track.id);
+      for (const c of trackClips) {
         const near = t >= c.timelineStartUs - PRELOAD_US && t < clipEndUs(c);
         if (!near) continue;
         const active = t >= c.timelineStartUs;
-        if (c.text) {
-          if (active) this.drawText(ctx, c, k);
-          continue;
-        }
-        if (!c.assetId) continue;
-        const asset = p.assets.find((a) => a.id === c.assetId);
-        if (!asset) continue;
-        const kind = asset.kind === 'image' ? 'image' : 'video';
-        const slot = this.slotFor(c, kind);
-        if (!slot) {
-          if (active) this.drawPlaceholder(ctx, 'Preparando proxy…');
-          continue;
-        }
-        used.add(c.id);
-        if (kind === 'video') {
-          const v = slot.el as HTMLVideoElement;
-          if (active) this.syncMedia(v, c, t, null);
-          else {
-            if (!v.paused) v.pause();
-            const first = c.sourceInUs / 1e6;
-            if (Math.abs(v.currentTime - first) > 0.05 && v.readyState >= 1 && !v.seeking) v.currentTime = first;
+        const localS = (t - c.timelineStartUs) / 1e6;
+        const look = evalClipLook(c, localS, c.durationUs / 1e6);
+        // transição de entrada: o clipe anterior continua por baixo (origem segue além do fim)
+        if (active && c.transitionIn && localS < c.transitionIn.durationUs / 1e6) {
+          const under = transitionUnderlay(trackClips, c);
+          if (under) {
+            const ulook = evalClipLook(under, (t - under.timelineStartUs) / 1e6, under.durationUs / 1e6);
+            ulook.overlays = [];
+            this.drawClip(ctx, under, t, ulook, k, used, true);
           }
-          if (active && v.readyState >= 2) this.drawMedia(ctx, v, v.videoWidth, v.videoHeight, c, k);
-        } else if (active) {
-          const img = slot.el as HTMLImageElement;
-          if (img.complete && img.naturalWidth) this.drawMedia(ctx, img, img.naturalWidth, img.naturalHeight, c, k);
         }
+        if (c.text) {
+          if (active) {
+            this.drawText(ctx, c, k, look, localS);
+            this.drawOverlays(ctx, look);
+          }
+          continue;
+        }
+        this.drawClip(ctx, c, t, look, k, used, active);
+        if (active) this.drawOverlays(ctx, look);
       }
     }
 
@@ -306,47 +318,104 @@ export class Player {
     }
   }
 
-  private drawMedia(ctx: CanvasRenderingContext2D, src: CanvasImageSource, sw: number, sh: number, c: Clip, k: number): void {
-    if (!sw || !sh) return;
+  /** Sincroniza (ou pré-carrega) e desenha um clipe de vídeo/imagem. */
+  private drawClip(ctx: CanvasRenderingContext2D, c: Clip, t: number, look: ClipLook, k: number, used: Set<string>, active: boolean): void {
+    if (!c.assetId) return;
+    const asset = this.project.assets.find((a) => a.id === c.assetId);
+    if (!asset) return;
+    const kind = asset.kind === 'image' ? 'image' : 'video';
+    const slot = this.slotFor(c, kind);
+    if (!slot) {
+      if (active) this.drawPlaceholder(ctx, 'Preparando proxy…');
+      return;
+    }
+    used.add(c.id);
+    if (kind === 'video') {
+      const v = slot.el as HTMLVideoElement;
+      if (active) this.syncMedia(v, c, t, null);
+      else {
+        if (!v.paused) v.pause();
+        const first = c.sourceInUs / 1e6;
+        if (Math.abs(v.currentTime - first) > 0.05 && v.readyState >= 1 && !v.seeking) v.currentTime = first;
+      }
+      if (active && v.readyState >= 2) this.drawMedia(ctx, v, v.videoWidth, v.videoHeight, c, k, look);
+    } else if (active) {
+      const img = slot.el as HTMLImageElement;
+      if (img.complete && img.naturalWidth) this.drawMedia(ctx, img, img.naturalWidth, img.naturalHeight, c, k, look);
+    }
+  }
+
+  private drawMedia(ctx: CanvasRenderingContext2D, src: CanvasImageSource, sw: number, sh: number, c: Clip, k: number, look: ClipLook): void {
+    if (!sw || !sh || look.alpha <= 0) return;
     const P = this.project.settings;
     const tr = c.transform;
     const crop = tr.crop;
-    const cw = sw * (1 - crop.left - crop.right);
-    const ch = sh * (1 - crop.top - crop.bottom);
+    let cw = sw * (1 - crop.left - crop.right);
+    let ch = sh * (1 - crop.top - crop.bottom);
     if (cw <= 0 || ch <= 0) return;
+    let sx = sw * crop.left;
+    let sy = sh * crop.top;
     // encaixa (contain) no quadro do projeto, depois aplica escala/posição/rotação
     const fit = Math.min(P.width / cw, P.height / ch);
     const w = cw * fit * tr.scale;
     const h = ch * fit * tr.scale;
+    // zoom = recorte central ampliado (igual ao zoompan da exportação)
+    if (look.zoom > 1) {
+      const nw = cw / look.zoom;
+      const nh = ch / look.zoom;
+      sx += (cw - nw) / 2;
+      sy += (ch - nh) / 2;
+      cw = nw;
+      ch = nh;
+    }
     ctx.save();
-    ctx.globalAlpha = tr.opacity;
-    ctx.translate((P.width / 2 + tr.x) * k, (P.height / 2 + tr.y) * k);
+    ctx.globalAlpha = look.alpha;
+    const filters: string[] = [];
+    if (look.blur > 0) filters.push(`blur(${look.blur * k}px)`);
+    if (look.brightness) filters.push(`brightness(${1 + look.brightness})`);
+    if (look.contrast !== 1) filters.push(`contrast(${look.contrast})`);
+    if (look.saturation !== 1) filters.push(`saturate(${look.saturation})`);
+    if (filters.length) ctx.filter = filters.join(' ');
+    ctx.translate((P.width / 2 + tr.x + look.dx) * k, (P.height / 2 + tr.y + look.dy) * k);
     if (tr.rotation) ctx.rotate((tr.rotation * Math.PI) / 180);
-    ctx.drawImage(src, sw * crop.left, sh * crop.top, cw, ch, (-w / 2) * k, (-h / 2) * k, w * k, h * k);
+    if (look.rgbSplit > 0) {
+      // canais deslocados: vermelho para um lado, azul para o outro
+      const off = look.rgbSplit * k;
+      ctx.drawImage(src, sx, sy, cw, ch, (-w / 2) * k, (-h / 2) * k, w * k, h * k);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = look.alpha * 0.35;
+      ctx.drawImage(src, sx, sy, cw, ch, (-w / 2) * k - off, (-h / 2) * k, w * k, h * k);
+      ctx.drawImage(src, sx, sy, cw, ch, (-w / 2) * k + off, (-h / 2) * k, w * k, h * k);
+    } else {
+      ctx.drawImage(src, sx, sy, cw, ch, (-w / 2) * k, (-h / 2) * k, w * k, h * k);
+    }
     ctx.restore();
+    if (look.vignette > 0) {
+      const W = ctx.canvas.width;
+      const H = ctx.canvas.height;
+      const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.hypot(W, H) / 2);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, `rgba(0,0,0,${Math.min(0.85, look.vignette)})`);
+      ctx.save();
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
   }
 
-  private drawText(ctx: CanvasRenderingContext2D, c: Clip, k: number): void {
-    const P = this.project.settings;
-    const t = c.text!;
-    ctx.save();
-    ctx.globalAlpha = c.transform.opacity;
-    ctx.translate((P.width / 2 + c.transform.x) * k, (P.height / 2 + c.transform.y) * k);
-    ctx.font = `600 ${t.size * c.transform.scale * k}px ${t.font}, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    if (t.shadow) {
-      ctx.shadowColor = 'rgba(0,0,0,.7)';
-      ctx.shadowBlur = 8 * k;
+  /** Camadas de cor (clarão, fades, mergulho) por cima — mesmas rampas da exportação. */
+  private drawOverlays(ctx: CanvasRenderingContext2D, look: ClipLook): void {
+    for (const o of look.overlays) {
+      ctx.save();
+      ctx.globalAlpha = o.alpha;
+      ctx.fillStyle = o.white ? '#ffffff' : '#000000';
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      ctx.restore();
     }
-    if (t.outlineColor && t.outlineWidth) {
-      ctx.lineWidth = t.outlineWidth * 2 * k;
-      ctx.strokeStyle = t.outlineColor;
-      ctx.strokeText(t.text, 0, 0);
-    }
-    ctx.fillStyle = t.color;
-    ctx.fillText(t.text, 0, 0);
-    ctx.restore();
+  }
+
+  private drawText(ctx: CanvasRenderingContext2D, c: Clip, k: number, look: ClipLook, localS: number): void {
+    drawTextLayer(ctx, c, this.project.settings.width, this.project.settings.height, k, look, localS);
   }
 
   private drawPlaceholder(ctx: CanvasRenderingContext2D, text: string): void {

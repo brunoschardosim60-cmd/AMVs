@@ -17,12 +17,15 @@ export function nodePlatform(root: string, answers: Partial<Dialogs> = {}): Plat
       pickMedia: nope,
       pickFile: nope,
       pickFolder: nope,
+      saveFile: nope,
       confirm: async () => true,
       ...answers,
     },
     cacheDir: async () => join(root, 'cache'),
     dataDir: async () => join(root, 'data'),
     fileUrl: (p) => `file://${p}`,
+    reveal: async () => undefined,
+    openFile: async () => undefined,
     async listFiles(dir, depth) {
       const out: string[] = [];
       const walk = async (d: string, level: number) => {

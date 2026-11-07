@@ -10,6 +10,7 @@ export interface Dialogs {
   pickMedia(): Promise<string[]>;
   pickFile(title: string, extensions: string[]): Promise<string | null>;
   pickFolder(title: string): Promise<string | null>;
+  saveFile(title: string, defaultName: string, filters: { name: string; extensions: string[] }[]): Promise<string | null>;
   confirm(message: string, title: string): Promise<boolean>;
 }
 
@@ -25,6 +26,8 @@ export interface Platform {
   fileUrl(path: string): string;
   /** Lista arquivos de uma pasta, recursivamente até `depth` níveis. */
   listFiles(dir: string, depth: number): Promise<string[]>;
-  /** Abre o arquivo/pasta no gerenciador de arquivos do sistema. */
-  reveal?(path: string): Promise<void>;
+  /** Mostra o arquivo no gerenciador de arquivos do sistema. */
+  reveal(path: string): Promise<void>;
+  /** Abre o arquivo no programa padrão (ex.: o player de vídeo). */
+  openFile(path: string): Promise<void>;
 }

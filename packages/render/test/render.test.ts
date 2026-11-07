@@ -63,7 +63,7 @@ function env(p: Project, name: string): RenderEnv {
       const a = p.assets.find((x) => x.id === id)!;
       return { path: a.path, kind: a.kind, width: a.probe?.video?.width ?? 0, height: a.probe?.video?.height ?? 0, audioStreams: a.probe?.audio.map((s) => s.index) ?? [] };
     },
-    textImage: async () => false,
+    textImage: async () => null,
   };
 }
 
@@ -210,6 +210,32 @@ describe('exportação', () => {
     expect(existsSync(out)).toBe(false);
     expect(existsSync(join(dir, 'work-f'))).toBe(false);
     expect(readdirSync(dir).some((f) => f.startsWith('cancelado'))).toBe(false);
+  });
+
+  it('texto: imagem única e sequência animada', async () => {
+    const p = await project((p) => {
+      const base = (start: number, extra: Partial<Clip>) =>
+        clip(track(p, 'Legendas'), '', start, 1 * S, 0, {
+          assetId: null,
+          text: { text: 'Oi', font: 'Inter', size: 40, color: '#fff', outlineColor: null, outlineWidth: 0, shadow: false, animationIn: null, animationOut: null },
+          ...extra,
+        });
+      return [clip(track(p, 'V1'), 'rg', 0, 2 * S, 0, { sourceOutUs: 2 * S }), base(0, {}), base(1 * S, { label: 'seq' })];
+    });
+    const e = env(p, 'h');
+    e.textImage = async (c, W, H, d, fps) => {
+      // estática: quadro todo branco; sequência: quadros pares brancos, ímpares transparentes (fade simulado)
+      if (c.label !== 'seq') {
+        await ff(['-f', 'lavfi', '-i', `color=c=white:s=${W}x${H}`, '-frames:v', '1', join(d, 'a.png')]);
+        return { path: join(d, 'a.png'), sequence: false };
+      }
+      await ff(['-f', 'lavfi', '-i', `color=c=blue:s=${W}x${H}:r=${fps.num}/${fps.den}:d=1`, '-start_number', '0', join(d, 'f%05d.png')]);
+      return { path: join(d, 'f%05d.png'), sequence: true };
+    };
+    const out = join(dir, 'texto.mp4');
+    await renderProject(p, out, { width: 320, height: 180, enc: { codec: 'h264', quality: 0 }, audioBitrateK: 128 }, e, () => undefined);
+    expect(near(await pixel(out, 0.5), WHITE)).toBe(true);
+    expect(near(await pixel(out, 1.5), BLUE)).toBe(true);
   });
 
   it('recusa exportar com mídia ausente', async () => {

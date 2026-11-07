@@ -1,4 +1,6 @@
 import {
+  clearRange,
+  newId,
   clipEndUs,
   EditError,
   findSnap,
@@ -15,7 +17,7 @@ import {
   type Project,
   type Track,
 } from '@amv/project';
-import { Eye, EyeOff, Lock, LockOpen, Magnet, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
+import { Eye, EyeOff, Lock, LockOpen, Magnet, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
@@ -403,6 +405,43 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
     if (x > el.scrollLeft + view - 40 || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 80);
   }, [playheadUs, zoom, playing]);
 
+  const addText = () => {
+    const track = tracks.find((t) => t.kind === 'text' && !t.locked);
+    if (!track) {
+      toast({ tone: 'warn', title: 'Não há trilha de texto destravada' });
+      return;
+    }
+    const id = newId('clp');
+    const P = project.settings;
+    const cmds: Command[] = [
+      ...clearRange(project, track.id, playheadUs, playheadUs + 3_000_000),
+      {
+        type: 'clip.add',
+        clip: {
+          id, trackId: track.id, assetId: null, timelineStartUs: playheadUs, durationUs: 3_000_000, sourceInUs: 0, sourceOutUs: 3_000_000, speed: 1,
+          transform: { x: 0, y: Math.round(P.height * 0.36), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
+          audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, streamIndex: null },
+          effects: [], transitionIn: null, keyframes: {},
+          text: { text: 'Seu texto', font: 'Manrope Variable', size: Math.round(P.height * 0.05), color: '#ffffff', outlineColor: '#000000', outlineWidth: 3, shadow: true, animationIn: 'fade', animationOut: 'fade' },
+          origin: 'user', reason: null, confidence: null, label: null,
+        },
+      },
+    ];
+    run('Adicionar texto', cmds);
+    select([id]);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select')) return;
+      if (e.key.toLowerCase() === 't' && !e.ctrlKey && !e.metaKey) addTextRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  const addTextRef = useRef(addText);
+  addTextRef.current = addText;
+
   const fitAll = () => {
     const el = scrollRef.current;
     if (!el || durationUs <= 0) return;
@@ -457,6 +496,10 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
         </IconButton>
         <button type="button" className="ml-1 rounded px-2 py-1 text-xs text-muted hover:bg-raised hover:text-ink" onClick={fitAll}>
           Ajustar tudo
+        </button>
+        <span className="mx-1 h-4 w-px bg-line" />
+        <button type="button" className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-ink-soft hover:bg-raised hover:text-ink" onClick={addText} title="Adicionar texto no playhead (T)">
+          <Type size={14} /> Texto
         </button>
         <span className="tnum ml-auto pr-2 text-xs text-muted">
           {selection.length ? `${selection.length} selecionado(s) · ` : ''}duração {formatTimecode(durationUs, project.settings.fps)}

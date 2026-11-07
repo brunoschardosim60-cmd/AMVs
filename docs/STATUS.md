@@ -48,6 +48,16 @@ Fase atual: **1 — Fundação** — concluída. CI verde no Windows (FFmpeg 9.0
 | Atalhos: Espaço, S, Delete (Shift = fechar buraco), Ctrl+C/X/V/D/A, setas (Shift = 10 quadros), Home/End, +/− | feito | app real (parcial) |
 | Preview de vídeo no Windows (WebView2) | pendente | depende do teste do Bruno |
 
+## Fase 3 — Processamento (feita)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Render por janelas + concat sem recodificar, a partir dos originais | feito | 10 testes em `packages/render` conferindo pixels/volume do arquivo final |
+| Efeitos e transições com a mesma fórmula no preview e no render | feito | testes de `evalClipLook`/rampas + render |
+| Textos desenhados pelo mesmo código no preview e na exportação | feito | app real: exportação 1080p com texto conferida quadro a quadro |
+| Mixagem: ganho, fades, faixa de áudio, ducking por keyframes, limitador | feito | teste de volume (−30 dB → −50 dB) |
+| Diálogo de exportação: formato, resolução, qualidade, progresso, cancelar, mostrar na pasta | feito | app real (Linux) |
+
 ### Limitações da Fase 2
-- Volume acima de 0 dB e escolha da faixa de áudio (episódios com japonês/português) chegam com o mixer na Fase 3: o preview usa a primeira faixa do proxy.
-- Adicionar texto pela interface ainda não existe (o preview já desenha clipes de texto).
+- No preview, volume acima de 0 dB e a faixa de áudio escolhida não são ouvidos (usa a 1ª faixa do proxy); a exportação respeita os dois.
+

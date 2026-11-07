@@ -5,6 +5,7 @@ import { appCacheDir, appDataDir } from '@tauri-apps/api/path';
 import { ask, open, save } from '@tauri-apps/plugin-dialog';
 import * as tfs from '@tauri-apps/plugin-fs';
 import { Command } from '@tauri-apps/plugin-shell';
+import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
 import type { Platform } from './types';
 
 /** FFmpeg/FFprobe empacotados como sidecar (src-tauri/binaries). */
@@ -99,6 +100,9 @@ export function createTauriPlatform(): Platform {
         const r = await open({ title, directory: true, multiple: false });
         return typeof r === 'string' ? r : null;
       },
+      async saveFile(title, defaultName, filters) {
+        return (await save({ title, defaultPath: defaultName, filters })) ?? null;
+      },
       confirm: (message, title) => ask(message, { title, kind: 'warning', okLabel: 'Continuar', cancelLabel: 'Cancelar' }),
     },
     async cacheDir() {
@@ -110,6 +114,8 @@ export function createTauriPlatform(): Platform {
       return data;
     },
     fileUrl: (p) => convertFileSrc(p),
+    reveal: (p) => revealItemInDir(p),
+    openFile: (p) => openPath(p),
     async listFiles(dir, depth) {
       const out: string[] = [];
       const walk = async (d: string, level: number) => {

@@ -1,11 +1,12 @@
-import { clipEndUs, formatTimecode, sourceDurationUs, trimClip, type Clip, type Command, type Project } from '@amv/project';
-import { RotateCcw } from 'lucide-react';
+import { clipEndUs, defaultParams, EFFECTS, formatTimecode, newId, param, sourceDurationUs, TRANSITIONS, trimClip, type Clip, type Command, type EffectId, type Project } from '@amv/project';
+import { Eye, EyeOff, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
 import { IconButton } from '../../ui/controls';
 import { AssetDetail } from '../project/AssetDetail';
 import { useEditor } from './editorStore';
+import { TEXT_ANIMATIONS_IN, TEXT_ANIMATIONS_OUT } from './textLayer';
 
 /** Campo numérico que só grava ao confirmar (Enter/sair do campo) — um passo de desfazer por edição. */
 function NumField({
@@ -165,16 +166,187 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
           </Section>
         )}
 
+        {clip.text && <TextSection clip={clip} patch={patch} />}
+
+        {visual && <EffectsSection clip={clip} patch={patch} />}
+
+        {visual && (
+          <Section title="Transição de entrada">
+            <label className="grid grid-cols-[1fr_140px] items-center gap-2 py-1 text-xs">
+              <span className="text-muted">Tipo</span>
+              <select
+                className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink"
+                value={clip.transitionIn?.transition ?? ''}
+                onChange={(e) =>
+                  patch(
+                    'Transição',
+                    { transitionIn: e.target.value ? { transition: e.target.value, durationUs: clip.transitionIn?.durationUs ?? 400_000, params: {} } : null },
+                  )
+                }
+              >
+                <option value="">Corte seco</option>
+                {TRANSITIONS.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {clip.transitionIn && (
+              <NumField
+                label="Duração"
+                suffix="s"
+                value={clip.transitionIn.durationUs / S}
+                min={0.05}
+                max={Math.min(3, clip.durationUs / S)}
+                step={0.05}
+                onCommit={(v) => patch('Duração da transição', { transitionIn: { ...clip.transitionIn!, durationUs: Math.round(v * S) } })}
+              />
+            )}
+            <p className="mt-1 text-2xs text-muted">O clipe anterior continua por baixo durante a transição.</p>
+          </Section>
+        )}
+
         {track.kind === 'audio' && (
           <Section title="Áudio" onReset={() => patch('Redefinir áudio', { audio: { ...clip.audio, gainDb: 0, fadeInUs: 0, fadeOutUs: 0 } })}>
-            <NumField label="Volume" suffix="dB" value={clip.audio.gainDb} min={-60} max={0} step={1} digits={1} onCommit={(v) => patch('Volume', { audio: { ...clip.audio, gainDb: v } })} />
+            <NumField label="Volume" suffix="dB" value={clip.audio.gainDb} min={-60} max={12} step={1} digits={1} onCommit={(v) => patch('Volume', { audio: { ...clip.audio, gainDb: v } })} />
             <NumField label="Entrada suave" suffix="s" value={clip.audio.fadeInUs / S} min={0} max={clip.durationUs / S} step={0.1} digits={2} onCommit={(v) => patch('Entrada suave', { audio: { ...clip.audio, fadeInUs: Math.round(v * S) } })} />
             <NumField label="Saída suave" suffix="s" value={clip.audio.fadeOutUs / S} min={0} max={clip.durationUs / S} step={0.1} digits={2} onCommit={(v) => patch('Saída suave', { audio: { ...clip.audio, fadeOutUs: Math.round(v * S) } })} />
-            <p className="mt-1 text-2xs text-muted">Volume acima de 0 dB chega com o mixer, na próxima fase.</p>
+            {asset?.probe && asset.probe.audio.length > 1 && (
+              <label className="grid grid-cols-[1fr_150px] items-center gap-2 py-1 text-xs">
+                <span className="text-muted">Faixa de áudio</span>
+                <select
+                  className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink"
+                  value={clip.audio.streamIndex ?? ''}
+                  onChange={(e) => patch('Faixa de áudio', { audio: { ...clip.audio, streamIndex: e.target.value === '' ? null : Number(e.target.value) } })}
+                >
+                  <option value="">1ª faixa</option>
+                  {asset.probe.audio.map((a, i) => (
+                    <option key={a.index} value={a.index}>
+                      {i + 1}ª — {a.language ?? a.codec}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <p className="mt-1 text-2xs text-muted">No preview o volume vai até 0 dB e toca a 1ª faixa; a exportação usa o ganho e a faixa escolhidos.</p>
           </Section>
         )}
       </fieldset>
     </div>
+  );
+}
+
+function TextSection({ clip, patch }: { clip: Clip; patch: (label: string, p: Partial<Clip>) => void }) {
+  const t = clip.text!;
+  const [text, setText] = useState(t.text);
+  useEffect(() => setText(t.text), [t.text]);
+  const set = (label: string, p: Partial<NonNullable<Clip['text']>>) => patch(label, { text: { ...t, ...p } });
+  return (
+    <Section title="Texto">
+      <textarea
+        className="mb-2 h-20 w-full resize-none rounded-control border border-line bg-base p-2 text-sm text-ink outline-none focus:border-violet"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => text !== t.text && set('Editar texto', { text })}
+        aria-label="Texto"
+      />
+      <NumField label="Tamanho" suffix="px" value={t.size} min={8} max={400} step={2} digits={0} onCommit={(v) => set('Tamanho do texto', { size: v })} />
+      <label className="grid grid-cols-[1fr_96px] items-center gap-2 py-1 text-xs">
+        <span className="text-muted">Cor</span>
+        <input type="color" className="h-7 w-full rounded-control border border-line bg-base" value={t.color} onChange={(e) => set('Cor do texto', { color: e.target.value })} />
+      </label>
+      <label className="grid grid-cols-[1fr_96px] items-center gap-2 py-1 text-xs">
+        <span className="text-muted">Contorno</span>
+        <input type="color" className="h-7 w-full rounded-control border border-line bg-base" value={t.outlineColor ?? '#000000'} onChange={(e) => set('Cor do contorno', { outlineColor: e.target.value, outlineWidth: t.outlineWidth || 3 })} />
+      </label>
+      <NumField label="Espessura do contorno" suffix="px" value={t.outlineWidth} min={0} max={20} step={1} digits={0} onCommit={(v) => set('Contorno', { outlineWidth: v })} />
+      <label className="flex items-center justify-between py-1 text-xs">
+        <span className="text-muted">Sombra</span>
+        <input type="checkbox" className="accent-violet" checked={t.shadow} onChange={(e) => set('Sombra', { shadow: e.target.checked })} />
+      </label>
+      <label className="grid grid-cols-[1fr_140px] items-center gap-2 py-1 text-xs">
+        <span className="text-muted">Entrada</span>
+        <select className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink" value={t.animationIn ?? ''} onChange={(e) => set('Animação de entrada', { animationIn: e.target.value || null })}>
+          {TEXT_ANIMATIONS_IN.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="grid grid-cols-[1fr_140px] items-center gap-2 py-1 text-xs">
+        <span className="text-muted">Saída</span>
+        <select className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink" value={t.animationOut ?? ''} onChange={(e) => set('Animação de saída', { animationOut: e.target.value || null })}>
+          {TEXT_ANIMATIONS_OUT.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    </Section>
+  );
+}
+
+function EffectsSection({ clip, patch }: { clip: Clip; patch: (label: string, p: Partial<Clip>) => void }) {
+  const add = (id: EffectId) => patch(`Adicionar ${EFFECTS.find((e) => e.id === id)!.label}`, { effects: [...clip.effects, { id: newId('fx'), effect: id, enabled: true, params: defaultParams(id) }] });
+  const update = (fxId: string, p: Partial<Clip['effects'][number]>, label: string) => patch(label, { effects: clip.effects.map((f) => (f.id === fxId ? { ...f, ...p } : f)) });
+  const groups = [...new Set(EFFECTS.map((e) => e.group))];
+  return (
+    <Section title="Efeitos">
+      {clip.effects.length === 0 && <p className="mb-2 text-xs text-muted">Nenhum efeito. Experimente um clarão ou zoom no corte do drop.</p>}
+      {clip.effects.map((fx) => {
+        const def = EFFECTS.find((e) => e.id === fx.effect);
+        if (!def) return null;
+        return (
+          <div key={fx.id} className={`mb-2 rounded-md border border-line-soft bg-base/60 px-2 py-1.5 ${fx.enabled ? '' : 'opacity-60'}`}>
+            <div className="flex items-center gap-1">
+              <span className="mr-auto text-xs font-medium">{def.label}</span>
+              <IconButton label={fx.enabled ? 'Desligar' : 'Ligar'} className="size-6" onClick={() => update(fx.id, { enabled: !fx.enabled }, fx.enabled ? 'Desligar efeito' : 'Ligar efeito')}>
+                {fx.enabled ? <Eye size={12} /> : <EyeOff size={12} />}
+              </IconButton>
+              <IconButton label="Remover efeito" className="size-6" onClick={() => patch('Remover efeito', { effects: clip.effects.filter((f) => f.id !== fx.id) })}>
+                <Trash2 size={12} />
+              </IconButton>
+            </div>
+            {def.params.map((p) => (
+              <NumField
+                key={p.key}
+                label={p.label}
+                suffix={p.unit}
+                value={param(fx, p.key)}
+                min={p.min}
+                max={p.max}
+                step={p.step}
+                digits={p.step < 0.1 ? 2 : p.step < 1 ? 1 : 0}
+                onCommit={(v) => update(fx.id, { params: { ...fx.params, [p.key]: v } }, `${def.label}: ${p.label}`)}
+              />
+            ))}
+          </div>
+        );
+      })}
+      <label className="flex items-center gap-2 text-xs">
+        <Plus size={13} className="text-muted" />
+        <select
+          className="h-7 flex-1 rounded-control border border-line bg-base px-1 text-xs text-ink"
+          value=""
+          onChange={(e) => e.target.value && add(e.target.value as EffectId)}
+          aria-label="Adicionar efeito"
+        >
+          <option value="">Adicionar efeito…</option>
+          {groups.map((g) => (
+            <optgroup key={g} label={g}>
+              {EFFECTS.filter((e) => e.group === g).map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </label>
+    </Section>
   );
 }
 

@@ -19,8 +19,11 @@ export interface RenderEnv {
   /** Pasta temporária exclusiva deste render (é apagada no fim). */
   workDir: string;
   source(assetId: string): (AssetSource & { audioStreams: number[] }) | null;
-  /** Desenha o texto num PNG W×H e devolve o caminho (o app usa o mesmo desenho do preview). */
-  textImage(clip: Clip, width: number, height: number, path: string): Promise<boolean>;
+  /**
+   * Desenha o texto (mesmo desenho do preview) em PNG(s) W×H dentro de `dir`.
+   * Devolve o caminho (padrão `%05d` se for sequência) ou null para pular.
+   */
+  textImage(clip: Clip, width: number, height: number, dir: string, fps: { num: number; den: number }): Promise<{ path: string; sequence: boolean } | null>;
 }
 
 export interface RenderProgress {
@@ -95,18 +98,16 @@ export async function renderProject(
     const ext = settings.enc.codec === 'prores' ? 'mov' : 'mp4';
     const segs: string[] = [];
     let doneUs = 0;
+    const textCache = new Map<string, { path: string; sequence: boolean } | null>();
     for (const w of plan.windows) {
       if (signal?.aborted) throw new CancelledError();
       const seg = joinPath(env.workDir, `seg${String(w.index).padStart(5, '0')}.${ext}`);
-      const texts = new Map<string, string>();
       for (const l of w.layers) {
-        if (!l.clip.text || texts.has(l.clip.id)) continue;
-        const png = joinPath(env.workDir, `text-${l.clip.id}.png`);
-        if (!(await env.fs.exists(png))) {
-          const ok = await env.textImage(l.clip, W, H, png);
-          if (!ok) continue;
-        }
-        texts.set(l.clip.id, png);
+        if (!l.clip.text || textCache.has(l.clip.id)) continue;
+        onProgress({ fraction: wAudio + wVideo * (doneUs / totalVideoUs), stage: 'video', detail: 'Desenhando textos' });
+        const dir = joinPath(env.workDir, `text-${l.clip.id}`);
+        await env.fs.mkdir(dir);
+        textCache.set(l.clip.id, await env.textImage(l.clip, W, H, dir, fps));
       }
       const job = windowArgs({
         project,
@@ -117,7 +118,7 @@ export async function renderProject(
         enc: settings.enc,
         output: seg,
         source: env.source,
-        textImage: (c) => texts.get(c.id) ?? null,
+        textImage: (c) => textCache.get(c.id) ?? null,
       });
       const detail = `Renderizando trecho ${w.index + 1} de ${plan.windows.length}`;
       await run(env, job.args, signal, (us) =>

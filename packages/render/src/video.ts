@@ -97,8 +97,12 @@ export interface WindowInput {
   enc: VideoEncoding;
   output: string;
   source(assetId: string): AssetSource | null;
-  /** PNG do tamanho do quadro com o texto já desenhado (mesmo desenho do preview). */
-  textImage(clip: Clip): string | null;
+  /**
+   * Texto já desenhado (mesmo desenho do preview), do tamanho do quadro.
+   * `sequence`: um PNG por quadro do clipe (`%05d`, quadro 0 = início do clipe), já com
+   * animação, opacidade e tremida; senão, uma imagem só.
+   */
+  textImage(clip: Clip): { path: string; sequence: boolean } | null;
 }
 
 export function windowArgs(o: WindowInput): WindowJob {
@@ -134,10 +138,17 @@ export function windowArgs(o: WindowInput): WindowJob {
     let srcW = W;
     let srcH = H;
 
+    let textBaked = false;
     if (c.text) {
-      const png = o.textImage(c);
-      if (!png) continue;
-      inputs.push('-loop', '1', '-framerate', FPS, '-t', n(chainLen + 0.1, 3), '-i', png);
+      const img = o.textImage(c);
+      if (!img) continue;
+      if (img.sequence) {
+        textBaked = true;
+        const startFrame = Math.max(0, Math.round((Ls * fps.num) / fps.den));
+        inputs.push('-framerate', FPS, '-start_number', String(startFrame), '-i', img.path);
+      } else {
+        inputs.push('-loop', '1', '-framerate', FPS, '-t', n(chainLen + 0.1, 3), '-i', img.path);
+      }
       chain.push(`[${inputIdx}:v]setpts=PTS-STARTPTS`, 'format=yuva420p');
     } else {
       if (!c.assetId) continue;
@@ -185,10 +196,12 @@ export function windowArgs(o: WindowInput): WindowJob {
       const a = n((tr.rotation * Math.PI) / 180, 6);
       chain.push(`rotate=a=${a}:ow=rotw(${a}):oh=roth(${a}):c=none`);
     }
-    if (tr.opacity < 1) chain.push(`colorchannelmixer=aa=${n(tr.opacity, 4)}`);
-    // rampas de opacidade do próprio clipe (dissolver / mergulho)
+    if (tr.opacity < 1 && !c.text) chain.push(`colorchannelmixer=aa=${n(tr.opacity, 4)}`);
+    // texto parado: a imagem é desenhada opaca e a opacidade/rampas/tremida são aplicadas aqui
+    if (c.text && !textBaked && tr.opacity < 1) chain.push(`colorchannelmixer=aa=${n(tr.opacity, 4)}`);
+    // rampas de opacidade do próprio clipe (dissolver / mergulho); em sequência já vêm no desenho
     for (const r of ramps) {
-      if (r.target !== 'alpha') continue;
+      if (r.target !== 'alpha' || textBaked) continue;
       const st = r.startS - Ls;
       if (st + r.durS <= 1e-6 || st >= chainLen) continue;
       // todas as rampas de alfa começam em 0: antes do fim ficam invisíveis/subindo
@@ -202,8 +215,9 @@ export function windowArgs(o: WindowInput): WindowJob {
 
     // posição: centro + deslocamento + tremida (tempo da janela t → local t+L0)
     const T = `t+${n(L0)}`;
-    const x = c.text ? `${n(tr.x * kx * 0)}+${shakeExpr(c, T, 'x')}*${n(kx)}` : `(W-w)/2+${n(tr.x * kx)}+(${shakeExpr(c, T, 'x')})*${n(kx)}`;
-    const y = c.text ? `${n(0)}+${shakeExpr(c, T, 'y')}*${n(kx)}` : `(H-h)/2+${n(tr.y * kx)}+(${shakeExpr(c, T, 'y')})*${n(kx)}`;
+    // texto: a imagem já tem o quadro inteiro com a posição desenhada
+    const x = c.text ? (textBaked ? '0' : `(${shakeExpr(c, T, 'x')})*${n(kx)}`) : `(W-w)/2+${n(tr.x * kx)}+(${shakeExpr(c, T, 'x')})*${n(kx)}`;
+    const y = c.text ? (textBaked ? '0' : `(${shakeExpr(c, T, 'y')})*${n(kx)}`) : `(H-h)/2+${n(tr.y * kx)}+(${shakeExpr(c, T, 'y')})*${n(kx)}`;
     overlayOnto(lbl, x, y);
 
     // camadas de cor (clarão, fades, mergulho) por cima do clipe

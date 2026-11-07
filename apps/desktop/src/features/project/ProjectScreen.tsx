@@ -1,11 +1,12 @@
 import type { Asset } from '@amv/project';
-import { AlertTriangle, AudioLines, Film, FolderSearch, Image as ImageIcon, Plus, Redo2, Save, Search, Undo2 } from 'lucide-react';
+import { AlertTriangle, AudioLines, Download, Film, FolderSearch, Image as ImageIcon, Plus, Redo2, Save, Search, Undo2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { duration, fpsLabel, mainCodec, resolution, bytes } from '../../format';
 import { useApp, useSessionVersion } from '../../store';
 import { Button, IconButton, Kbd, Progress, inputClass } from '../../ui/controls';
 import { AssetDetail } from './AssetDetail';
 import { EditorView } from '../editor/EditorView';
+import { ExportDialog } from '../export/ExportDialog';
 import type { ProjectSession } from '../../core/session';
 
 type Filter = 'all' | Asset['kind'];
@@ -63,6 +64,17 @@ export function ProjectScreen() {
   const [query, setQuery] = useState('');
   const [editingName, setEditingName] = useState(false);
   const [view, setView] = useState<'edit' | 'media'>('edit');
+  const [exporting, setExporting] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') {
+        e.preventDefault();
+        setExporting(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const project = session!.project;
   const assets = useMemo(
@@ -166,8 +178,11 @@ export function ProjectScreen() {
           <Button icon={<Save size={15} />} onClick={save} disabled={!s.dirty} title="Salvar (Ctrl+S)">
             Salvar
           </Button>
-          <Button variant="primary" icon={<Plus size={16} />} onClick={() => importMedia()} title="Importar mídia (Ctrl+I)">
-            Importar mídia
+          <Button icon={<Plus size={16} />} onClick={() => importMedia()} title="Importar mídia (Ctrl+I)">
+            Importar
+          </Button>
+          <Button variant="primary" icon={<Download size={16} />} onClick={() => setExporting(true)} title="Exportar vídeo (Ctrl+E)">
+            Exportar
           </Button>
         </div>
       </header>
@@ -286,6 +301,7 @@ export function ProjectScreen() {
         {selected && <AssetDetail asset={selected} session={s} />}
       </div>
       )}
+      {exporting && <ExportDialog session={s} onClose={() => setExporting(false)} />}
     </div>
   );
 }

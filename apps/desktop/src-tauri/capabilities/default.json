@@ -48,6 +48,15 @@
     },
     "shell:allow-kill",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "opener:allow-reveal-item-in-dir",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "**"
+        }
+      ]
+    }
   ]
 }
