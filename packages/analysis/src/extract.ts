@@ -35,42 +35,81 @@ export async function decodePcm(runner: ProcessRunner, path: string, sampleRate:
   return new Float32Array(all.buffer, 0, n).slice();
 }
 
-/** Estatísticas por quadro numa resolução minúscula (rápido mesmo com episódio inteiro). */
-export async function frameStats(runner: ProcessRunner, path: string, durationS: number, signal?: AbortSignal, onProgress?: Report): Promise<FrameStat[]> {
+/**
+ * Caminho dentro de uma opção de filtro do FFmpeg. Escapa nos dois níveis
+ * (opção do filtro e grafo de filtros): C:/a b/x'y.txt → C\\\\:/a b/x\\\\\\'y.txt
+ */
+export function filterPath(p: string): string {
+  const opt = p.replace(/\\/g, '/').replace(/[\\':]/g, '\\$&');
+  return opt.replace(/[\\',;[\]]/g, '\\$&');
+}
+
+/** Junta as linhas do "metadata=print" (frame:N … / lavfi.chave=valor) em quadros. */
+export function parseFrameMetadata(text: string): FrameStat[] {
   const frames: FrameStat[] = [];
-  let cur: Partial<FrameStat> = {};
-  let buf = '';
+  let cur: Partial<FrameStat> | null = null;
   const flush = () => {
-    if (cur.t !== undefined) frames.push({ t: cur.t, scene: cur.scene ?? 0, ydif: cur.ydif ?? 0, yavg: cur.yavg ?? 0 });
-    cur = {};
+    if (cur && cur.t !== undefined) frames.push({ t: cur.t, scene: cur.scene ?? 0, ydif: cur.ydif ?? 0, yavg: cur.yavg ?? 0 });
+    cur = null;
   };
-  const r = await runner.run(
-    'ffmpeg',
-    ['-hide_banner', '-nostdin', '-loglevel', 'error', '-i', path, '-an', '-sn', '-vf', "scale=96:54,select='gte(scene\\,0)',signalstats,metadata=mode=print:file=-", '-f', 'null', '-'],
-    {
-      signal,
-      onStdout: (chunk) => {
-        buf += chunk;
-        let nl: number;
-        while ((nl = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (line.startsWith('frame:')) {
-            flush();
-            const m = line.match(/pts_time:([\d.]+)/);
-            cur.t = m ? Number(m[1]) : 0;
-            if (frames.length % 200 === 0) onProgress?.(Math.min(1, cur.t / Math.max(1, durationS)));
-          } else if (line.startsWith('lavfi.scene_score=')) cur.scene = Number(line.split('=')[1]);
-          else if (line.startsWith('lavfi.signalstats.YDIF=')) cur.ydif = Number(line.split('=')[1]);
-          else if (line.startsWith('lavfi.signalstats.YAVG=')) cur.yavg = Number(line.split('=')[1]);
-        }
-      },
-    },
-  );
+  for (const raw of text.split('\n')) {
+    const l = raw.trim();
+    if (l.startsWith('frame:')) {
+      flush();
+      const m = l.match(/pts_time:([\d.]+)/);
+      cur = { t: m ? Number(m[1]) : 0 };
+    } else if (cur) {
+      if (l.startsWith('lavfi.scene_score=')) cur.scene = Number(l.slice(18));
+      else if (l.startsWith('lavfi.signalstats.YDIF=')) cur.ydif = Number(l.slice(23));
+      else if (l.startsWith('lavfi.signalstats.YAVG=')) cur.yavg = Number(l.slice(23));
+    }
+  }
   flush();
+  return frames;
+}
+
+export interface ScratchFile {
+  /** Arquivo temporário onde o FFmpeg grava os valores por quadro. */
+  path: string;
+  read(path: string): Promise<Uint8Array>;
+  remove(path: string): Promise<void>;
+}
+
+/**
+ * Estatísticas por quadro numa resolução minúscula.
+ * Com `scratch`, o FFmpeg grava os valores num arquivo e o app lê uma vez no fim; pela
+ * saída padrão, um episódio de 24 min virava mais de 1 milhão de mensagens e travava o app.
+ * O progresso vem do "-progress" (poucas linhas por segundo).
+ */
+export async function frameStats(runner: ProcessRunner, path: string, durationS: number, signal?: AbortSignal, onProgress?: Report, scratch?: ScratchFile): Promise<FrameStat[]> {
+  const target = scratch ? filterPath(scratch.path) : '-';
+  const vf = `scale=96:54,select='gte(scene\\,0)',signalstats,metadata=mode=print:file=${target}`;
+  let out = '';
+  let last = -1;
+  const decoder = new TextDecoder();
+  const r = await runner.run('ffmpeg', ['-hide_banner', '-nostdin', '-loglevel', 'error', ...(scratch ? ['-progress', 'pipe:1', '-nostats'] : []), '-i', path, '-an', '-sn', '-vf', vf, '-f', 'null', '-'], {
+    signal,
+    ...(scratch
+      ? {
+          onStdout: (chunk: string) => {
+            const m = chunk.match(/out_time_(?:us|ms)=(\d+)/);
+            if (!m) return;
+            const f = Math.min(1, Number(m[1]) / 1e6 / Math.max(1, durationS));
+            if (f - last >= 0.01) {
+              last = f;
+              onProgress?.(f);
+            }
+          },
+        }
+      : { onStdoutBytes: (b: Uint8Array) => void (out += decoder.decode(b, { stream: true })) }),
+  });
   if (signal?.aborted) throw new CancelledError();
   if (r.code !== 0) throw new ToolError('ffmpeg', r.code, r.stderr);
-  return frames;
+  if (scratch) {
+    out = new TextDecoder().decode(await scratch.read(scratch.path));
+    await scratch.remove(scratch.path).catch(() => undefined);
+  }
+  return parseFrameMetadata(out);
 }
 
 /** Lê a primeira legenda de TEXTO do arquivo (ASS/SRT/WebVTT). Legendas em imagem (PGS) são ignoradas. */
@@ -111,7 +150,7 @@ export async function analyzeMusicFile(runner: ProcessRunner, path: string, dura
  * Analisa um episódio. `videoPath` pode ser o proxy (decodifica muito mais rápido que o original).
  * O áudio e as legendas vêm do original.
  */
-export async function analyzeEpisodeFile(runner: ProcessRunner, originalPath: string, videoPath: string, probe: ProbeInfo, report: Report, signal?: AbortSignal): Promise<EpisodeAnalysis> {
+export async function analyzeEpisodeFile(runner: ProcessRunner, originalPath: string, videoPath: string, probe: ProbeInfo, report: Report, signal?: AbortSignal, scratch?: ScratchFile): Promise<EpisodeAnalysis> {
   const durationS = probe.durationUs / 1e6;
   report(0, 'Lendo legendas');
   const subtitles = await embeddedSubtitles(runner, originalPath, probe, undefined, signal).catch(() => []);
@@ -124,7 +163,7 @@ export async function analyzeEpisodeFile(runner: ProcessRunner, originalPath: st
   }
   const speech = detectSpeech(feat, subtitles);
   report(0.3, 'Procurando cortes e ação');
-  const frames = await frameStats(runner, videoPath, durationS, signal, (f) => report(0.3 + 0.68 * f, 'Procurando cortes e ação'));
+  const frames = await frameStats(runner, videoPath, durationS, signal, (f) => report(0.3 + 0.68 * f, 'Procurando cortes e ação'), scratch);
   const a = buildEpisodeAnalysis(frames, durationS, feat, speech, subtitles);
   report(1);
   return a;

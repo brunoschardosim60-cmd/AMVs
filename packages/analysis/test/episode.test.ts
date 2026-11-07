@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { probeFile } from '@amv/media';
 import { NodeRunner } from '@amv/media/src/node';
-import { analyzeEpisodeFile, analyzeMusicFile, decodeSubtitleBytes, detectFormat, impactScore, parseAss, parseLrc, parseSrt, parseVtt, toSrt } from '../src/index.js';
+import { analyzeEpisodeFile, analyzeMusicFile, filterPath, frameStats, decodeSubtitleBytes, detectFormat, impactScore, parseAss, parseLrc, parseSrt, parseVtt, toSrt } from '../src/index.js';
 
 const runner = new NodeRunner();
 let dir: string;
@@ -37,6 +37,26 @@ beforeAll(async () => {
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('episódio', () => {
+  it('valores por quadro via arquivo temporário: mesmo resultado, caminho com espaço, acento, dois-pontos e apóstrofo', async () => {
+    const odd = join(dir, "pasta d'água: teste");
+    mkdirSync(odd, { recursive: true });
+    const file = join(odd, 'quadros.txt');
+    const fr: number[] = [];
+    const viaFile = await frameStats(runner, join(dir, 'ep.mkv'), 12, undefined, (f) => fr.push(f), {
+      path: file,
+      read: async (p) => readFileSync(p),
+      remove: async (p) => unlinkSync(p),
+    });
+    const viaStdout = await frameStats(runner, join(dir, 'ep.mkv'), 12);
+    expect(viaFile.length).toBeGreaterThan(100);
+    expect(viaFile).toEqual(viaStdout);
+    expect(viaFile.some((f) => f.ydif > 0) && viaFile.some((f) => f.yavg > 0) && viaFile.some((f) => f.scene > 0.3)).toBe(true);
+    expect(existsSync(file)).toBe(false);
+    expect(fr.length).toBeGreaterThan(0);
+    expect(filterPath('C:\\Users\\Bruno\\cache\\q.txt')).toBe('C\\\\:/Users/Bruno/cache/q.txt');
+  });
+
+
   it('acha os 2 cortes, a ação no meio e as falas pela legenda', async () => {
     const { probe } = await probeFile(runner, join(dir, 'ep.mkv'));
     const fr: number[] = [];

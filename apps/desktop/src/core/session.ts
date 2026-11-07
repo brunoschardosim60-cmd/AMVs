@@ -365,7 +365,11 @@ export class ProjectSession {
           setRt({ analysis: 'running' });
           return kind === 'music'
             ? analyzeMusicFile(env.runner, asset.path, probe.durationUs / 1e6, (f, d) => report(f, d), signal)
-            : analyzeEpisodeFile(env.runner, asset.path, art.proxyPath ?? asset.path, probe, (f, d) => report(f, d), signal);
+            : analyzeEpisodeFile(env.runner, asset.path, art.proxyPath ?? asset.path, probe, (f, d) => report(f, d), signal, {
+                path: joinPath(dir, `quadros-${Date.now()}.txt`),
+                read: (p) => this.platform.fs.readFile(p),
+                remove: (p) => this.platform.fs.remove(p),
+              });
         },
       }).promise;
       await this.platform.fs.writeFile(file, new TextEncoder().encode(JSON.stringify(result)));
