@@ -162,6 +162,33 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
   const contentW = Math.max(usToPx(durationUs, zoom) + 400, (scrollRef.current?.clientWidth ?? 1200) - HEADER_W);
   const thresholdUs = pxToUs(SNAP_PX, zoom);
 
+  /** Batidas/compassos/drops das músicas na timeline, já em tempo da timeline. */
+  const beatMarks = useMemo(() => {
+    const out: { atUs: number; kind: 'beat' | 'down' | 'drop'; trackId: string }[] = [];
+    for (const c of project.clips) {
+      const t = tracks.find((x) => x.id === c.trackId);
+      if (t?.kind !== 'audio' || !c.assetId) continue;
+      const m = session.assetRuntime(c.assetId).music;
+      if (!m) continue;
+      const toTl = (s: number) => c.timelineStartUs + ((s * 1e6 - c.sourceInUs) / c.speed);
+      const inside = (us: number) => us >= c.timelineStartUs && us < c.timelineStartUs + c.durationUs;
+      const downs = new Set(m.downbeats.map((d) => Math.round(d * 1000)));
+      for (const b of m.beats) {
+        const us = Math.round(toTl(b));
+        if (inside(us)) out.push({ atUs: us, kind: downs.has(Math.round(b * 1000)) ? 'down' : 'beat', trackId: c.trackId });
+      }
+      for (const d of m.drops.slice(0, 2)) {
+        const us = Math.round(toTl(d));
+        if (inside(us)) out.push({ atUs: us, kind: 'drop', trackId: c.trackId });
+      }
+    }
+    return out;
+  }, [project.clips, tracks, session, session.changes]);
+  const allSnapPoints = useCallback(
+    (exclude: Set<string>) => [...snapPoints(project, playheadUs, exclude), ...beatMarks.map((b) => ({ atUs: b.atUs, kind: 'marker' as const }))],
+    [project, playheadUs, beatMarks],
+  );
+
   const trackTops = useMemo(() => {
     const tops: number[] = [];
     let y = 0;
@@ -267,7 +294,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
       let to = base + pxToUs(e.clientX - g.startX, zoom);
       let snapAt: number | null = null;
       if (snapping && !e.altKey) {
-        const s = findSnap([to], snapPoints(project, playheadUs, new Set([c.id])), thresholdUs);
+        const s = findSnap([to], allSnapPoints(new Set([c.id])), thresholdUs);
         if (s) {
           to += s.deltaUs;
           snapAt = s.point.atUs;
@@ -287,7 +314,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
     let snapAt: number | null = null;
     if (snapping && !e.altKey) {
       const edges = clips.flatMap((c) => [c.timelineStartUs + delta, clipEndUs(c) + delta]);
-      const s = findSnap(edges, snapPoints(project, playheadUs, new Set(g.ids)), thresholdUs);
+      const s = findSnap(edges, allSnapPoints(new Set(g.ids)), thresholdUs);
       if (s) {
         delta += s.deltaUs;
         snapAt = s.point.atUs;
@@ -345,15 +372,15 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
         setDropHint(null);
         return;
       }
-      const durUs = asset.kind === 'image' ? 3_000_000 : (asset.probe?.durationUs ?? 0);
+      const durUs = assetDrag.sourceOutUs !== undefined ? assetDrag.sourceOutUs - (assetDrag.sourceInUs ?? 0) : asset.kind === 'image' ? 3_000_000 : (asset.probe?.durationUs ?? 0);
       let start = Math.max(0, xToUs(e.clientX));
       if (snapping && !e.altKey) {
-        const s = findSnap([start, start + durUs], snapPoints(project, playheadUs), thresholdUs);
+        const s = findSnap([start, start + durUs], allSnapPoints(new Set()), thresholdUs);
         if (s) start = Math.max(0, start + s.deltaUs);
       }
       let ok = true;
       try {
-        insertAsset(project, { assetId: asset.id, trackId: track.id, startUs: start });
+        insertAsset(project, { assetId: asset.id, trackId: track.id, startUs: start, sourceInUs: assetDrag.sourceInUs, sourceOutUs: assetDrag.sourceOutUs });
       } catch {
         ok = false;
       }
@@ -365,7 +392,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
       setDropHint(null);
       if (hint?.ok) {
         try {
-          run(`Adicionar ${asset.name}`, insertAsset(project, { assetId: asset.id, trackId: hint.trackId, startUs: hint.startUs }));
+          run(`Adicionar ${assetDrag.sourceOutUs !== undefined ? 'trecho de ' : ''}${asset.name}`, insertAsset(project, { assetId: asset.id, trackId: hint.trackId, startUs: hint.startUs, sourceInUs: assetDrag.sourceInUs, sourceOutUs: assetDrag.sourceOutUs }));
         } catch (err) {
           toast({ tone: 'warn', title: 'Não deu para adicionar', body: (err as Error).message });
         }
@@ -380,7 +407,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [assetDrag, project, tracks, trackAtY, xToUs, snapping, playheadUs, thresholdUs, run, setAssetDrag, setDropHint, toast]);
+  }, [assetDrag, project, tracks, trackAtY, xToUs, snapping, playheadUs, thresholdUs, run, setAssetDrag, setDropHint, toast, allSnapPoints]);
 
   // ---------------------------------------------------------------- zoom com Ctrl+roda, mantendo o ponto sob o mouse
   const onWheel = (e: React.WheelEvent) => {
@@ -605,6 +632,20 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                 </div>
               );
             })}
+
+            {/* batidas da música: compassos mais fortes, drop destacado */}
+            {zoom >= 8 &&
+              beatMarks.map((b, i) =>
+                b.kind === 'beat' && zoom < 40 ? null : (
+                  <div
+                    key={i}
+                    className={`pointer-events-none absolute top-0 bottom-0 w-px ${b.kind === 'drop' ? 'bg-warn/70' : b.kind === 'down' ? 'bg-azure/25' : 'bg-azure/10'}`}
+                    style={{ left: usToPx(b.atUs, zoom) }}
+                  >
+                    {b.kind === 'drop' && <span className="absolute top-0 left-1 rounded bg-warn px-1 text-[9px] font-bold text-base">DROP</span>}
+                  </div>
+                ),
+              )}
 
             {/* linha de encaixe */}
             {snapLine !== null && <div className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-warn" style={{ left: usToPx(snapLine, zoom) }} />}

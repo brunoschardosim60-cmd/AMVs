@@ -1,4 +1,6 @@
 import {
+  cachePaths,
+  joinPath,
   hashFile,
   inspectFile,
   isImportable,
@@ -21,6 +23,7 @@ import {
   type ProjectSettings,
 } from '@amv/project';
 import type { Platform } from '../platform/types';
+import { analyzeEpisodeFile, analyzeMusicFile, EPISODE_ANALYSIS_VERSION, MUSIC_ANALYSIS_VERSION, type EpisodeAnalysis, type MusicAnalysis } from '@amv/analysis';
 import { rememberRecent, updateRecent } from './recents';
 
 export const PROJECT_EXTENSION = 'amvproj';
@@ -29,6 +32,12 @@ export interface AssetRuntime {
   artifacts: MediaArtifacts | null;
   warnings: string[];
   errors: string[];
+  /** Análise da música (áudios). */
+  music?: MusicAnalysis | null;
+  /** Análise do episódio (vídeos): planos, falas, legendas. */
+  episode?: EpisodeAnalysis | null;
+  analysis?: 'pending' | 'running' | 'done' | 'error';
+  analysisError?: string;
 }
 
 export interface ImportReport {
@@ -308,6 +317,50 @@ export class ProjectSession {
       await updateRecent(this.platform, this.path, { posterPath: result.posterPath }).catch(() => undefined);
     }
     this.emit();
+    if (!cancelled && !essentialFailed) void this.analyze(asset, result);
+  }
+
+  /**
+   * Analisa a mídia em segundo plano (música: batidas/drop; vídeo: cenas/falas/legendas).
+   * Resultado em cache por hash: reabrir o projeto não analisa de novo.
+   */
+  private async analyze(asset: Asset, art: MediaArtifacts): Promise<void> {
+    if (!asset.probe) return;
+    const env = await this.mediaEnv();
+    const kind = asset.kind === 'audio' ? 'music' : 'episode';
+    const version = kind === 'music' ? MUSIC_ANALYSIS_VERSION : EPISODE_ANALYSIS_VERSION;
+    const dir = cachePaths(env.cacheRoot, asset.hash, joinPath).dir;
+    const file = joinPath(dir, `analysis-${version}.json`);
+    const setRt = (patch: Partial<AssetRuntime>) => {
+      this.runtime.set(asset.id, { ...this.assetRuntime(asset.id), ...patch });
+      this.emit();
+    };
+    try {
+      if (await this.platform.fs.exists(file)) {
+        const data = JSON.parse(new TextDecoder().decode(await this.platform.fs.readFile(file)));
+        setRt(kind === 'music' ? { music: data, analysis: 'done' } : { episode: data, analysis: 'done' });
+        return;
+      }
+      setRt({ analysis: 'pending' });
+      const probe = asset.probe;
+      const result = await this.queue.enqueue({
+        key: `analysis:${asset.hash}`,
+        kind: 'analysis',
+        label: `${kind === 'music' ? 'Analisando a música' : 'Analisando cenas e falas'} · ${asset.name}`,
+        assetId: asset.id,
+        run: async ({ signal, report }) => {
+          setRt({ analysis: 'running' });
+          return kind === 'music'
+            ? analyzeMusicFile(env.runner, asset.path, probe.durationUs / 1e6, (f, d) => report(f, d), signal)
+            : analyzeEpisodeFile(env.runner, asset.path, art.proxyPath ?? asset.path, probe, (f, d) => report(f, d), signal);
+        },
+      }).promise;
+      await this.platform.fs.writeFile(file, new TextEncoder().encode(JSON.stringify(result)));
+      setRt(kind === 'music' ? { music: result as MusicAnalysis, analysis: 'done' } : { episode: result as EpisodeAnalysis, analysis: 'done' });
+    } catch (e) {
+      if (this.disposed) return;
+      setRt({ analysis: 'error', analysisError: (e as Error).message });
+    }
   }
 
   /** Tenta processar de novo uma mídia que falhou ou foi cancelada. */

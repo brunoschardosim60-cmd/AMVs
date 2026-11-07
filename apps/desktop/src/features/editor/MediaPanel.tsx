@@ -6,6 +6,7 @@ import { duration } from '../../format';
 import { useApp } from '../../store';
 import { Button } from '../../ui/controls';
 import { useEditor } from './editorStore';
+import { LinesPanel, ScenesPanel } from './MomentsPanel';
 
 const ICON = { video: Film, audio: AudioLines, image: ImageIcon };
 
@@ -15,6 +16,7 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
   const setAssetDrag = useEditor((s) => s.setAssetDrag);
   const select = useEditor((s) => s.select);
   const assets = session.project.assets;
+  const [tab, setTab] = useState<'media' | 'scenes' | 'lines'>('media');
 
   const startDrag = (e: RPointerEvent, a: Asset) => {
     if (e.button !== 0) return;
@@ -35,13 +37,32 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
 
   return (
     <aside className="flex w-[248px] shrink-0 flex-col border-r border-line bg-panel" aria-label="Mídia do projeto">
-      <div className="flex h-10 shrink-0 items-center justify-between px-3">
-        <h2 className="text-xs font-semibold text-ink-soft">Mídia</h2>
-        <Button size="sm" variant="ghost" icon={<Plus size={14} />} onClick={() => importMedia()}>
-          Importar
-        </Button>
+      <div className="flex h-10 shrink-0 items-center gap-0.5 px-2" role="tablist">
+        {(
+          [
+            ['media', 'Mídia'],
+            ['scenes', 'Cenas'],
+            ['lines', 'Falas'],
+          ] as const
+        ).map(([k, label]) => (
+          <button
+            key={k}
+            type="button"
+            role="tab"
+            aria-selected={tab === k}
+            onClick={() => setTab(k)}
+            className={`rounded-control px-2.5 py-1 text-xs ${tab === k ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}
+          >
+            {label}
+          </button>
+        ))}
+        {tab === 'media' && (
+          <Button size="sm" variant="ghost" className="ml-auto" icon={<Plus size={14} />} onClick={() => importMedia()}>
+            Importar
+          </Button>
+        )}
       </div>
-      {assets.length === 0 ? (
+      {tab === 'scenes' ? <ScenesPanel session={session} /> : tab === 'lines' ? <LinesPanel session={session} /> : assets.length === 0 ? (
         <p className="px-3 text-xs leading-relaxed text-muted">Importe episódios e músicas. Depois arraste para a timeline.</p>
       ) : (
         <ul className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">

@@ -7,6 +7,11 @@ export interface AssetDrag {
   label: string;
   x: number;
   y: number;
+  /** Só um trecho da mídia (cena/fala), em µs da origem. */
+  sourceInUs?: number;
+  sourceOutUs?: number;
+  /** Texto da fala (para a legenda opcional). */
+  line?: string | null;
 }
 
 interface EditorState {

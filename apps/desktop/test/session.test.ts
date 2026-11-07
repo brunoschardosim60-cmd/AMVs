@@ -185,3 +185,29 @@ describe('recentes sob concorrência', () => {
     expect(list.every((r) => r.posterPath)).toBe(true);
   });
 });
+
+describe('análise automática', () => {
+  it('analisa música e episódio depois de importar, e reaproveita o cache', async () => {
+    const p = nodePlatform(root);
+    const s = await ProjectSession.create(p, join(root, 'an'), 'An', {});
+    copyFileSync(join(FIX, 'click_120bpm.wav'), join(media, 'click.wav'));
+    await s.importFiles([join(media, 'click.wav'), join(media, 'hevc10_23976.mkv')]);
+    const done = async () => {
+      for (let i = 0; i < 600; i++) {
+        if (s.project.assets.every((a) => ['done', 'error'].includes(s.assetRuntime(a.id).analysis ?? ''))) return;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      throw new Error('análise não terminou');
+    };
+    await done();
+    const [music, ep] = s.project.assets;
+    expect(Math.abs(s.assetRuntime(music!.id).music!.bpm - 120)).toBeLessThan(2);
+    expect(s.assetRuntime(ep!.id).episode!.subtitles[0]?.text).toBe('Eu não vou perder!');
+    await s.save();
+    s.dispose();
+    const { session } = await ProjectSession.open(p, s.path);
+    for (let i = 0; i < 400 && session!.project.assets.some((a) => session!.assetRuntime(a.id).analysis !== 'done'); i++) await new Promise((r) => setTimeout(r, 25));
+    expect(session!.queue.list().filter((j) => j.kind === 'analysis')).toEqual([]);
+    expect(session!.assetRuntime(music!.id).music).toBeTruthy();
+  });
+});

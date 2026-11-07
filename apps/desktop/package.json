@@ -11,6 +11,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@amv/analysis": "workspace:*",
     "@amv/media": "workspace:*",
     "@amv/project": "workspace:*",
     "@amv/render": "workspace:*",

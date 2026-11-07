@@ -118,6 +118,30 @@ export function AssetDetail({ asset, session }: { asset: Asset; session: Project
         )}
       </div>
 
+      {rt.music && (
+        <div className="border-t border-line-soft px-4 py-3 text-xs">
+          <p className="mb-1.5 font-semibold text-ink-soft">Análise da música</p>
+          <Row label="Ritmo">
+            {rt.music.bpm} BPM{rt.music.bpmConfidence < 0.5 ? ' (pouca certeza)' : ''}
+          </Row>
+          <Row label="Intensidade">{rt.music.intensity}/100</Row>
+          <Row label="Drop">{rt.music.drops.length ? rt.music.drops.slice(0, 2).map((d) => `${Math.floor(d / 60)}:${String(Math.floor(d % 60)).padStart(2, '0')}`).join(', ') : 'nenhum claro'}</Row>
+          <div className="mt-2 flex h-6 overflow-hidden rounded" title="Seções da música">
+            {rt.music.sections.map((sec, i) => (
+              <span
+                key={i}
+                className={`flex items-center justify-center truncate border-r border-base text-[9px] ${sec.label === 'drop' ? 'bg-warn/60 text-base' : sec.label === 'refrão' ? 'bg-violet/60' : 'bg-raised text-muted'}`}
+                style={{ width: `${((sec.endS - sec.startS) / rt.music!.durationS) * 100}%`, opacity: 0.45 + sec.energy * 0.55 }}
+                title={`${sec.label} — ${sec.startS.toFixed(1)}s`}
+              >
+                {sec.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {rt.analysis === 'error' && <p className="border-t border-line-soft px-4 py-2 text-xs text-warn">Análise falhou: {rt.analysisError}</p>}
+
       {p && (
         <dl className="border-t border-line-soft px-4 py-3">
           {v && asset.kind !== 'audio' && (

@@ -20,6 +20,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@amv/analysis':
+        specifier: workspace:*
+        version: link:../../packages/analysis
       '@amv/media':
         specifier: workspace:*
         version: link:../../packages/media
