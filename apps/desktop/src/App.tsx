@@ -1,11 +1,13 @@
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Clapperboard, FolderOpen, House, RefreshCw, Upload } from 'lucide-react';
+import { Clapperboard, FolderOpen, House, Music2, RefreshCw, Upload } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { HomeScreen } from './features/home/HomeScreen';
 import { NewProjectDialog } from './features/home/NewProjectDialog';
 import { JobsDock } from './features/jobs/JobsDock';
 import { ProjectScreen } from './features/project/ProjectScreen';
+import { MusicScreen } from './features/music/MusicScreen';
+import { PlayerBar } from './features/music/player';
 import { fileName, useApp } from './store';
 import { Button, Dialog } from './ui/controls';
 import { Toasts } from './ui/Toasts';
@@ -43,6 +45,9 @@ function Sidebar() {
       </NavButton>
       <NavButton label={session ? `Projeto: ${session.project.name}` : 'Nenhum projeto aberto'} active={screen === 'project'} disabled={!session} onClick={() => go('project')}>
         <Clapperboard size={19} />
+      </NavButton>
+      <NavButton label="Músicas" active={screen === 'music'} onClick={() => go('music')}>
+        <Music2 size={19} />
       </NavButton>
       <VersionButton />
     </nav>
@@ -199,11 +204,12 @@ export function App() {
       <main className="flex min-w-0 flex-1 flex-col">
         <UpdateBanner />
         <div className="min-h-0 flex-1">
-          <ErrorBoundary key={screen} area={screen === 'project' ? 'do projeto' : 'inicial'} onReset={() => useApp.getState().go('home')}>
-            {screen === 'project' && session ? <ProjectScreen /> : <HomeScreen />}
+          <ErrorBoundary key={screen} area={screen === 'project' ? 'do projeto' : screen === 'music' ? 'de músicas' : 'inicial'} onReset={() => useApp.getState().go('home')}>
+            {screen === 'project' && session ? <ProjectScreen /> : screen === 'music' ? <MusicScreen /> : <HomeScreen />}
           </ErrorBoundary>
         </div>
         <JobsDock />
+        <PlayerBar />
       </main>
       {newProjectOpen && <NewProjectDialog />}
       <RecoveryDialog />

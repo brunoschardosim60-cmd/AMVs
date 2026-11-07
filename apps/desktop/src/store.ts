@@ -5,8 +5,9 @@ import { ProjectSession, type ImportReport } from './core/session';
 import type { Platform } from './platform/types';
 import { reportError } from './core/errors';
 import type { ProjectSettings } from '@amv/project';
+import { MusicLibrary } from './core/library';
 
-export type Screen = 'home' | 'project';
+export type Screen = 'home' | 'project' | 'music';
 
 export interface Toast {
   id: number;
@@ -17,6 +18,7 @@ export interface Toast {
 
 interface AppState {
   platform: Platform | null;
+  library: MusicLibrary | null;
   screen: Screen;
   session: ProjectSession | null;
   recents: RecentProject[];
@@ -47,6 +49,7 @@ let toastSeq = 0;
 
 export const useApp = create<AppState>((set, get) => ({
   platform: null,
+  library: null,
   screen: 'home',
   session: null,
   recents: [],
@@ -56,7 +59,9 @@ export const useApp = create<AppState>((set, get) => ({
   selectedAssetId: null,
 
   async init(platform) {
-    set({ platform });
+    const library = new MusicLibrary(platform);
+    set({ platform, library });
+    library.load().catch((e) => reportError('biblioteca', e));
     await get().refreshRecents();
   },
 
@@ -213,5 +218,13 @@ export function useSessionVersion(session: ProjectSession | null): number {
   return useSyncExternalStore(
     (cb) => (session ? session.subscribe(cb) : () => undefined),
     () => (session ? session.changes : 0),
+  );
+}
+
+/** Re-renderiza quando a biblioteca de músicas muda. */
+export function useLibraryVersion(library: MusicLibrary | null): number {
+  return useSyncExternalStore(
+    (cb) => (library ? library.subscribe(cb) : () => undefined),
+    () => (library ? library.changes : 0),
   );
 }

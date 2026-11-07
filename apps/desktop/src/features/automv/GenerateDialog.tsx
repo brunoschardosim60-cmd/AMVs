@@ -3,7 +3,8 @@ import { generateAmv, STYLES, type GenerateOptions, type StyleId } from '@amv/au
 import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { ProjectSession } from '../../core/session';
-import { useApp, useSessionVersion } from '../../store';
+import { useApp, useLibraryVersion, useSessionVersion } from '../../store';
+import { displayTitle, recommend, STYLE_THEME } from '@amv/music';
 import { Button, Dialog } from '../../ui/controls';
 
 const ICONS: Record<StyleId, typeof Flame> = { hype: Flame, superacao: Sparkles, letra: Type, discurso: Mic, emocional: Heart };
@@ -12,7 +13,8 @@ const DURATIONS = [15, 30, 45, 60, 90];
 
 export function GenerateDialog({ session, onClose }: { session: ProjectSession; onClose: () => void }) {
   useSessionVersion(session);
-  const { platform, toast } = useApp();
+  const { platform, toast, library } = useApp();
+  useLibraryVersion(library);
   const project = session.project;
   const musics = project.assets.filter((a) => a.kind === 'audio');
   const episodes = project.assets.filter((a) => a.kind === 'video');
@@ -76,6 +78,17 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
     }
   };
 
+  const recs = library ? recommend(library.lib, STYLE_THEME[style] ?? 'motivacao', { limit: 3, targetDurationS: duration }).filter((r) => !project.assets.some((a) => a.hash === r.track.hash)) : [];
+  const addFromLibrary = async (trackId: string) => {
+    const t = library!.track(trackId)!;
+    await session.importFiles([t.path]);
+    const a = session.project.assets.find((x) => x.hash === t.hash);
+    if (a) {
+      setMusicId(a.id);
+      library!.markUsed(t.id, project.name);
+    }
+  };
+
   const toggleEp = (id: string) => setEpIds((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]));
 
   if (result) {
@@ -128,7 +141,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
         </>
       }
     >
-      {musics.length === 0 || episodes.length === 0 ? (
+      {episodes.length === 0 || (musics.length === 0 && !recs.length) ? (
         <p className="text-sm text-ink-soft">Importe pelo menos <b>uma música</b> e <b>um episódio</b>. O AMV Studio analisa os dois e monta o vídeo a partir deles.</p>
       ) : (
         <div className="grid max-h-[62vh] grid-cols-[1fr_220px] gap-5 overflow-y-auto pr-1">
@@ -168,7 +181,8 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
           <div className="space-y-4">
             <div>
               <p className="mb-1.5 text-xs font-medium text-ink-soft">Música</p>
-              <select className="h-9 w-full rounded-control border border-line bg-base px-2 text-sm" value={musicId} onChange={(e) => setMusicId(e.target.value)}>
+              <select className="h-9 w-full rounded-control border border-line bg-base px-2 text-sm" value={musicId} onChange={(e) => setMusicId(e.target.value)} disabled={!musics.length}>
+                {!musics.length && <option value="">Escolha uma abaixo</option>}
                 {musics.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
@@ -183,6 +197,23 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
                 <p className="mt-1 text-2xs text-muted">Analisando a música…</p>
               )}
             </div>
+
+            {recs.length > 0 && (
+              <div>
+                <p className="mb-1 text-xs font-medium text-ink-soft">Combinam com o estilo (sua biblioteca)</p>
+                <ul className="space-y-1">
+                  {recs.map((r) => (
+                    <li key={r.track.id}>
+                      <button type="button" title={r.reasons.join(' · ')} onClick={() => void addFromLibrary(r.track.id)} className="flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-left text-2xs hover:bg-raised">
+                        <Music2 size={11} className="shrink-0 text-violet-strong" />
+                        <span className="min-w-0 flex-1 truncate">{displayTitle(r.track)}</span>
+                        <span className="tnum text-faint">{Math.round(r.score * 100)}%</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             <div>
               <p className="mb-1.5 text-xs font-medium text-ink-soft">Duração</p>

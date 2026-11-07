@@ -29,6 +29,9 @@ importers:
       '@amv/media':
         specifier: workspace:*
         version: link:../../packages/media
+      '@amv/music':
+        specifier: workspace:*
+        version: link:../../packages/music
       '@amv/project':
         specifier: workspace:*
         version: link:../../packages/project
@@ -120,6 +123,12 @@ importers:
       '@amv/project':
         specifier: workspace:*
         version: link:../project
+
+  packages/music:
+    dependencies:
+      '@amv/analysis':
+        specifier: workspace:*
+        version: link:../analysis
 
   packages/project:
     dependencies:
