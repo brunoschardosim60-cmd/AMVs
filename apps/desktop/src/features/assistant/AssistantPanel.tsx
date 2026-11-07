@@ -42,13 +42,20 @@ function buildContext(session: ProjectSession): AssistantContext {
 
 let seq = 0;
 
+/** Conversa sobrevive a fechar e abrir o painel (por projeto, enquanto o app está aberto). */
+const memory = new Map<string, { entries: Entry[]; history: ChatMessage[] }>();
+
 /** Chat do assistente: conversa, ideias e propostas com aprovação parcial. */
 export function AssistantPanel({ session, onClose }: { session: ProjectSession; onClose: () => void }) {
   useSessionVersion(session);
   const { platform, toast } = useApp();
   const [settings, setSettings] = useState<AiSettings | null>(null);
-  const [entries, setEntries] = useState<Entry[]>([]);
-  const [history, setHistory] = useState<ChatMessage[]>([]);
+  const saved = memory.get(session.project.id);
+  const [entries, setEntries] = useState<Entry[]>(saved?.entries ?? []);
+  const [history, setHistory] = useState<ChatMessage[]>(saved?.history ?? []);
+  useEffect(() => {
+    memory.set(session.project.id, { entries, history });
+  }, [entries, history, session.project.id]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -193,6 +200,9 @@ export function AssistantPanel({ session, onClose }: { session: ProjectSession; 
   );
 }
 
+type CardState = 'open' | 'testing' | 'applied' | 'discarded';
+const cardMemory = new Map<string, { picked: Set<string>; state: CardState }>();
+
 const KIND_COLOR = { add: 'text-ok', remove: 'text-danger', move: 'text-[#4fc3f7]', modify: 'text-warn' } as const;
 const KIND_LABEL = { add: '+', remove: '−', move: '→', modify: '~' } as const;
 
@@ -200,8 +210,11 @@ const KIND_LABEL = { add: '+', remove: '−', move: '→', modify: '~' } as cons
 function ProposalCard({ session, cs }: { session: ProjectSession; cs: ChangeSet }) {
   const { toast } = useApp();
   const setPlayhead = useEditor((s) => s.setPlayhead);
-  const [picked, setPicked] = useState<Set<string>>(() => new Set(cs.items.map((i) => i.id)));
-  const [state, setState] = useState<'open' | 'testing' | 'applied' | 'discarded'>('open');
+  const [picked, setPicked] = useState<Set<string>>(() => cardMemory.get(cs.id)?.picked ?? new Set(cs.items.map((i) => i.id)));
+  const [state, setState] = useState<CardState>(() => cardMemory.get(cs.id)?.state ?? 'open');
+  useEffect(() => {
+    cardMemory.set(cs.id, { picked, state });
+  }, [cs.id, picked, state]);
   const label = `IA: ${cs.title}`;
 
   const toggle = (id: string) => {

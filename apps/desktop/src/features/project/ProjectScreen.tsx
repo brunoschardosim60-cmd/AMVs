@@ -10,6 +10,7 @@ import { ExportDialog } from '../export/ExportDialog';
 import { GenerateDialog } from '../automv/GenerateDialog';
 import { VersionsMenu } from '../automv/VersionsMenu';
 import { AssistantPanel } from '../assistant/AssistantPanel';
+import { useEditor } from '../editor/editorStore';
 import type { ProjectSession } from '../../core/session';
 
 type Filter = 'all' | Asset['kind'];
@@ -70,7 +71,14 @@ export function ProjectScreen() {
   const [exporting, setExporting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
-  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantOpen, setAssistantOpenState] = useState(false);
+  const setAssistantOpen = (v: boolean | ((x: boolean) => boolean)) =>
+    setAssistantOpenState((cur) => {
+      const next = typeof v === 'function' ? v(cur) : v;
+      useEditor.setState({ assistantOpen: next });
+      return next;
+    });
+  useEffect(() => () => useEditor.setState({ assistantOpen: false }), []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') {

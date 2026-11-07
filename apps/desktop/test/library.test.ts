@@ -16,7 +16,7 @@ beforeEach(() => {
   copyFileSync(join(FIX, 'musica_capa.mp3'), join(root, 'musicas', 'sub', 'capa.mp3'));
   copyFileSync(join(FIX, 'imagem.png'), join(root, 'musicas', 'nao.png'));
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }));
 
 async function settled(l: MusicLibrary) {
   for (let i = 0; i < 600 && l.lib.tracks.some((t) => t.status === 'analyzing'); i++) await new Promise((r) => setTimeout(r, 25));

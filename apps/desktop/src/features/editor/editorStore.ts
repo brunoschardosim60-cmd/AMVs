@@ -25,6 +25,8 @@ interface EditorState {
   /** Fração da resolução do projeto usada no preview (não afeta a exportação). */
   previewScale: 1 | 0.5 | 0.25;
   assetDrag: AssetDrag | null;
+  /** Painel do assistente aberto (o inspetor vazio some para dar espaço). */
+  assistantOpen: boolean;
   /** Projeto a que este estado pertence (troca de projeto zera tudo). */
   projectId: string | null;
 
@@ -52,6 +54,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   snapping: true,
   previewScale: 0.5,
   assetDrag: null,
+  assistantOpen: false,
   projectId: null,
 
   bind(projectId) {

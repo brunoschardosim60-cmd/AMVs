@@ -17,7 +17,7 @@ beforeEach(() => {
   mkdirSync(media);
   for (const f of ['hevc10_23976.mkv', 'tom.flac', 'imagem.png', 'musica_capa.mp3']) copyFileSync(join(FIX, f), join(media, f));
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }));
 
 async function waitProcessed(s: ProjectSession) {
   for (let i = 0; i < 400; i++) {

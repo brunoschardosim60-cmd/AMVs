@@ -371,10 +371,66 @@ export function Inspector({ session, project, selectedAssetId }: { session: Proj
     );
   }
   if (asset) return <AssetDetail asset={asset} session={session} />;
+  return <EmptyInspector project={project} />;
+}
+
+/** Sem seleção: mostra o próximo passo em vez de um painel vazio. */
+function EmptyInspector({ project }: { project: Project }) {
+  const assistantOpen = useEditor((s) => s.assistantOpen);
+  if (assistantOpen) return null;
+  const hasMusic = project.assets.some((a) => a.kind === 'audio');
+  const hasVideo = project.assets.some((a) => a.kind === 'video');
+  const hasClips = project.clips.length > 0;
+  const steps: [boolean, string, string][] = [
+    [hasVideo, 'Importe episódios', 'Arraste os arquivos para a janela ou use Importar. Eles são analisados sozinhos (cenas, falas, gritos).'],
+    [hasMusic, 'Escolha a música', 'Importe um arquivo ou pegue na tela Músicas → Recomendadas.'],
+    [hasClips, 'Monte o vídeo', 'Use "Gerar meu AMV" no topo, ou arraste cenas das abas Cenas e Falas para a timeline.'],
+  ];
   return (
-    <aside className="w-[300px] shrink-0 border-l border-line bg-panel p-4" aria-label="Propriedades">
-      <p className="text-sm font-semibold text-ink-soft">Nada selecionado</p>
-      <p className="mt-1 text-xs leading-relaxed text-muted">Clique num clipe da timeline para ver e ajustar posição, escala, velocidade e volume.</p>
+    <aside className="w-[300px] shrink-0 overflow-y-auto border-l border-line bg-panel p-4" aria-label="Propriedades">
+      {hasClips ? (
+        <>
+          <p className="text-sm font-semibold text-ink-soft">Nada selecionado</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted">Clique num clipe para ajustar posição, escala, velocidade, volume, efeitos e transição.</p>
+        </>
+      ) : (
+        <>
+          <p className="text-sm font-semibold">Começando</p>
+          <ol className="mt-3 space-y-3">
+            {steps.map(([done, title, text], i) => (
+              <li key={title} className="flex gap-2.5">
+                <span className={`grid size-5 shrink-0 place-items-center rounded-full text-2xs font-semibold ${done ? 'bg-ok/20 text-ok' : 'bg-raised text-muted'}`}>{done ? '✓' : i + 1}</span>
+                <span>
+                  <span className={`block text-xs font-semibold ${done ? 'text-muted line-through' : 'text-ink'}`}>{title}</span>
+                  {!done && <span className="block text-2xs leading-relaxed text-muted">{text}</span>}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+      <div className="mt-6 border-t border-line pt-3">
+        <p className="mb-2 text-2xs font-semibold tracking-wide text-muted uppercase">Atalhos</p>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-2xs">
+          {[
+            ['Espaço', 'tocar / pausar'],
+            ['S', 'dividir no playhead'],
+            ['T', 'texto no playhead'],
+            ['Delete', 'excluir'],
+            ['Ctrl+D', 'duplicar'],
+            ['Ctrl+Z', 'desfazer'],
+            ['← →', 'quadro a quadro'],
+            ['Ctrl+E', 'exportar'],
+          ].map(([k, v]) => (
+            <div key={k} className="contents">
+              <dt>
+                <kbd className="rounded border border-line bg-base px-1.5 py-0.5 font-sans text-ink-soft">{k}</kbd>
+              </dt>
+              <dd className="self-center text-muted">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
     </aside>
   );
 }
