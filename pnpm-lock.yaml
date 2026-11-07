@@ -100,6 +100,15 @@ importers:
         specifier: workspace:*
         version: link:../project
 
+  packages/automv:
+    dependencies:
+      '@amv/analysis':
+        specifier: workspace:*
+        version: link:../analysis
+      '@amv/project':
+        specifier: workspace:*
+        version: link:../project
+
   packages/media:
     dependencies:
       '@amv/project':

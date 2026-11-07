@@ -244,6 +244,7 @@ export type AssetStatus = z.infer<typeof AssetStatusSchema>;
 export type Track = z.infer<typeof TrackSchema>;
 export type TrackKind = z.infer<typeof TrackKindSchema>;
 export type Clip = z.infer<typeof ClipSchema>;
+export type EffectInstance = z.infer<typeof EffectInstanceSchema>;
 export type Marker = z.infer<typeof MarkerSchema>;
 export type ProjectSettings = z.infer<typeof ProjectSettingsSchema>;
 export type Project = z.infer<typeof ProjectSchema>;
