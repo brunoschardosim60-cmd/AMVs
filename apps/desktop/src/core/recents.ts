@@ -39,24 +39,36 @@ async function write(p: Platform, list: RecentProject[]): Promise<void> {
   await p.fs.rename(tmp, path);
 }
 
-export async function rememberRecent(p: Platform, entry: Omit<RecentProject, 'favorite'>): Promise<RecentProject[]> {
-  const list = await loadRecents(p);
-  const prev = list.find((r) => r.path === entry.path);
-  const next = [{ ...entry, favorite: prev?.favorite ?? false }, ...list.filter((r) => r.path !== entry.path)].slice(0, MAX);
-  await write(p, next);
-  return next;
+/**
+ * Toda alteração é ler → modificar → gravar. Duas ao mesmo tempo (ex.: salvar o
+ * projeto enquanto a miniatura fica pronta) perderiam dados, então passam por uma fila.
+ */
+let queue: Promise<unknown> = Promise.resolve();
+function modify(p: Platform, fn: (list: RecentProject[]) => RecentProject[]): Promise<RecentProject[]> {
+  const run = queue.then(async () => {
+    const next = fn(await loadRecents(p));
+    await write(p, next);
+    return next;
+  });
+  queue = run.catch(() => undefined);
+  return run;
 }
 
-export async function updateRecent(p: Platform, path: string, patch: Partial<RecentProject>): Promise<RecentProject[]> {
-  const list = (await loadRecents(p)).map((r) => (r.path === path ? { ...r, ...patch } : r));
-  await write(p, list);
-  return list;
+export function rememberRecent(p: Platform, entry: Omit<RecentProject, 'favorite'>): Promise<RecentProject[]> {
+  return modify(p, (list) => {
+    const prev = list.find((r) => r.path === entry.path);
+    // não perde a miniatura já conhecida se a nova ainda não existe
+    const posterPath = entry.posterPath ?? prev?.posterPath ?? null;
+    return [{ ...entry, posterPath, favorite: prev?.favorite ?? false }, ...list.filter((r) => r.path !== entry.path)].slice(0, MAX);
+  });
 }
 
-export async function forgetRecent(p: Platform, path: string): Promise<RecentProject[]> {
-  const list = (await loadRecents(p)).filter((r) => r.path !== path);
-  await write(p, list);
-  return list;
+export function updateRecent(p: Platform, path: string, patch: Partial<RecentProject>): Promise<RecentProject[]> {
+  return modify(p, (list) => list.map((r) => (r.path === path ? { ...r, ...patch } : r)));
+}
+
+export function forgetRecent(p: Platform, path: string): Promise<RecentProject[]> {
+  return modify(p, (list) => list.filter((r) => r.path !== path));
 }
 
 /** Ordena favoritos primeiro, depois por data de abertura. */

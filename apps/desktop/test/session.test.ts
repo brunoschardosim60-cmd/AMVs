@@ -168,3 +168,20 @@ describe('sessão do projeto', () => {
     expect(sortRecents(await loadRecents(p)).map((r) => r.name)).toEqual(['X', 'Y']);
   });
 });
+
+describe('recentes sob concorrência', () => {
+  it('gravações simultâneas não perdem entradas', async () => {
+    const { rememberRecent, updateRecent } = await import('../src/core/recents');
+    const p = nodePlatform(root);
+    const base = { name: 'P', openedAt: new Date().toISOString(), durationUs: 0, assetCount: 0, posterPath: null };
+    await Promise.all(
+      Array.from({ length: 20 }, (_, i) => [
+        rememberRecent(p, { ...base, path: `/p/${i}.amvproj`, name: `P${i}` }),
+        updateRecent(p, `/p/${i}.amvproj`, { posterPath: `/c/${i}.jpg` }),
+      ]).flat(),
+    );
+    const list = await loadRecents(p);
+    expect(list).toHaveLength(20);
+    expect(list.every((r) => r.posterPath)).toBe(true);
+  });
+});
