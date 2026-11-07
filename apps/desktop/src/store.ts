@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { loadRecents, sortRecents, type RecentProject } from './core/recents';
 import { ProjectSession, type ImportReport } from './core/session';
 import type { Platform } from './platform/types';
+import { reportError } from './core/errors';
 import type { ProjectSettings } from '@amv/project';
 
 export type Screen = 'home' | 'project';
@@ -170,10 +171,14 @@ export const useApp = create<AppState>((set, get) => ({
   async importMedia(paths) {
     const { session, platform } = get();
     if (!session) return;
-    const list = paths ?? (await platform!.dialogs.pickMedia());
-    if (!list.length) return;
-    const report = await session.importFiles(list);
-    announceImport(report);
+    try {
+      const list = paths ?? (await platform!.dialogs.pickMedia());
+      if (!list.length) return;
+      const report = await session.importFiles(list);
+      announceImport(report);
+    } catch (e) {
+      reportError('importação', e);
+    }
   },
 }));
 

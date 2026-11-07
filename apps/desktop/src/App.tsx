@@ -9,6 +9,7 @@ import { ProjectScreen } from './features/project/ProjectScreen';
 import { fileName, useApp } from './store';
 import { Button, Dialog } from './ui/controls';
 import { Toasts } from './ui/Toasts';
+import { ErrorBoundary } from './ui/ErrorBoundary';
 import { UpdateBanner, useUpdate, useUpdateChecker } from './features/update/UpdateBanner';
 
 const AUTOSAVE_MS = 30_000;
@@ -197,7 +198,11 @@ export function App() {
       <Sidebar />
       <main className="flex min-w-0 flex-1 flex-col">
         <UpdateBanner />
-        <div className="min-h-0 flex-1">{screen === 'project' && session ? <ProjectScreen /> : <HomeScreen />}</div>
+        <div className="min-h-0 flex-1">
+          <ErrorBoundary key={screen} area={screen === 'project' ? 'do projeto' : 'inicial'} onReset={() => useApp.getState().go('home')}>
+            {screen === 'project' && session ? <ProjectScreen /> : <HomeScreen />}
+          </ErrorBoundary>
+        </div>
         <JobsDock />
       </main>
       {newProjectOpen && <NewProjectDialog />}

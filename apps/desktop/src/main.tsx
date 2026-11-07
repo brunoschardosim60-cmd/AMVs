@@ -2,7 +2,9 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { createTauriPlatform } from './platform/tauri';
+import { setupErrorReporting } from './core/errors';
 import { useApp } from './store';
+import { ErrorBoundary } from './ui/ErrorBoundary';
 import './styles.css';
 
 const root = createRoot(document.getElementById('root')!);
@@ -25,10 +27,19 @@ if (!inTauri) {
     </div>,
   );
 } else {
-  void useApp.getState().init(createTauriPlatform());
+  const platform = createTauriPlatform();
+  setupErrorReporting(platform, (r) =>
+    useApp.getState().toast({ tone: 'error', title: 'Erro inesperado', body: `${r.where}: ${r.message}` }),
+  );
+  // soltar um arquivo fora da área tratada nunca pode fazer a janela "navegar" para ele
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => e.preventDefault());
+  void useApp.getState().init(platform);
   root.render(
     <StrictMode>
-      <App />
+      <ErrorBoundary area="principal">
+        <App />
+      </ErrorBoundary>
     </StrictMode>,
   );
 }
