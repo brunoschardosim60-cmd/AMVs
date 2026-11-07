@@ -198,14 +198,17 @@ export function proposeReplaceScene(ctx: AssistantContext, args: { clipIds?: str
     const len = c.durationUs / S;
     const curEp = c.assetId ? ctx.episodes.get(c.assetId) : undefined;
     const cur = curEp?.shots.find((s) => s.startS <= c.sourceInUs / S + 0.05 && s.endS > c.sourceInUs / S);
-    const pool = findScenes(ctx, { tag: args.tag, limit: 400 }).filter((s) => s.endS - s.startS >= len * c.speed && !used.has(`${s.assetId}@${Math.round(s.startS * 2)}`) && !(s.assetId === c.assetId && Math.abs(s.startS - c.sourceInUs / S) < 0.5));
+    // cena um pouco curta: entra em câmera lenta (até 0,6×)
+    const pool = findScenes(ctx, { tag: args.tag, limit: 400 }).filter((s) => s.endS - s.startS >= len * Math.min(c.speed, 1) * 0.6 && !used.has(`${s.assetId}@${Math.round(s.startS * 2)}`) && !(s.assetId === c.assetId && Math.abs(s.startS - c.sourceInUs / S) < 0.5));
     const want = args.stronger ? 1 : (cur?.intensity ?? 0.6);
     const pick = pool.sort((a, b) => Math.abs(a.intensity - want) - Math.abs(b.intensity - want))[0];
     if (!pick) continue;
     used.add(`${pick.assetId}@${Math.round(pick.startS * 2)}`);
-    const srcIn = us(pick.startS + Math.min(0.1, pick.endS - pick.startS - len * c.speed));
-    items.push(item('modify', `Trocar cena em ${mmss(c.timelineStartUs / S)}: ${pick.episode} ${mmss(pick.startS)} (${pick.tags.join('/') || 'cena'}, intensidade ${pick.intensity.toFixed(2)})`, c.timelineStartUs, [
-      { type: 'clip.update', clipId: c.id, patch: { assetId: pick.assetId, sourceInUs: srcIn, sourceOutUs: srcIn + Math.round(c.durationUs * c.speed), origin: 'ai', reason: `Trocada pela IA: ${pick.tags.join('/') || 'cena'} ${pick.intensity.toFixed(2)} — ${pick.episode} ${mmss(pick.startS)}` } },
+    const shotLen = pick.endS - pick.startS;
+    const speed = Math.min(c.speed, shotLen / len);
+    const srcIn = us(pick.startS + Math.max(0, Math.min(0.1, shotLen - len * speed)));
+    items.push(item('modify', `Trocar cena em ${mmss(c.timelineStartUs / S)}: ${pick.episode} ${mmss(pick.startS)} (${pick.tags.join('/') || 'cena'}, intensidade ${pick.intensity.toFixed(2)})${speed < c.speed ? `, câmera lenta ${speed.toFixed(2)}×` : ''}`, c.timelineStartUs, [
+      { type: 'clip.update', clipId: c.id, patch: { assetId: pick.assetId, speed, sourceInUs: srcIn, sourceOutUs: srcIn + Math.round(c.durationUs * speed), origin: 'ai', reason: `Trocada pela IA: ${pick.tags.join('/') || 'cena'} ${pick.intensity.toFixed(2)} — ${pick.episode} ${mmss(pick.startS)}` } },
     ]));
   }
   if (!items.length) return 'Não achei outra cena que caiba nesse tamanho. Importe mais episódios ou encurte o clipe.';

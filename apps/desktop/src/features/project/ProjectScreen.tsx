@@ -71,13 +71,8 @@ export function ProjectScreen() {
   const [exporting, setExporting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
-  const [assistantOpen, setAssistantOpenState] = useState(false);
-  const setAssistantOpen = (v: boolean | ((x: boolean) => boolean)) =>
-    setAssistantOpenState((cur) => {
-      const next = typeof v === 'function' ? v(cur) : v;
-      useEditor.setState({ assistantOpen: next });
-      return next;
-    });
+  const assistantOpen = useEditor((st) => st.assistantOpen);
+  const setAssistantOpen = (v: boolean | ((x: boolean) => boolean)) => useEditor.setState((st) => ({ assistantOpen: typeof v === 'function' ? v(st.assistantOpen) : v }));
   useEffect(() => () => useEditor.setState({ assistantOpen: false }), []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

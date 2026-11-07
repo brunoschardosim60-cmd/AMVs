@@ -27,6 +27,10 @@ interface EditorState {
   assetDrag: AssetDrag | null;
   /** Painel do assistente aberto (o inspetor vazio some para dar espaço). */
   assistantOpen: boolean;
+  /** Pergunta pronta para o assistente (vinda de "Perguntar à IA"). */
+  assistantDraft: string | null;
+  /** Onde a proposta da IA aberta mexe (marcas na timeline). */
+  proposalMarks: { atUs: number; kind: 'add' | 'remove' | 'move' | 'modify' }[];
   /** Projeto a que este estado pertence (troca de projeto zera tudo). */
   projectId: string | null;
 
@@ -55,6 +59,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   previewScale: 0.5,
   assetDrag: null,
   assistantOpen: false,
+  assistantDraft: null,
+  proposalMarks: [],
   projectId: null,
 
   bind(projectId) {

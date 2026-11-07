@@ -13,6 +13,7 @@ import {
   proposeRemove,
   proposeReplaceScene,
   proposeSpeechBeforeDrop,
+  targetClips,
   type AssistantContext,
 } from './tools.js';
 
@@ -152,12 +153,27 @@ export function localTurn(ctx: AssistantContext, question: string): { reply: str
     const o = runTool(ctx, name, args);
     return o.proposal ? { reply: `${o.proposal.title}: ${o.proposal.reason}. Revise abaixo.`, proposals: [o.proposal] } : { reply: o.content, proposals: [] };
   };
+  if (/melhor/.test(q) && /(cena|clipe|aqui|isso)/.test(q)) {
+    const clips = targetClips(ctx);
+    if (!clips.length) return { reply: 'Selecione um clipe (ou deixe o playhead em cima dele) e pergunte de novo.', proposals: [] };
+    const a = Math.min(...clips.map((c) => c.timelineStartUs)) / 1e6 - 0.3;
+    const b = Math.max(...clips.map((c) => c.timelineStartUs + c.durationUs)) / 1e6 + 0.3;
+    const ids = new Set(clips.map((c) => c.id));
+    const local = findWeakPoints(ctx).filter((f) => (f.clipId ? ids.has(f.clipId) : f.atS >= a && f.atS <= b));
+    const swap = runTool(ctx, 'propose_replace_scene', { stronger: true });
+    const head = local.length ? formatFindings(local) : 'Nesse trecho os cortes estão na batida e a cena não se repete.';
+    return { reply: `${head}${swap.proposal ? '\nSe quiser mais impacto, dá para trocar por uma cena mais forte:' : ''}`, proposals: swap.proposal ? [swap.proposal] : [] };
+  }
   if (/(ponto|fraco|problema|analis|revis|melhor(ar)?)/.test(q) && !/cena/.test(q)) return { reply: formatFindings(findWeakPoints(ctx)), proposals: [] };
   if (/(rapid|acelera|mais corte)/.test(q)) return prop('propose_faster_cuts', { beatsPerCut: /1 batida|uma batida/.test(q) ? 1 : 2 });
   if (/(fala|grito|frase).*(drop)|(drop).*(fala|grito)/.test(q)) return prop('propose_speech_before_drop', {});
   if (/(troc|outra cena|substitu)/.test(q)) return prop('propose_replace_scene', { stronger: /forte|impacto|intens/.test(q) });
-  const fx = /clarao|flash/.test(q) ? 'flash' : /trem|shake/.test(q) ? 'shake' : /zoom/.test(q) ? 'zoom' : /rgb|glitch/.test(q) ? 'rgb_split' : /desfo|blur/.test(q) ? 'blur' : null;
-  if (fx) return prop('propose_add_effect', { effect: fx, onBeats: /batida|beat/.test(q) });
+  const fxs = ([['flash', /clarao|flash/], ['shake', /trem|shake/], ['zoom', /zoom/], ['rgb_split', /rgb|glitch/], ['blur', /desfo|blur/]] as const).filter(([, re]) => re.test(q)).map(([f]) => f);
+  if (fxs.length) {
+    const outs = fxs.map((effect) => runTool(ctx, 'propose_add_effect', { effect, onBeats: /batida|beat/.test(q) }));
+    const proposals = outs.flatMap((o) => (o.proposal ? [o.proposal] : []));
+    return proposals.length ? { reply: `${proposals.map((p) => p.title).join(' e ')}: revise abaixo.`, proposals } : { reply: outs[0]!.content, proposals: [] };
+  }
   const style = /superac|motiva/.test(q) ? 'superacao' : /luta|hype/.test(q) ? 'hype' : /letra/.test(q) ? 'letra' : /discurso/.test(q) ? 'discurso' : /triste|emoc/.test(q) ? 'emocional' : null;
   if (style && /(ger|mont|faz|cria)/.test(q)) return prop('propose_generate', { style, durationS: Number(q.match(/(\d+)\s*s/)?.[1] ?? 30) });
   if (/(ideia|sugest|momento|cena boa|melhores)/.test(q)) return { reply: ideas(ctx).map((x) => `• ${x}`).join('\n') || 'Importe episódios e uma música para eu ter o que sugerir.', proposals: [] };

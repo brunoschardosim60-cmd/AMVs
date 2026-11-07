@@ -62,6 +62,13 @@ export function AssistantPanel({ session, onClose }: { session: ProjectSession; 
   const abort = useRef<AbortController | null>(null);
   const list = useRef<HTMLDivElement>(null);
   const selection = useEditor((s) => s.selection);
+  const draft = useEditor((s) => s.assistantDraft);
+  useEffect(() => {
+    if (draft) {
+      setInput(draft);
+      useEditor.setState({ assistantDraft: null });
+    }
+  }, [draft]);
 
   useEffect(() => {
     if (platform) void loadAiSettings(platform).then(setSettings);
@@ -215,6 +222,13 @@ function ProposalCard({ session, cs }: { session: ProjectSession; cs: ChangeSet 
   useEffect(() => {
     cardMemory.set(cs.id, { picked, state });
   }, [cs.id, picked, state]);
+  // mostra na timeline onde a proposta mexe enquanto está em revisão
+  useEffect(() => {
+    if (state !== 'open') return;
+    const marks = cs.items.filter((i) => picked.has(i.id) && i.atUs !== null).map((i) => ({ atUs: i.atUs!, kind: i.kind }));
+    useEditor.setState({ proposalMarks: marks });
+    return () => useEditor.setState({ proposalMarks: [] });
+  }, [cs, picked, state]);
   const label = `IA: ${cs.title}`;
 
   const toggle = (id: string) => {

@@ -60,6 +60,18 @@ describe('chat local (sem modelo)', () => {
     expect(v.ok).toBe(true);
   });
 
+  it('"como melhorar esta cena" olha só o clipe e oferece troca; dois efeitos de uma vez', () => {
+    const ctx = setup();
+    const second = ctx.project.clips.find((c) => c.sourceInUs === 100 * S)!;
+    ctx.selection = [second.id];
+    const r = localTurn(ctx, 'Como melhorar esta cena?');
+    expect(r.reply).toMatch(/100 ms fora da batida/);
+    expect(r.reply).not.toMatch(/repetida/);
+    expect(r.proposals[0]!.title).toBe('Trocar cena');
+    const two = localTurn(ctx, 'Clarão e tremida aqui');
+    expect(two.proposals.map((p) => p.title)).toEqual(['Adicionar clarão', 'Adicionar tremida']);
+  });
+
   it('pedido desconhecido explica o que dá para fazer', () => {
     expect(localTurn(setup(), 'qual o sentido da vida').reply).toMatch(/cortes mais rápidos/);
   });

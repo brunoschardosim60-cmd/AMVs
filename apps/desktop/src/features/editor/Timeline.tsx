@@ -424,6 +424,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
 
   // segue o playhead tocando
   const playing = useEditor((s) => s.playing);
+  const proposalMarks = useEditor((s) => s.proposalMarks);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !playing) return;
@@ -646,6 +647,17 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                   </div>
                 ),
               )}
+
+            {/* onde a proposta da IA mexe */}
+            {proposalMarks.map((m, i) => (
+              <div
+                key={`pm${i}`}
+                className={`pointer-events-none absolute top-0 bottom-0 z-10 w-0.5 ${m.kind === 'add' ? 'bg-ok/80' : m.kind === 'remove' ? 'bg-danger/80' : 'bg-violet-strong/80'}`}
+                style={{ left: usToPx(m.atUs, zoom) }}
+              >
+                <span className={`absolute top-0 -left-1 size-2.5 rotate-45 ${m.kind === 'add' ? 'bg-ok' : m.kind === 'remove' ? 'bg-danger' : 'bg-violet-strong'}`} />
+              </div>
+            ))}
 
             {/* linha de encaixe */}
             {snapLine !== null && <div className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-warn" style={{ left: usToPx(snapLine, zoom) }} />}

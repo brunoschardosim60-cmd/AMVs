@@ -358,6 +358,7 @@ export function Inspector({ session, project, selectedAssetId }: { session: Proj
   if (clips.length === 1) {
     return (
       <aside className="w-[300px] shrink-0 overflow-y-auto border-l border-line bg-panel" aria-label="Propriedades">
+        <AskAi />
         <ClipInspector session={session} project={project} clip={clips[0]!} />
       </aside>
     );
@@ -367,6 +368,9 @@ export function Inspector({ session, project, selectedAssetId }: { session: Proj
       <aside className="w-[300px] shrink-0 border-l border-line bg-panel p-4 text-sm" aria-label="Propriedades">
         <p className="font-semibold">{clips.length} clipes selecionados</p>
         <p className="mt-1 text-xs text-muted">Arraste para mover juntos, Delete para excluir, Ctrl+C para copiar.</p>
+        <div className="-mx-4 mt-3">
+          <AskAi />
+        </div>
       </aside>
     );
   }
@@ -432,5 +436,18 @@ function EmptyInspector({ project }: { project: Project }) {
         </dl>
       </div>
     </aside>
+  );
+}
+
+/** Abre o assistente já falando dos clipes selecionados. */
+function AskAi() {
+  return (
+    <div className="flex flex-wrap gap-1 border-b border-line px-4 py-2">
+      {['Como melhorar esta cena?', 'Troque por uma cena mais forte', 'Clarão e tremida aqui'].map((q) => (
+        <button key={q} type="button" className="rounded-full border border-line px-2 py-0.5 text-2xs text-ink-soft hover:border-violet hover:text-ink" onClick={() => useEditor.setState({ assistantOpen: true, assistantDraft: q })}>
+          ✦ {q}
+        </button>
+      ))}
+    </div>
   );
 }
