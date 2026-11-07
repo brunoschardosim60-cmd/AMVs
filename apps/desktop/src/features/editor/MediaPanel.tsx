@@ -7,6 +7,7 @@ import { useApp } from '../../store';
 import { Button } from '../../ui/controls';
 import { useEditor } from './editorStore';
 import { LinesPanel, ScenesPanel } from './MomentsPanel';
+import { SubtitlesPanel } from './SubtitlesPanel';
 
 const ICON = { video: Film, audio: AudioLines, image: ImageIcon };
 
@@ -16,7 +17,7 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
   const setAssetDrag = useEditor((s) => s.setAssetDrag);
   const select = useEditor((s) => s.select);
   const assets = session.project.assets;
-  const [tab, setTab] = useState<'media' | 'scenes' | 'lines'>('media');
+  const [tab, setTab] = useState<'media' | 'scenes' | 'lines' | 'subs'>('media');
 
   const startDrag = (e: RPointerEvent, a: Asset) => {
     if (e.button !== 0) return;
@@ -43,6 +44,7 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
             ['media', 'Mídia'],
             ['scenes', 'Cenas'],
             ['lines', 'Falas'],
+            ['subs', 'Legendas'],
           ] as const
         ).map(([k, label]) => (
           <button
@@ -62,7 +64,7 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
           </Button>
         )}
       </div>
-      {tab === 'scenes' ? <ScenesPanel session={session} /> : tab === 'lines' ? <LinesPanel session={session} /> : assets.length === 0 ? (
+      {tab === 'subs' ? <SubtitlesPanel session={session} /> : tab === 'scenes' ? <ScenesPanel session={session} /> : tab === 'lines' ? <LinesPanel session={session} /> : assets.length === 0 ? (
         <p className="px-3 text-xs leading-relaxed text-muted">Importe episódios e músicas. Depois arraste para a timeline.</p>
       ) : (
         <ul className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">

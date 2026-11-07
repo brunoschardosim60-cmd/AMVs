@@ -35,6 +35,9 @@ importers:
       '@amv/render':
         specifier: workspace:*
         version: link:../../packages/render
+      '@amv/subtitles':
+        specifier: workspace:*
+        version: link:../../packages/subtitles
       '@fontsource-variable/manrope':
         specifier: ^5.3.0
         version: 5.3.0
@@ -129,6 +132,15 @@ importers:
       '@amv/media':
         specifier: workspace:*
         version: link:../media
+      '@amv/project':
+        specifier: workspace:*
+        version: link:../project
+
+  packages/subtitles:
+    dependencies:
+      '@amv/analysis':
+        specifier: workspace:*
+        version: link:../analysis
       '@amv/project':
         specifier: workspace:*
         version: link:../project

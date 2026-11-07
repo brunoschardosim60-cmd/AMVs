@@ -1,0 +1,227 @@
+import { decodeSubtitleBytes, parseSubtitles, toSrt } from '@amv/analysis';
+import { clipEndUs, type Clip } from '@amv/project';
+import { LOOKS, placeCues, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
+import { AlertTriangle, Download, FileText, Film, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import type { ProjectSession } from '../../core/session';
+import { useApp } from '../../store';
+import { Button } from '../../ui/controls';
+import { useEditor } from './editorStore';
+
+const fmt = (us: number) => {
+  const s = us / 1e6;
+  return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+};
+
+/** Legendas: importar, puxar do episódio, editar, sincronizar e exportar. */
+export function SubtitlesPanel({ session }: { session: ProjectSession }) {
+  const { platform, toast } = useApp();
+  const project = session.project;
+  const tracks = textTracks(project);
+  const [trackId, setTrackId] = useState(tracks[0]?.id ?? '');
+  const [look, setLook] = useState<SubtitleLook>('legenda');
+  const selection = useEditor((s) => s.selection);
+  const playheadUs = useEditor((s) => s.playheadUs);
+  const setPlayhead = useEditor((s) => s.setPlayhead);
+  const select = useEditor((s) => s.select);
+  const clips = trackId ? subtitleClips(project, trackId) : [];
+  const selectedSubs = clips.filter((c) => selection.includes(c.id));
+  const target = selectedSubs.length ? selectedSubs : clips;
+
+  if (!tracks.length) return <p className="p-3 text-xs text-muted">O projeto não tem trilha de legendas.</p>;
+
+  const fail = (title: string, e: unknown) => toast({ tone: 'error', title, body: (e as Error).message });
+
+  const importFile = async () => {
+    try {
+      const path = await platform!.dialogs.pickFile('Legenda ou letra', ['srt', 'ass', 'ssa', 'vtt', 'lrc', 'txt']);
+      if (!path) return;
+      const text = decodeSubtitleBytes(await platform!.fs.readFile(path));
+      const cues = parseSubtitles(path, text).filter((c) => Number.isFinite(c.startS));
+      if (!cues.length) {
+        toast({ tone: 'warn', title: 'Esse arquivo não tem tempos', body: 'Para letra sem tempo, use o Texto (T) e posicione à mão — sincronização automática vem depois.' });
+        return;
+      }
+      // letra (.lrc) acompanha a música: alinha com o começo do clipe de música
+      const isLyrics = /\.lrc$/i.test(path);
+      const musicTrack = project.tracks.find((t) => t.role === 'music');
+      const musicClip = musicTrack ? project.clips.filter((c) => c.trackId === musicTrack.id).sort((a, b) => a.timelineStartUs - b.timelineStartUs)[0] : undefined;
+      const offsetUs = isLyrics && musicClip ? musicClip.timelineStartUs - musicClip.sourceInUs : playheadUs;
+      const end = isLyrics && musicClip ? clipEndUs(musicClip) : undefined;
+      const cmds = placeCues(project, cues, { trackId, offsetUs, look: isLyrics && look === 'legenda' ? 'karaoke' : look, windowUs: end !== undefined ? [Math.max(0, musicClip!.timelineStartUs), end] : undefined, label: path.split(/[\\/]/).pop() });
+      if (!cmds.length) {
+        toast({ tone: 'warn', title: 'Nenhuma linha caiu dentro do vídeo', body: isLyrics ? 'O trecho da música usado na timeline não tem letra nesse arquivo.' : undefined });
+        return;
+      }
+      session.history.transaction(`Importar legenda (${cues.length} linhas)`, cmds);
+      toast({ tone: 'ok', title: `${cmds.filter((c) => c.type === 'clip.add').length} legendas na timeline`, body: isLyrics ? 'Letra alinhada com a música.' : `A partir de ${fmt(offsetUs)} (playhead).` });
+    } catch (e) {
+      fail('Não deu para importar a legenda', e);
+    }
+  };
+
+  const pull = () => {
+    const videoClips = project.clips.filter((c) => c.assetId && project.tracks.find((t) => t.id === c.trackId)?.kind === 'video');
+    const chosen = videoClips.filter((c) => selection.includes(c.id));
+    const from = chosen.length ? chosen : videoClips;
+    const byAsset = new Map<string, { startS: number; endS: number; text: string }[]>();
+    for (const c of from) {
+      const ep = session.assetRuntime(c.assetId!).episode;
+      if (ep?.subtitles.length) byAsset.set(c.assetId!, ep.subtitles);
+    }
+    if (!byAsset.size) {
+      toast({ tone: 'warn', title: 'Esses episódios não têm legenda embutida', body: 'Episódios .mkv costumam ter. Você pode importar o .srt/.ass do episódio aqui mesmo.' });
+      return;
+    }
+    const r = pullClipSubtitles(project, from, byAsset, trackId, look);
+    if (!r.count) {
+      toast({ tone: 'info', title: 'Ninguém fala nesses trechos', body: 'Os clipes escolhidos não têm falas na legenda do episódio.' });
+      return;
+    }
+    session.history.transaction('Puxar falas do episódio', r.commands);
+    toast({ tone: 'ok', title: `${r.count} fala(s) encaixada(s)`, body: chosen.length ? 'Dos clipes selecionados.' : 'De todos os clipes do vídeo.' });
+  };
+
+  const shift = (ms: number) => session.history.transaction(`Ajustar tempo ${ms > 0 ? '+' : ''}${ms} ms`, shiftSubtitles(project, target.map((c) => c.id), ms * 1000));
+  const restyle = (l: SubtitleLook) => {
+    setLook(l);
+    if (target.length) session.history.transaction('Estilo das legendas', restyleSubtitles(project, target.map((c) => c.id), l));
+  };
+
+  const exportAs = async (ext: 'srt' | 'vtt' | 'lrc') => {
+    try {
+      const cues = trackCues(project, trackId);
+      const path = await platform!.dialogs.saveFile('Exportar legendas', `${project.name}.${ext}`, [{ name: ext.toUpperCase(), extensions: [ext] }]);
+      if (!path) return;
+      const text = ext === 'srt' ? toSrt(cues) : ext === 'vtt' ? toVtt(cues) : toLrc(cues);
+      await platform!.fs.writeFile(path, new TextEncoder().encode(text));
+      toast({ tone: 'ok', title: `${cues.length} legendas exportadas`, body: path });
+    } catch (e) {
+      fail('Não deu para exportar', e);
+    }
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="space-y-2 border-b border-line px-2 pb-2">
+        {tracks.length > 1 && (
+          <select className="h-7 w-full rounded-control border border-line bg-base px-1 text-xs" value={trackId} onChange={(e) => setTrackId(e.target.value)}>
+            {tracks.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        )}
+        <div className="grid grid-cols-2 gap-1">
+          <Button size="sm" icon={<FileText size={13} />} onClick={importFile} title="SRT, ASS, VTT, LRC (letra) — entra no playhead; .lrc alinha com a música">
+            Importar
+          </Button>
+          <Button size="sm" icon={<Film size={13} />} onClick={pull} title="Coloca as falas certas embaixo dos clipes de episódio (selecionados, ou todos)">
+            Do episódio
+          </Button>
+        </div>
+        <div className="flex flex-wrap gap-1">
+          {LOOKS.map((l) => (
+            <button key={l.id} type="button" title={`${l.description}${target.length ? ` Aplica em ${selectedSubs.length ? 'selecionadas' : 'todas'}.` : ''}`} onClick={() => restyle(l.id)} className={`rounded-control border px-2 py-0.5 text-2xs ${look === l.id ? 'border-violet bg-violet/10 text-ink' : 'border-line text-muted hover:text-ink'}`}>
+              {l.label}
+            </button>
+          ))}
+        </div>
+        {clips.length > 0 && (
+          <div className="flex items-center gap-1 text-2xs text-muted">
+            <span className="mr-auto">Tempo ({selectedSubs.length ? `${selectedSubs.length} sel.` : 'todas'})</span>
+            {[-500, -100, 100, 500].map((ms) => (
+              <button key={ms} type="button" className="tnum rounded border border-line px-1.5 py-0.5 hover:bg-raised hover:text-ink" onClick={() => shift(ms)}>
+                {ms > 0 ? '+' : '−'}
+                {Math.abs(ms) / 1000}s
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {clips.length === 0 ? (
+        <p className="p-3 text-xs leading-relaxed text-muted">
+          Nenhuma legenda ainda. <b>Importar</b> traz um .srt/.ass/.lrc; <b>Do episódio</b> encaixa as falas originais embaixo de cada cena. Também dá para criar uma com <b>T</b>.
+        </p>
+      ) : (
+        <ul className="min-h-0 flex-1 overflow-y-auto py-1">
+          {clips.map((c, i) => (
+            <SubRow
+              key={c.id}
+              index={i + 1}
+              clip={c}
+              selected={selection.includes(c.id)}
+              onPick={(add) => {
+                setPlayhead(c.timelineStartUs);
+                select(add ? (selection.includes(c.id) ? selection.filter((x) => x !== c.id) : [...selection, c.id]) : [c.id]);
+              }}
+              onText={(text) => session.execute({ type: 'clip.update', clipId: c.id, patch: { text: { ...c.text!, text } } }, 'Editar legenda')}
+              onDelete={() => session.execute({ type: 'clip.remove', clipId: c.id }, 'Apagar legenda')}
+            />
+          ))}
+        </ul>
+      )}
+
+      {clips.length > 0 && (
+        <div className="flex items-center gap-1 border-t border-line p-2">
+          <Download size={13} className="text-muted" />
+          <span className="mr-auto text-2xs text-muted">{clips.length} legendas</span>
+          {(['srt', 'vtt', 'lrc'] as const).map((x) => (
+            <button key={x} type="button" className="rounded border border-line px-1.5 py-0.5 text-2xs uppercase text-ink-soft hover:bg-raised" onClick={() => exportAs(x)}>
+              {x}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SubRow({ index, clip, selected, onPick, onText, onDelete }: { index: number; clip: Clip; selected: boolean; onPick: (add: boolean) => void; onText: (t: string) => void; onDelete: () => void }) {
+  const [text, setText] = useState(clip.text!.text);
+  useEffect(() => setText(clip.text!.text), [clip.text]);
+  const warn = readability(text, clip.durationUs / 1e6);
+  return (
+    <li className={`group mx-1 mb-1 rounded-md border px-2 py-1.5 ${selected ? 'border-violet bg-violet/10' : 'border-transparent hover:bg-raised'}`}>
+      <button type="button" className="flex w-full items-center gap-1.5 text-left text-2xs text-muted" onClick={(e) => onPick(e.shiftKey || e.ctrlKey || e.metaKey)}>
+        <span className="tnum w-5 text-faint">{index}</span>
+        <span className="tnum">
+          {fmt(clip.timelineStartUs)} → {fmt(clipEndUs(clip))}
+        </span>
+        {warn && (
+          <span title={warn} className="text-warn">
+            <AlertTriangle size={11} />
+          </span>
+        )}
+        <span
+          role="button"
+          tabIndex={0}
+          title="Apagar legenda"
+          className="ml-auto hidden rounded p-0.5 hover:bg-base hover:text-danger group-hover:block"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+        >
+          <Trash2 size={11} />
+        </span>
+      </button>
+      <textarea
+        rows={Math.min(4, Math.max(text.split("\n").length, Math.ceil(text.length / 30)))}
+        className="mt-1 w-full resize-none rounded bg-transparent px-1 text-xs text-ink outline-none focus:bg-base"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => text !== clip.text!.text && text.trim() && onText(text)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            (e.target as HTMLTextAreaElement).blur();
+          }
+          if (e.key === 'Escape') setText(clip.text!.text);
+        }}
+      />
+    </li>
+  );
+}

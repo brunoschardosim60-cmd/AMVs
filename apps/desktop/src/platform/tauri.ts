@@ -104,7 +104,7 @@ export function createTauriPlatform(): Platform {
         return Array.isArray(r) ? r : r ? [r] : [];
       },
       async pickFile(title, extensions) {
-        const r = await open({ title, multiple: false, filters: [{ name: 'Mídia', extensions }] });
+        const r = await open({ title, multiple: false, filters: [{ name: extensions.map((e) => '.' + e).join(' '), extensions }] });
         return typeof r === 'string' ? r : null;
       },
       async pickFolder(title) {
