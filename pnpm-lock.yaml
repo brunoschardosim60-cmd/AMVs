@@ -94,6 +94,15 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
 
+  packages/render:
+    dependencies:
+      '@amv/media':
+        specifier: workspace:*
+        version: link:../media
+      '@amv/project':
+        specifier: workspace:*
+        version: link:../project
+
 packages:
 
   '@babel/code-frame@7.29.7':
