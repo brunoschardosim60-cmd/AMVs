@@ -1,6 +1,6 @@
 # Status
 
-Fase atual: **1 — Fundação** — concluída. CI verde no Windows (FFmpeg 9.0.2, 50 testes TS + 3 Python, instalador gerado). Falta só o teste manual no PC do Bruno.
+Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira versão completa. ~150 testes TS com FFmpeg real e LLM simulado. Falta o teste manual no Windows do Bruno.
 
 ## Fase 1 — Fundação
 
@@ -61,3 +61,44 @@ Fase atual: **1 — Fundação** — concluída. CI verde no Windows (FFmpeg 9.0
 ### Limitações da Fase 2
 - No preview, volume acima de 0 dB e a faixa de áudio escolhida não são ouvidos (usa a 1ª faixa do proxy); a exportação respeita os dois.
 
+
+## Fase 4 — Análise (feita)
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Música: BPM, batidas, compassos, energia, seções, drop | feito | testes com cliques sintéticos; referência real: 170,8 BPM e drop achado |
+| Episódio: cortes de cena, movimento, falas e gritos, legendas embutidas, etiquetas | feito | testes com fixtures sintéticas |
+| Abas Cenas e Falas (melhores momentos para arrastar) | feito | app real |
+
+## Fase 5 — Gerar meu AMV (feita)
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| 5 estilos das referências (Hype, Superação, Letra, Discurso, Emocional), intensidade, duração | feito | 13 testes em `packages/automv` |
+| Cortes na batida, cena forte no drop, fala terminando no drop com ducking, legendas, efeitos, motivo em cada clipe | feito | testes + app real |
+| Poucas cenas: divide slots na batida, sem buraco | feito | teste + bug real achado no app |
+| Gerar outra versão, versões guardadas e voltar | feito | teste de sessão + app real |
+
+## Fase 6 — Assistente (primeira versão)
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Provedores: Ollama/compatível OpenAI e Anthropic; chave no cofre do sistema; teste de conexão | feito | testes com respostas gravadas; app real com servidor falso local |
+| Ferramentas: pontos fracos, cenas, falas, ideias; propostas (trocar cena, efeito, cortes rápidos, fala antes do drop, montagem, remover) | feito | 8 testes |
+| Revisão: itens com dependências, testar (aplica e volta), aplicar parcial num único desfazer, revalidação | feito | testes + app real |
+| Modo local sem modelo | feito | testes + app real |
+| Pendente: prévia fantasma na timeline, A/B lado a lado, memória criativa, "Perguntar à IA" no clique direito | pendente | — |
+
+## Fase 7 — Músicas (primeira versão)
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Biblioteca global: arquivos/pastas, tags do arquivo, duplicatas por hash, arquivo movido | feito | teste com FFmpeg real |
+| Filtros (BPM, intensidade, emoção, drop, não usadas), ordenação, favoritas, notas, tags, playlists | feito | testes + app real |
+| Detalhe com curva de energia e partes; comparar até 4; player no rodapé | feito | app real (no Linux o áudio não toca pelo protocolo de arquivos; testar no Windows) |
+| Recomendação por tema com justificativa; sugestão no Gerar meu AMV | feito | testes + app real |
+| Pendente: YouTube/Spotify (spike), pastas monitoradas | pendente | — |
+
+## Fase 8 — Legendas (primeira versão)
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Importar SRT/ASS/VTT/LRC com detecção de codificação; LRC alinha com a música | feito | testes |
+| Puxar falas do episódio para os clipes (considera velocidade) | feito | testes |
+| Editar texto, ajustar tempo (±), estilos, avisos de leitura, exportar SRT/VTT/LRC | feito | testes + app real |
+| Pendente: transcrição (Whisper), tradução, alinhamento automático de letra sem tempo | pendente | — |

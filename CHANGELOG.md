@@ -1,5 +1,22 @@
 # Novidades
 
+## 0.5.0
+
+**Assistente** (botão no topo do projeto): peça em português, por exemplo "deixe os cortes mais rápidos", "coloque um grito antes do drop", "troque essa cena por uma mais forte", "clarão nas batidas" ou "analise meu AMV". Ele mostra a proposta item por item. Você escolhe o que entra, testa na timeline e aplica, e Ctrl+Z desfaz.
+- Funciona sem internet com pedidos diretos.
+- Para conversar livremente e pedir ideias de episódios, ligue um modelo na engrenagem: Ollama no seu PC (grátis), Claude, OpenAI ou outro compatível. A chave fica no cofre do Windows.
+
+**Músicas** (ícone de nota na barra da esquerda): sua biblioteca de músicas.
+- Adicione pastas inteiras. O app mede BPM, intensidade e drop de cada uma.
+- Filtre, crie playlists, favorite, dê nota e marque a emoção.
+- Compare curvas de energia e ouça pelo player do rodapé, que continua tocando em qualquer tela.
+- **Recomendadas** sugere a melhor para cada tema (Motivação, Luta, Triste, Épico, Romântico, Letra) e explica o porquê. O Gerar meu AMV também sugere músicas da biblioteca.
+
+**Legendas** (aba no painel da esquerda do editor):
+- Importe .srt, .ass, .vtt ou .lrc. A letra .lrc já entra alinhada com a música.
+- "Do episódio" encaixa as falas originais embaixo de cada cena.
+- Dá para editar o texto, ajustar o tempo, trocar o estilo (Legenda, Destaque, Palavra, Letra) e exportar SRT/VTT/LRC.
+
 ## 0.4.0
 
 **Gerar meu AMV**: escolha a música, os episódios e o estilo (Hype/Luta, Superação, Letra na tela, Discurso motivacional, Emocional), a intensidade e a duração. O app analisa a música (BPM, batidas, drop) e os episódios (cenas, movimento, falas e gritos, legendas embutidas) e monta o vídeo com cortes na batida, a cena mais forte no drop, uma fala marcante logo antes do drop com a música abaixando, efeitos e legendas. Tudo vira clipes normais e editáveis, cada um com o motivo da escolha. "Gerar outra versão" faz uma montagem diferente; a anterior fica guardada em Versões.

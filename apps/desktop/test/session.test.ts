@@ -135,6 +135,7 @@ describe('sessão do projeto', () => {
     expect(reopened.project.assets.map((a) => a.status)).toEqual(['ok', 'ok']);
     expect(reopened.project.assets[0]!.path).toBe(join(moved, 'ep01-renomeado.mkv'));
     expect(reopened.history.undoLabel).toBe('Localizar 2 mídia(s)');
+    reopened.dispose(); // para a análise (no Windows o FFmpeg prende o arquivo)
   });
 
   it('relocalizar manualmente confere se é o mesmo arquivo', async () => {
