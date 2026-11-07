@@ -1,5 +1,9 @@
 # Novidades
 
+## 0.5.2
+
+Correção: "Novo projeto" travava com "Esta tela encontrou um erro" (erro #185).
+
 ## 0.5.1
 
 Correção: a tela podia travar com "Esta tela encontrou um erro" (erro #185) enquanto o app analisava músicas e episódios.

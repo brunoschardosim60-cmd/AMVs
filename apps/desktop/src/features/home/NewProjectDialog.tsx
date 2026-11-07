@@ -16,7 +16,9 @@ function AspectBox({ w, h, active }: { w: number; h: number; active: boolean }) 
 }
 
 export function NewProjectDialog() {
-  const close = useApp((s) => () => s.setNewProjectOpen(false));
+  // o seletor precisa devolver sempre a mesma coisa (senão o Zustand 5 redesenha em loop)
+  const setNewProjectOpen = useApp((s) => s.setNewProjectOpen);
+  const close = () => setNewProjectOpen(false);
   const createProject = useApp((s) => s.createProject);
   const [name, setName] = useState('');
   const [format, setFormat] = useState('1080p');
