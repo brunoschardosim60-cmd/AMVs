@@ -6,3 +6,4 @@ export * from './factory.js';
 export * from './serialize.js';
 export * from './hash.js';
 export * from './timeline.js';
+export * from './edit.js';
