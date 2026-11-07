@@ -14,3 +14,13 @@
 - Semelhança entre personagens precisa de um modelo de visão e ainda não existe.
 - Músicas: YouTube/Spotify ainda não; pastas monitoradas ainda não. Emoção é só a que você marca.
 - Legendas: sem transcrição automática (Whisper) e sem tradução por enquanto; letra sem tempo (.txt) precisa ser posicionada à mão.
+
+## 0.6.0
+- **Sincronia medida só em sinais sintéticos** (cliques/bumbo em andamento fixo): erro ~0,2 ms de viés. Em música real, com andamento que varia, o rastreador de batidas (andamento global) pode se afastar; não há ainda um ajuste fino manual em ms.
+- **Golpe na batida** é heurístico: usa o quadro de maior diferença entre quadros. Câmera tremendo ou flash pode ser confundido com o golpe.
+- **Lutas** são separadas por intensidade, pausas frias (> 6 s) e cenas escuras. Duas lutas coladas, sem pausa nem fade, viram uma só. Não reconhece personagens.
+- **Falas**: sem transcrição automática (Whisper). "Entender o que o personagem fala" só funciona em episódios com legenda embutida; sem legenda, o app detecta que alguém fala/grita, mas não o texto.
+- **Tradução** depende de um modelo de IA ligado; modelos pequenos erram linhas (essas ficam no original e o app avisa). Em modelos na nuvem o texto é enviado ao provedor.
+- **YouTube/Spotify**: não é possível (nem permitido pelos termos deles) extrair o áudio para usar no AMV. Só dá para ouvir/pesquisar pelos players oficiais, e a análise de "que parte combina" exige um arquivo de música seu. Ainda não implementado (ver AGENTS.md §3, itens 8–9).
+- **Efeitos sonoros** (impactos, whoosh) e **análise cena a cena com modelo de visão** ainda não existem.
+- A interface nova (janela flutuante do Assistente, opções do Gerar, tradução) foi verificada por tipos e build, não numa janela real: falta o teste manual no Windows.

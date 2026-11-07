@@ -214,3 +214,47 @@ export function readability(text: string, durS: number): string | null {
   if (text.split('\n').some((l) => l.length > 48)) return 'linha comprida: quebre em duas';
   return null;
 }
+
+// ---------------------------------------------------------------- idioma / tradução
+
+export const SUBTITLE_LANGS: { code: string; label: string }[] = [
+  { code: 'pt-BR', label: 'Português (Brasil)' },
+  { code: 'en', label: 'Inglês' },
+  { code: 'es', label: 'Espanhol' },
+  { code: 'ja', label: 'Japonês' },
+  { code: 'fr', label: 'Francês' },
+  { code: 'de', label: 'Alemão' },
+  { code: 'it', label: 'Italiano' },
+  { code: 'ko', label: 'Coreano' },
+  { code: 'zh', label: 'Chinês' },
+];
+
+export const langLabel = (code: string) => SUBTITLE_LANGS.find((l) => l.code === code)?.label ?? code;
+
+/** Texto original de uma legenda (antes de qualquer tradução). */
+export const originalText = (c: Clip) => c.text?.original ?? c.text?.text ?? '';
+
+/**
+ * Troca o texto das legendas pelas traduções (mesma ordem de `clips`; null = mantém).
+ * O original fica guardado no próprio clipe: dá para voltar ou traduzir para outro idioma
+ * a partir dele (sem traduzir uma tradução). Um desfazer só.
+ */
+export function applyTranslation(clips: Clip[], translations: (string | null)[], lang: string): Command[] {
+  const cmds: Command[] = [];
+  clips.forEach((c, i) => {
+    const t = translations[i];
+    if (!c.text || t === null || t === undefined || !t.trim()) return;
+    cmds.push({ type: 'clip.update', clipId: c.id, patch: { text: { ...c.text, text: t, original: c.text.original ?? c.text.text, lang } } });
+  });
+  return cmds;
+}
+
+/** Volta as legendas traduzidas ao texto original. */
+export function restoreOriginals(clips: Clip[]): Command[] {
+  return clips
+    .filter((c) => c.text?.original !== undefined)
+    .map((c) => {
+      const { original, lang: _lang, ...rest } = c.text!;
+      return { type: 'clip.update' as const, clipId: c.id, patch: { text: { ...rest, text: original! } } };
+    });
+}

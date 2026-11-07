@@ -3,7 +3,7 @@
  * Determinístico para a mesma `seed`. Saída: Commands comuns (tudo editável depois),
  * cada clipe com `origin: 'ai'` e um `reason` legível.
  */
-import type { Cue, EpisodeAnalysis, MusicAnalysis, Shot, SpeechSegment } from '@amv/analysis';
+import { pickAudioStreamByLanguage, type Cue, type EpisodeAnalysis, type MusicAnalysis, type Sequence, type Shot, type SpeechSegment } from '@amv/analysis';
 import { defaultScale, newId, type Clip, type Command, type EffectInstance, type Project, type Track } from '@amv/project';
 import { styleDef, type StyleDef, type StyleId } from './styles.js';
 
@@ -12,6 +12,8 @@ export interface EpisodeInput {
   name: string;
   analysis: EpisodeAnalysis;
   hasAudio: boolean;
+  /** Faixas de áudio do arquivo (ex.: japonês e português): para escolher a da fala. */
+  audioStreams?: { index: number; language: string | null; title?: string | null }[];
 }
 
 export interface MusicInput {
@@ -36,11 +38,24 @@ export interface GenerateOptions {
   /** Episódios/cenas proibidos (assetId ou `${assetId}@${startS}`). */
   exclude?: string[];
   seed: number;
+  /**
+   * `fight` (padrão): escolhe a(s) melhor(es) luta(s) e fica nela(s), em ordem, sem
+   * misturar cenas de outros pontos. `mix`: usa cenas de qualquer lugar (comportamento antigo).
+   */
+  focus?: 'fight' | 'mix';
+  /** Lutas escolhidas à mão (`${assetId}#${sequenceId}`). Vazio = o app escolhe. */
+  sequenceIds?: string[];
+  /** Encaixa o golpe de cada cena forte na batida (padrão: ligado). */
+  hitSync?: boolean;
+  /** Quantas falas intercalar, contando a de antes do drop. Padrão: 1 se o estilo usa fala, senão 0. */
+  voiceMoments?: number;
+  /** Faixa de áudio da fala: `original` (japonês) ou `pt` (dublagem). Padrão: original. */
+  voiceLang?: 'original' | 'pt';
 }
 
 export interface GenerateResult {
   commands: Command[];
-  summary: { clips: number; cuts: number; speech: string | null; musicRange: [number, number]; drop: number | null };
+  summary: { clips: number; cuts: number; speech: string | null; musicRange: [number, number]; drop: number | null; focus: 'fight' | 'mix'; fights: string[]; voices: number; hitsSynced: number };
   warnings: string[];
 }
 
@@ -157,21 +172,188 @@ interface Candidate {
   ep: EpisodeInput;
   shot: Shot;
   id: string;
+  /** Luta a que a cena pertence (`${assetId}#${sequenceId}`); vazio no modo misturar. */
+  seq: string;
 }
 
 /** Fala marcante para antes do drop: curta, com impacto alto. */
-export function pickSpeech(eps: EpisodeInput[], maxS: number, exclude: Set<string>): { ep: EpisodeInput; s: SpeechSegment } | null {
+export function pickSpeech(eps: EpisodeInput[], maxS: number, exclude: Set<string>, accept?: (ep: EpisodeInput, s: SpeechSegment) => boolean): { ep: EpisodeInput; s: SpeechSegment } | null {
   let best: { ep: EpisodeInput; s: SpeechSegment; score: number } | null = null;
   for (const ep of eps) {
     if (!ep.hasAudio || exclude.has(ep.assetId)) continue;
     for (const s of ep.analysis.speech) {
       const d = s.endS - s.startS;
       if (d < 0.6 || d > maxS) continue;
+      if (accept && !accept(ep, s)) continue;
       const score = s.impact + (s.kind === 'grito' ? 0.3 : 0) + (s.text ? 0.1 : 0) - Math.abs(d - 2) * 0.05;
       if (!best || score > best.score) best = { ep, s, score };
     }
   }
   return best;
+}
+
+
+// ---------------------------------------------------------------- foco na luta
+
+export interface PoolEntry {
+  ep: EpisodeInput;
+  seq: Sequence;
+  /** Tempo (s) de cenas aproveitáveis na sequência. */
+  usableS: number;
+  /** Quantas cenas aproveitáveis (cada corte usa uma cena). */
+  shotCount: number;
+}
+
+export interface FootageFit {
+  /** Intensidade (0..1) de cada cena disponível. */
+  intensities: number[];
+  lowI: number;
+  highI: number;
+}
+
+export interface FootagePlan {
+  mode: 'fight' | 'mix';
+  pool: PoolEntry[];
+  fit: FootageFit;
+  warnings: string[];
+}
+
+const MIN_SHOT_S = 0.25;
+/** Quanto de imagem aproveitável (× duração do vídeo) a seleção de lutas procura ter. */
+const POOL_ROOM = 1.6;
+/**
+ * E quantas cenas (fração dos cortes previstos): cada corte gasta uma cena, então só os
+ * segundos não bastam. Abaixo disso a luta repetiria cenas demais e entra a próxima;
+ * acima, repetir um pouco é melhor que misturar outra luta.
+ */
+const POOL_SHOT_MIN = 0.7;
+
+function usableShots(ep: EpisodeInput, seq: Sequence): Shot[] {
+  return ep.analysis.shots.filter((sh) => sh.startS >= seq.startS - 1e-3 && sh.endS <= seq.endS + 1e-3 && sh.endS - sh.startS >= MIN_SHOT_S && !sh.tags.includes('escura'));
+}
+
+/**
+ * Escolhe as lutas do vídeo: as mais fortes primeiro, até haver imagem de sobra
+ * (1,6× a duração). Com `sequenceIds`, usa exatamente as que a pessoa marcou.
+ */
+export function chooseSequences(eps: EpisodeInput[], neededS: number, o: { sequenceIds?: string[]; exclude?: Set<string>; jitter?: () => number; neededShots?: number }): PoolEntry[] {
+  const all: PoolEntry[] = [];
+  for (const ep of eps) {
+    if (o.exclude?.has(ep.assetId)) continue;
+    for (const seq of ep.analysis.sequences ?? []) {
+      const shots = usableShots(ep, seq);
+      if (!shots.length) continue;
+      all.push({ ep, seq, usableS: shots.reduce((a, x) => a + (x.endS - x.startS), 0), shotCount: shots.length });
+    }
+  }
+  const key = (e: PoolEntry) => `${e.ep.assetId}#${e.seq.id}`;
+  if (o.sequenceIds?.length) {
+    const want = new Set(o.sequenceIds);
+    return all.filter((e) => want.has(key(e))).sort((a, b) => a.ep.assetId.localeCompare(b.ep.assetId) || a.seq.startS - b.seq.startS);
+  }
+  const score = (e: PoolEntry) => 0.6 * e.seq.intensity + 0.25 * e.seq.peak + 0.15 * Math.min(1, e.usableS / (neededS * POOL_ROOM)) + (o.jitter ? (o.jitter() - 0.5) * 0.16 : 0);
+  const fights = all
+    .filter((e) => e.seq.kind === 'luta')
+    .map((e) => ({ e, sc: score(e) }))
+    .sort((a, b) => b.sc - a.sc || a.e.seq.startS - b.e.seq.startS || a.e.ep.assetId.localeCompare(b.e.ep.assetId));
+  const pool: PoolEntry[] = [];
+  let have = 0;
+  let count = 0;
+  const needCount = (o.neededShots ?? 0) * POOL_SHOT_MIN;
+  for (const { e } of fights) {
+    // para quando já tem imagem e cenas suficientes; senão junta a próxima luta mais forte
+    if (have >= neededS * POOL_ROOM && count >= needCount) break;
+    pool.push(e);
+    have += e.usableS;
+    count += e.shotCount;
+  }
+  return pool.sort((a, b) => a.ep.assetId.localeCompare(b.ep.assetId) || a.seq.startS - b.seq.startS);
+}
+
+/** Define de onde saem as cenas (lutas escolhidas ou tudo) e o perfil de intensidade delas. */
+export function planFootage(eps: EpisodeInput[], o: Pick<GenerateOptions, 'style' | 'intensity' | 'durationS' | 'focus' | 'sequenceIds' | 'exclude' | 'seed'>, m?: MusicAnalysis): FootagePlan {
+  const style = styleDef(o.style);
+  const exclude = new Set(o.exclude ?? []);
+  const warnings: string[] = [];
+  const wantFight = (o.focus ?? 'fight') === 'fight' && o.style !== 'discurso';
+  let pool: PoolEntry[] = [];
+  if (wantFight) {
+    // quantos cortes o vídeo terá, pela música (no trecho padrão: serve de estimativa)
+    const neededShots = m ? makeSlots(m, chooseMusicRange(m, o.durationS, null), style, o.intensity).length : 0;
+    pool = chooseSequences(eps, o.durationS, { sequenceIds: o.sequenceIds, exclude, jitter: rng(((o.seed * 40503) ^ 0x9e3779b9) >>> 0), neededShots });
+    if (!pool.length) warnings.push('Não achei uma luta bem definida nos episódios: usei cenas de vários pontos. Escolha as lutas à mão ou use "Misturar".');
+  }
+  const mode: FootagePlan['mode'] = pool.length ? 'fight' : 'mix';
+  const intensities: number[] = [];
+  if (mode === 'fight') for (const e of pool) for (const sh of usableShots(e.ep, e.seq)) intensities.push(sh.intensity);
+  else
+    for (const ep of eps) {
+      if (exclude.has(ep.assetId)) continue;
+      for (const sh of ep.analysis.shots) if (sh.endS - sh.startS >= MIN_SHOT_S && !sh.tags.includes('escura')) intensities.push(sh.intensity);
+    }
+  const boost = [-0.1, 0, 0.05, 0.1][o.intensity]!;
+  return { mode, pool, fit: { intensities, lowI: Math.max(0, style.targetIntensity[0] + boost), highI: Math.min(1, style.targetIntensity[1] + boost) }, warnings };
+}
+
+// ---------------------------------------------------------------- trecho da música que combina
+
+export interface RangeSuggestion {
+  startS: number;
+  endS: number;
+  /** 0..1 */
+  score: number;
+  reasons: string[];
+}
+
+/**
+ * Compara janelas da música (começando em compassos) com as cenas que existem:
+ * (40%) o drop cai em ~40% do vídeo; (35%) a energia que a janela pede é a
+ * intensidade que as cenas escolhidas realmente têm; (25%) começa/termina em
+ * limite de seção. Devolve as melhores, sem janelas quase iguais.
+ */
+export function suggestMusicRanges(m: MusicAnalysis, durationS: number, fit: FootageFit | null, limit = 3): RangeSuggestion[] {
+  const D = Math.min(durationS, m.durationS);
+  let starts = m.downbeats.filter((d) => d + D <= m.durationS + 0.01);
+  if (starts.length < 3) starts = Array.from({ length: Math.max(1, Math.floor((m.durationS - D) / 2) + 1) }, (_, i) => i * 2);
+  const N = 12;
+  const footage = fit ? [...fit.intensities].sort((a, b) => a - b) : [];
+  const qAt = (k: number) => footage[Math.min(footage.length - 1, Math.floor(((k + 0.5) / N) * footage.length))]!;
+  const out: RangeSuggestion[] = starts.map((s0) => {
+    const reasons: string[] = [];
+    const drop = m.drops.find((d) => d > s0 + 1 && d < s0 + D - 1);
+    let dropScore = 0;
+    if (drop !== undefined) {
+      dropScore = 1 - Math.min(1, Math.abs((drop - s0) / D - 0.4) / 0.4);
+      if (dropScore > 0.6) reasons.push(`drop aos ${Math.round(((drop - s0) / D) * 100)}% do vídeo`);
+    }
+    let fitScore = 0.5;
+    if (fit && footage.length) {
+      const wanted = Array.from({ length: N }, (_, k) => fit.lowI + (fit.highI - fit.lowI) * energyAt(m, s0 + ((k + 0.5) / N) * D)).sort((a, b) => a - b);
+      const dist = wanted.reduce((a, w, k) => a + Math.abs(w - qAt(k)), 0) / N;
+      fitScore = 1 - Math.min(1, dist / 0.5);
+      if (fitScore > 0.75) reasons.push('a energia da música combina com a força das cenas escolhidas');
+    }
+    const startsOnSection = s0 < 0.4 || m.sections.some((x) => Math.abs(x.startS - s0) < 0.4);
+    const endsOnSection = Math.abs(m.durationS - (s0 + D)) < 0.8 || m.sections.some((x) => Math.abs(x.endS - (s0 + D)) < 0.8);
+    if (startsOnSection) reasons.push('começa no início de uma parte da música');
+    if (endsOnSection) reasons.push('termina no fim de uma parte');
+    const score = 0.4 * dropScore + 0.35 * fitScore + 0.25 * ((startsOnSection ? 0.6 : 0) + (endsOnSection ? 0.4 : 0));
+    return { startS: s0, endS: s0 + D, score: Math.round(score * 1000) / 1000, reasons };
+  });
+  out.sort((a, b) => b.score - a.score || a.startS - b.startS);
+  const picked: RangeSuggestion[] = [];
+  for (const c of out) {
+    if (picked.every((p) => Math.abs(p.startS - c.startS) >= D * 0.5)) picked.push(c);
+    if (picked.length >= limit) break;
+  }
+  return picked;
+}
+
+// ---------------------------------------------------------------- faixa de áudio da fala
+
+/** Índice da faixa de áudio do idioma pedido, ou null (deixa a faixa padrão). */
+export function pickAudioStream(ep: EpisodeInput, lang: 'original' | 'pt' = 'original'): number | null {
+  return pickAudioStreamByLanguage(ep.audioStreams ?? [], lang);
 }
 
 function findTracks(p: Project) {
@@ -249,6 +431,21 @@ export function generateAmv(project: Project, music: MusicInput, episodes: Episo
   return r;
 }
 
+interface VoiceBlock {
+  ep: EpisodeInput;
+  s: SpeechSegment;
+  /** Onde a fala toca na timeline (s). */
+  atS: number;
+  len: number;
+  /** Extensão da imagem (pode ser um pouco maior que a fala, para não sobrar fresta). */
+  from: number;
+  to: number;
+  preDrop: boolean;
+}
+
+const DUCK_DB = -16;
+const VOICE_GAP_S = 1.5;
+
 function generateInner(project: Project, music: MusicInput, episodes: EpisodeInput[], opts: GenerateOptions): GenerateResult {
   const style = styleDef(opts.style);
   const warnings: string[] = [];
@@ -258,12 +455,34 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const H = project.settings.height;
   const exclude = new Set(opts.exclude ?? []);
   const m = music.analysis;
-  const range = chooseMusicRange(m, opts.durationS, opts.musicStartS);
+
+  // ---------------------------------------------------------------- de onde saem as cenas
+  const plan = planFootage(episodes, opts, m);
+  warnings.push(...plan.warnings);
+  const fight = plan.mode === 'fight';
+  const poolEps = new Set(plan.pool.map((e) => e.ep.assetId));
+  const seqKeyOf = (ep: EpisodeInput, shot: Shot) => {
+    const e = plan.pool.find((x) => x.ep.assetId === ep.assetId && shot.startS >= x.seq.startS - 1e-3 && shot.endS <= x.seq.endS + 1e-3);
+    return e ? `${ep.assetId}#${e.seq.id}` : `${ep.assetId}#-`;
+  };
+  /** Fala só vale se vier da luta escolhida (ou de perto dela): senão mistura personagens/cenas. */
+  const nearPool = (ep: EpisodeInput, sp: SpeechSegment) => !fight || plan.pool.some((e) => e.ep.assetId === ep.assetId && sp.startS >= e.seq.startS - 15 && sp.endS <= e.seq.endS + 5);
+
+  // ---------------------------------------------------------------- trecho da música
+  let range: [number, number];
+  if (opts.musicStartS !== null) range = chooseMusicRange(m, opts.durationS, opts.musicStartS);
+  else if (fight) {
+    const best = suggestMusicRanges(m, opts.durationS, plan.fit, 1)[0];
+    range = best ? [best.startS, best.endS] : chooseMusicRange(m, opts.durationS, null);
+  } else range = chooseMusicRange(m, opts.durationS, null);
   const D = range[1] - range[0];
   const dropAbs = m.drops.find((d) => d > range[0] + 1 && d < range[1] - 1) ?? null;
   const dropT = dropAbs === null ? null : dropAbs - range[0];
   if (dropT === null) warnings.push('A música não tem um drop claro nesse trecho: a montagem segue a energia da música.');
   if (opts.style === 'letra' && !opts.lyrics?.length) warnings.push('Sem a letra com tempo (LRC), o estilo "letra" corta na batida mas não escreve as palavras. Importe a letra em Legendas.');
+  const lang = opts.voiceLang ?? 'original';
+  const streamFor = (ep: EpisodeInput) => pickAudioStream(ep, lang);
+  if (lang === 'pt' ? episodes.some((e) => (e.audioStreams?.length ?? 0) > 1 && streamFor(e) === null) : false) warnings.push('Um episódio não tem faixa de áudio em português identificada: usei a faixa padrão dele.');
 
   const cmds: Command[] = [];
   // limpa as trilhas que a geração preenche (o projeto anterior fica salvo como versão pelo app)
@@ -276,22 +495,64 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     audio: { gainDb: opts.style === 'discurso' ? -14 : 0, fadeInUs: range[0] > 0.5 ? us(0.3) : 0, fadeOutUs: us(fadeOut), pitchSemitones: 0, streamIndex: null },
   });
 
-  // ---------------------------------------------------------------- fala antes do drop
-  let speechUsed: { ep: EpisodeInput; s: SpeechSegment; atS: number } | null = null;
-  if (opts.useSpeech && style.speechBeforeDrop && voice && dropT !== null) {
-    const pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude);
+  // ---------------------------------------------------------------- falas (antes do drop e intercaladas)
+  const blocks: VoiceBlock[] = [];
+  const wantVoice = opts.useSpeech && voice && opts.style !== 'discurso';
+  const totalVoice = wantVoice ? Math.max(0, Math.min(5, Math.round(opts.voiceMoments ?? (style.speechBeforeDrop ? 1 : 0)))) : 0;
+  if (wantVoice && totalVoice > 0 && style.speechBeforeDrop && dropT !== null) {
+    let pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, nearPool);
+    if (!pick && fight) pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep) => poolEps.has(ep.assetId));
     if (pick) {
       const len = pick.s.endS - pick.s.startS;
-      speechUsed = { ep: pick.ep, s: pick.s, atS: dropT - len };
-      // abaixa a música durante a fala e volta no drop
-      const a = speechUsed.atS;
-      musicClip.keyframes['audio.gainDb'] = [
-        { atUs: us(Math.max(0, a - 0.35)), value: 0, easing: 'linear' },
-        { atUs: us(a), value: -16, easing: 'linear' },
-        { atUs: us(dropT - 0.06), value: -16, easing: 'linear' },
-        { atUs: us(dropT), value: 0, easing: 'linear' },
-      ];
+      blocks.push({ ep: pick.ep, s: pick.s, atS: dropT - len, len, from: dropT - len, to: dropT, preDrop: true });
     } else warnings.push('Nenhuma fala marcante encontrada nos episódios (legendas embutidas ajudam muito).');
+  }
+  const extraWanted = totalVoice - blocks.length;
+  if (wantVoice && extraWanted > 0) {
+    const taken = new Set(blocks.map((b) => `${b.ep.assetId}@${b.s.startS}`));
+    const lines = episodes
+      .filter((e) => e.hasAudio && !exclude.has(e.assetId))
+      .flatMap((ep) => ep.analysis.speech.filter((sp) => nearPool(ep, sp) || (fight && poolEps.has(ep.assetId))).map((sp) => ({ ep, sp })))
+      .filter(({ sp }) => sp.endS - sp.startS >= 0.8 && sp.endS - sp.startS <= 4)
+      .filter(({ ep, sp }) => !taken.has(`${ep.assetId}@${sp.startS}`))
+      .sort((a, b) => b.sp.impact - a.sp.impact || a.sp.startS - b.sp.startS);
+    // onde cabe: começa num compasso, trecho calmo da música, afastado das outras falas e do drop
+    const quiet = (a: number, b: number) => {
+      let sum = 0;
+      let n = 0;
+      for (let t = a; t < b; t += m.energyStepS) {
+        sum += energyAt(m, range[0] + t);
+        n++;
+      }
+      return n ? sum / n : 1;
+    };
+    const free = (a: number, b: number) => blocks.every((x) => b <= x.from - VOICE_GAP_S || a >= x.to + VOICE_GAP_S) && (dropT === null || b <= dropT - 0.5 || a >= dropT + 2.5);
+    const limit = blocks[0] ? blocks[0].atS : D;
+    const downs = m.downbeats.map((d) => d - range[0]).filter((t) => t >= 1.5 && t <= D - 3);
+    let placed = 0;
+    for (const { ep, sp } of lines) {
+      if (placed >= extraWanted) break;
+      const len = sp.endS - sp.startS;
+      const ideal = (limit * (placed + 1)) / (extraWanted + 1);
+      const fits = downs.filter((t) => t + len <= limit - VOICE_GAP_S && free(t, t + len) && quiet(t, t + len) < 0.6).sort((a, b) => Math.abs(a - ideal) - Math.abs(b - ideal));
+      if (!fits.length) continue;
+      blocks.push({ ep, s: sp, atS: fits[0]!, len, from: fits[0]!, to: fits[0]! + len, preDrop: false });
+      placed++;
+    }
+    if (placed < extraWanted) warnings.push(`Só coube ${placed + blocks.filter((b) => b.preDrop).length} de ${totalVoice} falas: faltou trecho calmo na música ou fala marcante na luta escolhida.`);
+  }
+  blocks.sort((a, b) => a.atS - b.atS);
+  // a música abaixa durante cada fala e volta depois (no drop, rampa curta para o golpe entrar forte)
+  if (blocks.length) {
+    const kf: { atUs: number; value: number; easing: 'linear' }[] = [];
+    for (const b of blocks) {
+      const a = b.atS;
+      const end = b.preDrop ? dropT! : b.atS + b.len;
+      kf.push({ atUs: us(Math.max(0, a - 0.35)), value: 0, easing: 'linear' }, { atUs: us(a), value: DUCK_DB, easing: 'linear' });
+      if (b.preDrop) kf.push({ atUs: us(end - 0.06), value: DUCK_DB, easing: 'linear' }, { atUs: us(end), value: 0, easing: 'linear' });
+      else kf.push({ atUs: us(end), value: DUCK_DB, easing: 'linear' }, { atUs: us(end + 0.4), value: 0, easing: 'linear' });
+    }
+    musicClip.keyframes['audio.gainDb'] = kf;
   }
   cmds.push({ type: 'clip.add', clip: musicClip });
 
@@ -319,7 +580,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const len = s.endS - s.startS;
       const reason = `Fala ${s.text ? `"${s.text.replace(/\n/g, ' ')}" ` : ''}de ${ep.name} ${fmt(s.startS)} (impacto ${s.impact.toFixed(2)})`;
       cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, t, len + 0.35, s.startS, reason, { effects: [...gradeFx(style.grade)] }) });
-      cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: 2, fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, streamIndex: null } }) });
+      cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: 2, fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, streamIndex: streamFor(ep) } }) });
       if (opts.showText && text && s.text) {
         // legenda em pedaços de até 3 palavras, no ritmo da fala
         const words = s.text.replace(/\n/g, ' ').split(/\s+/);
@@ -332,34 +593,57 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       clipsMade++;
       t += len + 0.35;
     }
-    return { commands: cmds, summary: { clips: clipsMade, cuts: clipsMade, speech: chosen[0]?.s.text ?? null, musicRange: range, drop: dropT }, warnings };
+    return { commands: cmds, summary: { clips: clipsMade, cuts: clipsMade, speech: chosen[0]?.s.text ?? null, musicRange: range, drop: dropT, focus: 'mix', fights: [], voices: chosen.length, hitsSynced: 0 }, warnings };
   }
 
   // ---------------------------------------------------------------- cortes na batida
-  const REPEAT_WARNING = 'Poucas cenas para o tamanho do vídeo: algumas se repetem. Importe mais episódios.';
+  const REPEAT_WARNING = 'Poucas cenas para o tamanho do vídeo: algumas se repetem. Importe mais episódios ou escolha mais lutas.';
   const slots = makeSlots(m, range, style, opts.intensity, opts.lyrics);
   const candidates: Candidate[] = [];
-  for (const ep of episodes) {
-    if (exclude.has(ep.assetId)) continue;
-    for (const shot of ep.analysis.shots) {
-      const id = `${ep.assetId}@${shot.startS}`;
-      if (exclude.has(id) || shot.endS - shot.startS < 0.25 || shot.tags.includes('escura')) continue;
-      candidates.push({ ep, shot, id });
+  const consider = (ep: EpisodeInput, shot: Shot) => {
+    const id = `${ep.assetId}@${shot.startS}`;
+    if (exclude.has(id) || shot.endS - shot.startS < 0.25 || shot.tags.includes('escura')) return;
+    candidates.push({ ep, shot, id, seq: fight ? seqKeyOf(ep, shot) : '' });
+  };
+  if (fight) {
+    for (const e of plan.pool) for (const sh of e.ep.analysis.shots) if (sh.startS >= e.seq.startS - 1e-3 && sh.endS <= e.seq.endS + 1e-3) consider(e.ep, sh);
+  } else {
+    for (const ep of episodes) {
+      if (exclude.has(ep.assetId)) continue;
+      for (const shot of ep.analysis.shots) consider(ep, shot);
     }
   }
   if (!candidates.length) {
     warnings.push('Nenhuma cena analisada ainda: espere a análise dos episódios terminar.');
-    return { commands: cmds, summary: { clips: 0, cuts: 0, speech: null, musicRange: range, drop: dropT }, warnings };
+    return { commands: cmds, summary: { clips: 0, cuts: 0, speech: null, musicRange: range, drop: dropT, focus: plan.mode, fights: [], voices: 0, hitsSynced: 0 }, warnings };
   }
-  const [lowI, highI] = style.targetIntensity;
-  const boost = [-0.1, 0, 0.05, 0.1][opts.intensity]!;
+  const { lowI, highI } = plan.fit;
+  const boost = 0; // já embutido em plan.fit
   let prev: Candidate | null = null;
   let prevSrcEnd = 0;
-  // o trecho da fala (até o drop) é da imagem de quem fala: corta o que encostar nele
+
+  // a imagem de cada fala é de quem fala: tira os cortes que encostam nela (sem deixar fresta)
+  for (const b of blocks) {
+    for (const sl of slots) {
+      if (sl.startS < b.from && sl.endS > b.from && b.from - sl.startS < 0.2) b.from = sl.startS;
+      if (sl.startS < b.to && sl.endS > b.to && sl.endS - b.to < 0.2) b.to = sl.endS;
+    }
+    // a imagem não pode começar antes do início do episódio
+    b.from = Math.max(b.from, b.atS - b.s.startS);
+  }
   const visualSlots: Slot[] = [];
   for (const sl of slots) {
-    if (!speechUsed || sl.endS <= speechUsed.atS + 0.01 || sl.startS >= dropT! - 0.01) visualSlots.push(sl);
-    else if (sl.startS < speechUsed.atS - 0.2) visualSlots.push({ ...sl, endS: speechUsed.atS });
+    let pieces: Slot[] = [sl];
+    for (const b of blocks) {
+      pieces = pieces.flatMap((pc) => {
+        if (b.to <= pc.startS + 0.01 || b.from >= pc.endS - 0.01) return [pc];
+        const out: Slot[] = [];
+        if (b.from - pc.startS > 0.01) out.push({ ...pc, endS: b.from });
+        if (pc.endS - b.to > 0.01) out.push({ ...pc, startS: b.to, isDrop: false, word: undefined });
+        return out;
+      });
+    }
+    visualSlots.push(...pieces);
   }
 
   // cenas curtas demais para um slot longo (intro lenta, episódio com cortes rápidos):
@@ -383,6 +667,11 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   };
   for (const sl of visualSlots) splitFit(sl);
 
+  // em luta, a ordem do episódio conta a história: andar para a frente é bom, voltar é ruim
+  const narr = fight ? Math.max(0.7, style.narrative) : style.narrative;
+  let syncedHits = 0;
+  let hitSlots = 0;
+
   for (const sl of fitSlots) {
     const len = sl.endS - sl.startS;
     const target = Math.min(1, Math.max(0, lowI + (highI - lowI) * sl.energy + boost + (sl.isDrop ? 0.15 : 0)));
@@ -400,8 +689,16 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       if (prev && prev.ep.assetId === c.ep.assetId) {
         score -= 0.12;
         // narrativa: andar para frente no mesmo episódio é bom; voltar é ruim
-        if (c.shot.startS < prevSrcEnd) score -= 0.15 * style.narrative;
-        else score += 0.1 * style.narrative;
+        if (c.shot.startS < prevSrcEnd) score -= 0.15 * narr;
+        else score += 0.1 * narr;
+      }
+      if (fight && prev) {
+        if (prev.seq === c.seq) {
+          // continua na mesma luta; perto de onde parou, para frente, lê como uma luta só
+          score += 0.3;
+          if (c.shot.startS >= prevSrcEnd - 0.05) score += 0.25 * Math.exp(-(c.shot.startS - prevSrcEnd) / 12);
+          else score -= 0.25;
+        } else score -= 0.1;
       }
       score += (rand() - 0.5) * 0.12;
       if (!best || score > best.score) {
@@ -426,6 +723,27 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const shotLen = c.shot.endS - c.shot.startS;
     const speed = shotLen >= len ? 1 : Math.max(0.6, shotLen / len);
     const srcLen = len * speed;
+
+    // golpe na batida: o instante de maior movimento da cena cai logo depois do corte (que está na batida)
+    let srcIn = best.srcIn;
+    let hit = false;
+    const wantsHit = opts.hitSync !== false && (sl.isDrop || sl.energy >= 0.5 || c.shot.tags.includes('impacto')) && c.shot.motion >= 0.3 && Number.isFinite(c.shot.peakS);
+    if (wantsHit) {
+      hitSlots++;
+      const lead = sl.isDrop ? 0.04 : Math.min(0.12, Math.max(0.05, len * 0.25));
+      const want = c.shot.peakS - lead * speed;
+      const lo = c.shot.startS + Math.min(0.08, Math.max(0, shotLen - srcLen));
+      const hi = c.shot.endS - srcLen;
+      if (hi >= lo) {
+        const at = Math.min(hi, Math.max(lo, want));
+        if (Math.abs(at - want) / speed <= 0.15) {
+          srcIn = at;
+          hit = true;
+          syncedHits++;
+        }
+      }
+    }
+
     const effects: EffectInstance[] = [...gradeFx(style.grade)];
     const fxOn = opts.useEffects && style.impactFx > 0;
     if (fxOn && sl.isDrop) {
@@ -440,28 +758,33 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       sl.isDrop ? `Drop em ${fmt(sl.startS)}` : `${sl.section || 'trecho'} (energia ${sl.energy.toFixed(2)})`,
       `cena de ${c.shot.tags.join('/') || 'intensidade'} ${c.shot.intensity.toFixed(2)}`,
       `${c.ep.name} ${fmt(c.shot.startS)}`,
+      fight ? 'luta escolhida' : null,
+      hit ? 'golpe na batida' : null,
       speed < 1 ? `câmera lenta ${speed.toFixed(2)}×` : null,
     ]
       .filter(Boolean)
       .join(' — ');
-    const clip = baseClip(v1.id, c.ep.assetId, sl.startS, len, best.srcIn, why, { speed, sourceOutUs: us(best.srcIn) + us(srcLen), effects, transitionIn: transition, confidence: Math.max(0, Math.min(1, best.score)) });
+    const clip = baseClip(v1.id, c.ep.assetId, sl.startS, len, srcIn, why, { speed, sourceOutUs: us(srcIn) + us(srcLen), effects, transitionIn: transition, confidence: Math.max(0, Math.min(1, best.score)) });
     clip.sourceOutUs = clip.sourceInUs + Math.round(clip.durationUs * speed);
     cmds.push({ type: 'clip.add', clip });
     if (opts.showText && text && sl.word) cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra') });
     used.add(c.id);
     prev = c;
-    prevSrcEnd = best.srcIn + srcLen;
+    prevSrcEnd = srcIn + srcLen;
     clipsMade++;
   }
+  if (opts.hitSync !== false && hitSlots > 0 && syncedHits < hitSlots * 0.5) warnings.push(`Só ${syncedHits} de ${hitSlots} cortes fortes tiveram o golpe encaixado na batida (as cenas escolhidas têm o golpe longe do começo).`);
 
-  // ---------------------------------------------------------------- fala + imagem do personagem antes do drop
-  if (speechUsed && voice && dropT !== null) {
-    const { ep, s, atS } = speechUsed;
-    const len = dropT - atS;
-    const reason = `Fala marcante antes do drop: ${s.text ? `"${s.text.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada durante a fala`;
-    cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, atS, len, s.startS, reason, { effects: gradeFx(style.grade) }) });
-    cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, atS, len, s.startS, reason, { audio: { gainDb: 3, fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, streamIndex: null } }) });
-    if (opts.showText && text && s.text && style.subtitles !== 'none') cmds.push({ type: 'clip.add', clip: textClip(text.id, atS, len, s.text, H, 'line', 'Legenda da fala') });
+  // ---------------------------------------------------------------- falas + imagem do personagem
+  for (const b of blocks) {
+    const { ep, s } = b;
+    const reason = b.preDrop
+      ? `Fala marcante antes do drop: ${s.text ? `"${s.text.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada durante a fala`
+      : `Fala intercalada: ${s.text ? `"${s.text.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada`;
+    const lead = b.atS - b.from;
+    cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, b.from, b.to - b.from, Math.max(0, s.startS - lead), reason, { effects: gradeFx(style.grade) }) });
+    cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: b.preDrop ? 3 : 2, fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, streamIndex: streamFor(ep) } }) });
+    if (opts.showText && text && s.text && style.subtitles !== 'none') cmds.push({ type: 'clip.add', clip: textClip(text.id, b.atS, b.len, s.text, H, 'line', 'Legenda da fala') });
     clipsMade++;
   }
 
@@ -471,14 +794,25 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       if (!Number.isFinite(c.startS) || c.endS <= range[0] || c.startS >= range[1]) continue;
       const a = Math.max(0, c.startS - range[0]);
       const b = Math.min(D, c.endS - range[0]);
-      if (speechUsed && a < dropT! && b > speechUsed.atS) continue;
+      if (blocks.some((x) => a < x.atS + x.len && b > x.atS)) continue;
       cmds.push({ type: 'clip.add', clip: textClip(text.id, a, b - a, c.text, H, 'line', 'Letra da música') });
     }
   }
 
+  const firstSpeech = blocks.find((b) => b.preDrop) ?? blocks[0];
   return {
     commands: cmds,
-    summary: { clips: clipsMade, cuts: Math.max(0, clipsMade - 1), speech: speechUsed?.s.text ?? (speechUsed ? speechUsed.s.kind : null), musicRange: range, drop: dropT },
+    summary: {
+      clips: clipsMade,
+      cuts: Math.max(0, clipsMade - 1),
+      speech: firstSpeech ? (firstSpeech.s.text ?? firstSpeech.s.kind) : null,
+      musicRange: range,
+      drop: dropT,
+      focus: plan.mode,
+      fights: plan.pool.map((e) => `${e.ep.name} ${fmt(e.seq.startS)}–${fmt(e.seq.endS)}`),
+      voices: blocks.length,
+      hitsSynced: syncedHits,
+    },
     warnings: [...new Set(warnings)],
   };
 }

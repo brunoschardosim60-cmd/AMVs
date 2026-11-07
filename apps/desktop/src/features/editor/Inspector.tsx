@@ -383,8 +383,6 @@ export function Inspector({ session, project, selectedAssetId }: { session: Proj
 
 /** Sem seleção: mostra o próximo passo em vez de um painel vazio. */
 function EmptyInspector({ project }: { project: Project }) {
-  const assistantOpen = useEditor((s) => s.assistantOpen);
-  if (assistantOpen) return null;
   const hasMusic = project.assets.some((a) => a.kind === 'audio');
   const hasVideo = project.assets.some((a) => a.kind === 'video');
   const hasClips = project.clips.length > 0;

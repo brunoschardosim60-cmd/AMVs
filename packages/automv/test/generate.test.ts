@@ -27,11 +27,11 @@ function episode(id: string, n: number, seedShift: number): EpisodeInput {
     const intensity = ((i * 37 + seedShift) % 100) / 100;
     shots.push({
       startS: i * 4, endS: i * 4 + 3.5, motion: intensity, loud: intensity, intensity, brightness: 0.5,
-      tags: intensity > 0.8 ? ['ação', 'impacto'] : intensity < 0.2 ? ['calma'] : ['ação'], line: null,
+      tags: intensity > 0.8 ? ['ação', 'impacto'] : intensity < 0.2 ? ['calma'] : ['ação'], line: null, peakS: i * 4 + 1.5,
     });
   }
   const analysis: EpisodeAnalysis = {
-    version: 'e1', durationS: n * 4, shots, subtitles: [], intensityCurve: [], curveStepS: 1,
+    version: 'e2', durationS: n * 4, shots, sequences: [], subtitles: [], intensityCurve: [], curveStepS: 1,
     speech: [
       { startS: 21, endS: 23.2, kind: 'grito', confidence: 0.9, text: 'Eu não vou desistir!', impact: 0.95 },
       { startS: 50, endS: 54, kind: 'fala', confidence: 0.9, text: 'Hoje o tempo está bom para passear no parque', impact: 0.2 },
@@ -51,7 +51,8 @@ function project(): Project {
   return p;
 }
 
-const base: GenerateOptions = { style: 'hype', intensity: 2, durationS: 60, musicStartS: null, useSpeech: true, useEffects: true, showText: true, seed: 1 };
+// testes legados rodam no modo misturar (o comportamento de antes das lutas)
+const base: GenerateOptions = { style: 'hype', intensity: 2, durationS: 60, musicStartS: null, useSpeech: true, useEffects: true, showText: true, seed: 1, focus: 'mix', hitSync: false };
 
 function run(opts: Partial<GenerateOptions> = {}) {
   const p = project();

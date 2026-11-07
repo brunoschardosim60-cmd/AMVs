@@ -155,6 +155,6 @@ export function probeWarnings(result: ProbeResult): string[] {
   if (v && v.bitDepth && v.bitDepth > 8) w.push(`Vídeo ${v.bitDepth}-bit: o preview usa proxy 8-bit; a exportação usa o original.`);
   if (v && ['hevc', 'av1', 'vp9'].includes(v.codec)) w.push(`Codec ${v.codec.toUpperCase()}: o preview usa proxy H.264.`);
   if (result.kind === 'video' && result.probe.audio.length === 0) w.push('Este vídeo não tem áudio.');
-  if (result.probe.audio.length > 1) w.push(`${result.probe.audio.length} faixas de áudio: escolha qual usar em cada clipe.`);
+  if (result.probe.audio.length > 1) w.push(`${result.probe.audio.length} faixas de áudio neste arquivo (ex.: japonês e português; não é a música). O Gerar meu AMV usa a original; no editor, escolha a faixa em cada clipe.`);
   return w;
 }

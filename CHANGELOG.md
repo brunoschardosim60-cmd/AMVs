@@ -1,5 +1,27 @@
 # Novidades
 
+## 0.6.0 (a publicar)
+
+**Sincronia com a música**
+- Corrigido um desvio de ~24 ms: toda batida era detectada adiantada em relação ao golpe real. Agora o erro médio é ~0,2 ms (pior caso ~5 ms, antes 36 ms). As músicas são reanalisadas sozinhas na primeira vez.
+- **Golpe na batida**: cada cena forte entra com o instante do impacto logo depois do corte (no drop, quase junto), em vez de o corte cair em qualquer ponto da cena.
+- **Trecho da música que combina**: o app compara trechos da música com a força das cenas escolhidas e sugere os 3 melhores (com o motivo). "Automático" usa o melhor.
+
+**Não misturar lutas**
+- O app agora separa cada episódio em **lutas** (trechos contínuos de ação) e, no modo **Focar na luta** (padrão), monta o vídeo numa luta só, em ordem. Se uma luta não tem cenas suficientes, junta a próxima mais forte. Você também pode marcar quais lutas usar. **Misturar cenas** volta ao comportamento antigo.
+- Falas só entram se forem da luta escolhida.
+- Limite: separa por ritmo e cortes, não reconhece personagens (isso pede um modelo de visão).
+
+**Falas e áudio**
+- Escolha de 0 a 4 falas intercaladas; a música abaixa sozinha em cada uma e volta depois.
+- O aviso "2 faixas de áudio" é sobre o arquivo do anime (ex.: japonês + português), não sobre a música. O app usa a faixa **original (japonês)** por padrão, tanto na análise quanto na fala, e você pode trocar para a dublagem.
+
+**Legendas**
+- **Troca de idioma**: Traduzir (9 idiomas) usa o modelo de IA do Assistente (Ollama, Claude, OpenAI). O texto original fica guardado: dá para trocar de idioma de novo ou voltar ao original, e a exportação sai no idioma escolhido.
+
+**Interface**
+- O **Assistente** virou uma janela flutuante: arraste pelo cabeçalho, redimensione, minimize para uma bolinha. Não ocupa mais espaço e o painel de propriedades não some quando ele abre.
+
 ## 0.5.5
 
 - Preview no formato certo: projeto vertical (ou quadrado) aparece inteiro na tela, sem cortar.

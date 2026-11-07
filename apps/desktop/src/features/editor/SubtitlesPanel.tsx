@@ -1,8 +1,10 @@
 import { decodeSubtitleBytes, parseSubtitles, toSrt } from '@amv/analysis';
 import { clipEndUs, type Clip } from '@amv/project';
-import { LOOKS, placeCues, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
-import { AlertTriangle, Download, FileText, Film, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { translateLines } from '@amv/assistant';
+import { applyTranslation, langLabel, LOOKS, originalText, placeCues, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
+import { AlertTriangle, Download, FileText, Film, Languages, Trash2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
 import { Button } from '../../ui/controls';
@@ -20,6 +22,9 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   const tracks = textTracks(project);
   const [trackId, setTrackId] = useState(tracks[0]?.id ?? '');
   const [look, setLook] = useState<SubtitleLook>('legenda');
+  const [lang, setLang] = useState('en');
+  const [translating, setTranslating] = useState<{ done: number; total: number } | null>(null);
+  const abort = useRef<AbortController | null>(null);
   const selection = useEditor((s) => s.selection);
   const playheadUs = useEditor((s) => s.playheadUs);
   const setPlayhead = useEditor((s) => s.setPlayhead);
@@ -82,6 +87,40 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     toast({ tone: 'ok', title: `${r.count} fala(s) encaixada(s)`, body: chosen.length ? 'Dos clipes selecionados.' : 'De todos os clipes do vídeo.' });
   };
 
+
+  const translate = async () => {
+    if (!platform || !target.length || translating) return;
+    try {
+      const settings = await loadAiSettings(platform);
+      if (!settings.enabled || !(isLocal(settings) || settings.allowExternal)) {
+        toast({ tone: 'warn', title: 'Ligue um modelo de IA para traduzir', body: 'Abra o Assistente e clique na engrenagem. O Ollama roda no seu PC (grátis, offline). Claude e OpenAI são na nuvem: o texto das legendas é enviado a eles.' });
+        return;
+      }
+      const key = settings.provider.needsKey ? await platform.secrets.get(secretName(settings.presetId)) : null;
+      abort.current = new AbortController();
+      setTranslating({ done: 0, total: target.length });
+      // sempre parte do texto original (trocar de idioma não traduz uma tradução)
+      const r = await translateLines(settings.provider, key, platform.http, target.map(originalText), { target: langLabel(lang), signal: abort.current.signal, onProgress: (done, total) => setTranslating({ done, total }) });
+      const cmds = applyTranslation(target, r.translations, lang);
+      if (cmds.length) session.history.transaction(`Traduzir legendas (${langLabel(lang)})`, cmds);
+      toast(
+        r.failed
+          ? { tone: 'warn', title: `${cmds.length} traduzidas, ${r.failed} mantidas no original`, body: 'O modelo errou essas linhas. Tente de novo ou use um modelo maior.' }
+          : { tone: 'ok', title: `${cmds.length} legenda(s) em ${langLabel(lang)}`, body: 'Ctrl+Z desfaz. "Original" volta ao idioma de antes.' },
+      );
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') fail('Não deu para traduzir', e);
+    } finally {
+      abort.current = null;
+      setTranslating(null);
+    }
+  };
+  const restore = () => {
+    const cmds = restoreOriginals(target);
+    if (cmds.length) session.history.transaction('Voltar legendas ao original', cmds);
+  };
+  const translatedCount = target.filter((c) => c.text?.original !== undefined).length;
+
   const shift = (ms: number) => session.history.transaction(`Ajustar tempo ${ms > 0 ? '+' : ''}${ms} ms`, shiftSubtitles(project, target.map((c) => c.id), ms * 1000));
   const restyle = (l: SubtitleLook) => {
     setLook(l);
@@ -128,6 +167,35 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
             </button>
           ))}
         </div>
+        {clips.length > 0 && (
+          <div className="space-y-1">
+            <div className="flex items-center gap-1">
+              <Languages size={13} className="shrink-0 text-muted" />
+              <select className="h-7 min-w-0 flex-1 rounded-control border border-line bg-base px-1 text-xs" value={lang} onChange={(e) => setLang(e.target.value)} aria-label="Idioma das legendas" disabled={!!translating}>
+                {SUBTITLE_LANGS.map((l) => (
+                  <option key={l.code} value={l.code}>
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+              {translating ? (
+                <Button size="sm" onClick={() => abort.current?.abort()}>
+                  Cancelar
+                </Button>
+              ) : (
+                <Button size="sm" onClick={translate} title={`Traduz ${selectedSubs.length ? 'as selecionadas' : 'todas as legendas'} para ${langLabel(lang)} com o modelo de IA configurado no Assistente`}>
+                  Traduzir
+                </Button>
+              )}
+              {translatedCount > 0 && !translating && (
+                <Button size="sm" variant="ghost" onClick={restore} title="Volta ao texto de antes da tradução">
+                  Original
+                </Button>
+              )}
+            </div>
+            {translating && <p className="text-2xs text-muted">Traduzindo… {translating.done}/{translating.total}</p>}
+          </div>
+        )}
         {clips.length > 0 && (
           <div className="flex items-center gap-1 text-2xs text-muted">
             <span className="mr-auto">Tempo ({selectedSubs.length ? `${selectedSubs.length} sel.` : 'todas'})</span>

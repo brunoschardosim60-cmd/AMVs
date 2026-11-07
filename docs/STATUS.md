@@ -102,3 +102,16 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Puxar falas do episódio para os clipes (considera velocidade) | feito | testes |
 | Editar texto, ajustar tempo (±), estilos, avisos de leitura, exportar SRT/VTT/LRC | feito | testes + app real |
 | Pendente: transcrição (Whisper), tradução, alinhamento automático de letra sem tempo | pendente | — |
+
+## Pós-0.5.5 (0.6.0, em andamento)
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Correção do viés de −24 ms nas batidas + refino de pico | feito | teste: viés < 4 ms e pior < 8 ms em 3 andamentos × 3 inícios |
+| Sequências (lutas) por episódio, golpe de cada cena | feito | 6 testes unitários (`sequences.test.ts`) |
+| Foco na luta, escolha manual de lutas, junta a próxima se faltar cena | feito | testes com controle (misturar produz o que o foco evita) |
+| Golpe na batida (alinha o impacto ao corte/drop) | feito | teste: golpe 0,03–0,13 s após o corte, 0,04 s no drop; cortes seguem na batida |
+| Melhor trecho da música para as cenas (top 3 com motivo) | feito | testes |
+| Falas intercaladas com a música abaixando; faixa original (japonês) | feito | testes |
+| Tradução de legendas (9 idiomas), original guardado, voltar | feito | 8 testes do tradutor (modelo falso) + 5 de legendas; **não testado com modelo real** |
+| Assistente flutuante/minimizável | feito | typecheck + build; **sem teste visual** |
+| Whisper, YouTube/Spotify, efeitos sonoros, personagens | pendente | — |

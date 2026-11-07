@@ -19,8 +19,8 @@ function setup(): AssistantContext {
   p = applyCommand(p, { type: 'batch', commands: insertAsset(p, { assetId: 'ep', trackId: track('V1'), startUs: 8 * S, sourceInUs: 10 * S, sourceOutUs: 14 * S }) }).project;
   const beats = Array.from({ length: 120 }, (_, i) => i * 0.5);
   const music: MusicAnalysis = { version: 'm1', durationS: 60, bpm: 120, bpmConfidence: 0.9, beats, downbeats: beats.filter((_, i) => i % 4 === 0), energy: Array.from({ length: 240 }, (_, i) => (i < 40 ? 0.3 : 0.9)), energyStepS: 0.25, sections: [{ startS: 0, endS: 10, label: 'intro', energy: 0.3 }, { startS: 10, endS: 60, label: 'drop', energy: 0.9 }], drops: [10], intensity: 70, loudnessDb: -10 };
-  const shots: Shot[] = Array.from({ length: 150 }, (_, i) => ({ startS: i * 4, endS: i * 4 + 3.8, motion: 0.5, loud: 0.5, intensity: (i % 10) / 10, brightness: 0.5, tags: i % 10 === 9 ? ['ação', 'impacto'] : ['ação'], line: null }));
-  const episode: EpisodeAnalysis = { version: 'e1', durationS: 600, shots, subtitles: [], intensityCurve: [], curveStepS: 1, speech: [{ startS: 50, endS: 51.5, kind: 'grito', confidence: 0.9, text: 'Ainda não acabou!', impact: 0.95 }] };
+  const shots: Shot[] = Array.from({ length: 150 }, (_, i) => ({ startS: i * 4, endS: i * 4 + 3.8, motion: 0.5, loud: 0.5, intensity: (i % 10) / 10, brightness: 0.5, tags: i % 10 === 9 ? ['ação', 'impacto'] : ['ação'], line: null, peakS: i * 4 + 1.9 }));
+  const episode: EpisodeAnalysis = { version: 'e2', durationS: 600, shots, sequences: [], subtitles: [], intensityCurve: [], curveStepS: 1, speech: [{ startS: 50, endS: 51.5, kind: 'grito', confidence: 0.9, text: 'Ainda não acabou!', impact: 0.95 }] };
   return { project: p, selection: [], playheadUs: 0, music: new Map([['mus', music]]), episodes: new Map([['ep', episode]]) };
 }
 

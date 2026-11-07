@@ -10,7 +10,7 @@ import {
   type ChatMessage,
 } from '@amv/assistant';
 import type { EpisodeAnalysis, MusicAnalysis } from '@amv/analysis';
-import { Bot, Check, Eye, Loader2, Send, Settings2, Sparkles, X } from 'lucide-react';
+import { Bot, Check, Eye, Loader2, Minus, Send, Settings2, Sparkles, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { isLocal, loadAiSettings, saveAiSettings, secretName, type AiSettings } from '../../core/aiSettings';
 import type { ProjectSession } from '../../core/session';
@@ -40,6 +40,71 @@ function buildContext(session: ProjectSession): AssistantContext {
   return { project: session.project, selection: ed.selection, playheadUs: ed.playheadUs, music, episodes };
 }
 
+
+// ---------------------------------------------------------------- janela flutuante
+
+const POS_KEY = 'amv.assistant.pos';
+type Pos = { x: number; y: number };
+
+function loadPos(): Pos {
+  try {
+    const raw = window.localStorage.getItem(POS_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as Pos;
+      if (Number.isFinite(p.x) && Number.isFinite(p.y)) return p;
+    }
+  } catch {
+    /* sem armazenamento: usa o padrão */
+  }
+  return { x: Math.max(8, window.innerWidth - 384), y: 72 };
+}
+
+/** Mantém pelo menos um pedaço da janela visível (a tela pode ter diminuído). */
+const clampPos = (p: Pos): Pos => ({ x: Math.max(0, Math.min(p.x, window.innerWidth - 80)), y: Math.max(0, Math.min(p.y, window.innerHeight - 44)) });
+
+/**
+ * Posição e arrasto da janela do assistente. Arrastar pelo cabeçalho; o clique curto na
+ * bolinha (minimizado) reabre. Não ocupa espaço no layout: flutua sobre o editor.
+ */
+function useFloating() {
+  const [pos, setPos] = useState<Pos>(() => clampPos(loadPos()));
+  const [minimized, setMinimized] = useState(false);
+  const drag = useRef<{ dx: number; dy: number; sx: number; sy: number; moved: boolean } | null>(null);
+  const posRef = useRef(pos);
+  posRef.current = pos;
+  useEffect(() => {
+    const onResize = () => setPos((p) => clampPos(p));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const handlers = {
+    onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
+      if ((e.target as HTMLElement).closest('button, input, textarea, select')) return;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      drag.current = { dx: e.clientX - posRef.current.x, dy: e.clientY - posRef.current.y, sx: e.clientX, sy: e.clientY, moved: false };
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
+      const d = drag.current;
+      if (!d) return;
+      if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 4) d.moved = true;
+      if (d.moved) setPos(clampPos({ x: e.clientX - d.dx, y: e.clientY - d.dy }));
+    },
+    onPointerUp: () => {
+      const d = drag.current;
+      drag.current = null;
+      if (d?.moved) {
+        try {
+          window.localStorage.setItem(POS_KEY, JSON.stringify(posRef.current));
+        } catch {
+          /* ignora */
+        }
+      }
+      return d;
+    },
+  };
+  return { pos, minimized, setMinimized, handlers, wasDrag: () => drag.current?.moved ?? false };
+}
+
 let seq = 0;
 
 /** Conversa sobrevive a fechar e abrir o painel (por projeto, enquanto o app está aberto). */
@@ -49,6 +114,7 @@ const memory = new Map<string, { entries: Entry[]; history: ChatMessage[] }>();
 export function AssistantPanel({ session, onClose }: { session: ProjectSession; onClose: () => void }) {
   useSessionVersion(session);
   const { platform, toast } = useApp();
+  const float = useFloating();
   const [settings, setSettings] = useState<AiSettings | null>(null);
   const saved = memory.get(session.project.id);
   const [entries, setEntries] = useState<Entry[]>(saved?.entries ?? []);
@@ -110,8 +176,41 @@ export function AssistantPanel({ session, onClose }: { session: ProjectSession; 
   };
 
   return (
-    <aside className="flex w-[360px] shrink-0 flex-col border-l border-line bg-panel" aria-label="Assistente">
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3">
+    <>
+    {float.minimized && (
+      <button
+        type="button"
+        aria-label="Abrir assistente"
+        title="Assistente (arraste para mover)"
+        className="fixed z-[35] grid size-11 touch-none place-items-center rounded-full border border-violet bg-panel text-violet-strong shadow-xl hover:bg-raised"
+        style={{ left: float.pos.x, top: float.pos.y }}
+        onPointerDown={float.handlers.onPointerDown}
+        onPointerMove={float.handlers.onPointerMove}
+        onPointerUp={(e) => {
+          const d = float.handlers.onPointerUp();
+          if (d && !d.moved) float.setMinimized(false);
+          e.currentTarget.releasePointerCapture?.(e.pointerId);
+        }}
+      >
+        <Bot size={20} />
+        {busy && <Loader2 size={12} className="absolute -top-0.5 -right-0.5 animate-spin text-violet-strong" />}
+      </button>
+    )}
+    <aside
+      className={`fixed z-[35] flex-col rounded-xl border border-line bg-panel shadow-2xl ${float.minimized ? 'hidden' : 'flex'}`}
+      style={{ left: float.pos.x, top: float.pos.y, width: 380, height: 540, minWidth: 300, minHeight: 320, maxWidth: '92vw', maxHeight: 'calc(100vh - 16px)', resize: 'both', overflow: 'hidden' }}
+      aria-label="Assistente"
+    >
+      <header
+        className="flex h-10 shrink-0 cursor-move touch-none items-center gap-2 border-b border-line px-3 select-none"
+        title="Arraste para mover"
+        onPointerDown={float.handlers.onPointerDown}
+        onPointerMove={float.handlers.onPointerMove}
+        onPointerUp={(e) => {
+          float.handlers.onPointerUp();
+          e.currentTarget.releasePointerCapture?.(e.pointerId);
+        }}
+      >
         <Bot size={16} className="text-violet-strong" />
         <span className="text-sm font-semibold">Assistente</span>
         <span className={`rounded px-1.5 py-0.5 text-2xs ${modelOn ? 'bg-violet/15 text-violet-strong' : 'bg-raised text-muted'}`} title={modelOn ? `${settings!.provider.name} · ${settings!.provider.model}` : 'Sem modelo: entende pedidos diretos'}>
@@ -119,6 +218,9 @@ export function AssistantPanel({ session, onClose }: { session: ProjectSession; 
         </span>
         <button type="button" aria-label="Configurações de IA" className="ml-auto rounded p-1 text-muted hover:bg-raised hover:text-ink" onClick={() => setShowSettings(true)}>
           <Settings2 size={15} />
+        </button>
+        <button type="button" aria-label="Minimizar assistente" title="Minimizar (vira uma bolinha)" className="rounded p-1 text-muted hover:bg-raised hover:text-ink" onClick={() => float.setMinimized(true)}>
+          <Minus size={15} />
         </button>
         <button type="button" aria-label="Fechar assistente" className="rounded p-1 text-muted hover:bg-raised hover:text-ink" onClick={onClose}>
           <X size={15} />
@@ -204,6 +306,7 @@ export function AssistantPanel({ session, onClose }: { session: ProjectSession; 
         />
       )}
     </aside>
+    </>
   );
 }
 

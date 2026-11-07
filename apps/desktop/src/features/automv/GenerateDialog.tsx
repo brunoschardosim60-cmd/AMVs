@@ -1,5 +1,6 @@
 import { parseSubtitles, decodeSubtitleBytes, type Cue } from '@amv/analysis';
-import { generateAmv, STYLES, type GenerateOptions, type StyleId } from '@amv/automv';
+import { generateAmv, planFootage, STYLES, suggestMusicRanges, type EpisodeInput, type GenerateOptions, type StyleId } from '@amv/automv';
+import { pickAudioStreamByLanguage } from '@amv/analysis';
 import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { ProjectSession } from '../../core/session';
@@ -10,6 +11,7 @@ import { Button, Dialog } from '../../ui/controls';
 const ICONS: Record<StyleId, typeof Flame> = { hype: Flame, superacao: Sparkles, letra: Type, discurso: Mic, emocional: Heart };
 const INTENSITY = ['Suave', 'Moderada', 'Intensa', 'Extrema'] as const;
 const DURATIONS = [15, 30, 45, 60, 90];
+const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 export function GenerateDialog({ session, onClose }: { session: ProjectSession; onClose: () => void }) {
   useSessionVersion(session);
@@ -23,7 +25,12 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
   const [style, setStyle] = useState<StyleId>('hype');
   const [intensity, setIntensity] = useState<0 | 1 | 2 | 3>(2);
   const [duration, setDuration] = useState(30);
-  const [useSpeech, setUseSpeech] = useState(true);
+  const [voiceMoments, setVoiceMoments] = useState(1);
+  const [voiceLang, setVoiceLang] = useState<'original' | 'pt'>('original');
+  const [focus, setFocus] = useState<'fight' | 'mix'>('fight');
+  const [seqIds, setSeqIds] = useState<string[]>([]);
+  const [hitSync, setHitSync] = useState(true);
+  const [musicStart, setMusicStart] = useState<number | null>(null);
   const [useEffects, setUseEffects] = useState(true);
   const [showText, setShowText] = useState(true);
   const [lyrics, setLyrics] = useState<{ name: string; cues: Cue[] } | null>(null);
@@ -34,6 +41,37 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
   const music = session.assetRuntime(musicId).music;
   const ready = episodes.filter((e) => epIds.includes(e.id) && session.assetRuntime(e.id).episode);
   const waiting = epIds.filter((id) => !session.assetRuntime(id).episode).length + (musicId && !music ? 1 : 0);
+  const inputs = useMemo<EpisodeInput[]>(
+    () =>
+      ready.map((e) => ({
+        assetId: e.id,
+        name: e.name,
+        analysis: session.assetRuntime(e.id).episode!,
+        hasAudio: (e.probe?.audio.length ?? 0) > 0,
+        audioStreams: e.probe?.audio.map((a) => ({ index: a.index, language: a.language, title: a.title })),
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ready.map((e) => e.id).join(','), session],
+  );
+  const excluded = useMemo(() => episodes.filter((e) => !epIds.includes(e.id)).map((e) => e.id), [episodes, epIds]);
+  const fights = useMemo(
+    () =>
+      inputs
+        .flatMap((ep) => ep.analysis.sequences?.filter((q) => q.kind === 'luta').map((q) => ({ ep, q })) ?? [])
+        .sort((a, b) => b.q.intensity - a.q.intensity)
+        .slice(0, 8),
+    [inputs],
+  );
+  const plan = useMemo(
+    () => (music && inputs.length ? planFootage(inputs, { style, intensity, durationS: duration, focus, sequenceIds: seqIds, exclude: excluded, seed }, music) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [music, inputs, style, intensity, duration, focus, seqIds.join(','), excluded.join(','), seed],
+  );
+  const ranges = useMemo(() => (music && plan ? suggestMusicRanges(music, duration, plan.fit, 3) : []), [music, plan, duration]);
+  // o trecho escolhido só vale enquanto ainda é uma das sugestões (mudou duração/estilo/luta: volta ao automático)
+  const chosenStart = ranges.some((r) => r.startS === musicStart) ? musicStart : null;
+  const hasTwoAudio = ready.some((e) => (e.probe?.audio.length ?? 0) > 1);
+  const noOriginal = ready.some((e) => (e.probe?.audio.length ?? 0) > 1 && pickAudioStreamByLanguage(e.probe!.audio, voiceLang) === null);
   const sceneCount = useMemo(() => ready.reduce((a, e) => a + (session.assetRuntime(e.id).episode?.shots.length ?? 0), 0), [ready, session]);
 
   const pickLyrics = async () => {
@@ -53,14 +91,9 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
     if (!music) return;
     setBusy(true);
     try {
-      const opts: GenerateOptions = { style, intensity, durationS: duration, musicStartS: null, lyrics: lyrics?.cues, useSpeech, useEffects, showText, seed: nextSeed, exclude: episodes.filter((e) => !epIds.includes(e.id)).map((e) => e.id) };
+      const opts: GenerateOptions = { style, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync };
       const m = musics.find((a) => a.id === musicId)!;
-      const r = generateAmv(
-        project,
-        { assetId: m.id, name: m.name, analysis: music },
-        ready.map((e) => ({ assetId: e.id, name: e.name, analysis: session.assetRuntime(e.id).episode!, hasAudio: (e.probe?.audio.length ?? 0) > 0 })),
-        opts,
-      );
+      const r = generateAmv(project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
       // guarda o que estava antes: nada se perde
       await session.saveVersion(`Antes de gerar (${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})`);
       const label = STYLES.find((s) => s.id === style)!.label;
@@ -69,7 +102,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
       const s = r.summary;
       setResult({
         warnings: r.warnings,
-        text: `${s.clips} cenas, ${s.cuts} cortes${s.drop !== null ? `, drop em ${s.drop.toFixed(1)} s` : ''}${s.speech ? `, fala: "${s.speech}"` : ''}. Trecho da música: ${s.musicRange[0].toFixed(0)}–${s.musicRange[1].toFixed(0)} s.`,
+        text: `${s.clips} cenas, ${s.cuts} cortes${s.drop !== null ? `, drop em ${s.drop.toFixed(1)} s` : ''}${s.voices ? `, ${s.voices} fala(s)${s.speech ? ` (começando por "${s.speech}")` : ''}` : ''}. Trecho da música: ${mmss(s.musicRange[0])}–${mmss(s.musicRange[1])}.${s.focus === 'fight' && s.fights.length ? ` Luta usada: ${s.fights.join(' + ')}.` : s.focus === 'mix' ? ' Cenas de vários pontos (modo misturar).' : ''}${s.hitsSynced ? ` ${s.hitsSynced} golpes encaixados na batida.` : ''}`,
       });
     } catch (e) {
       toast({ tone: 'error', title: 'Não deu para gerar', body: (e as Error).message });
@@ -176,6 +209,78 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
                 </button>
               ))}
             </div>
+
+            <p className="mt-4 mb-2 text-xs font-medium text-ink-soft">Cenas</p>
+            <div className="flex gap-1 rounded-control bg-base p-1">
+              {(
+                [
+                  ['fight', 'Focar na luta'],
+                  ['mix', 'Misturar cenas'],
+                ] as const
+              ).map(([k, label]) => (
+                <button key={k} type="button" onClick={() => setFocus(k)} className={`flex-1 rounded-[4px] py-1.5 text-xs ${focus === k ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {focus === 'fight' ? (
+              <div className="mt-2">
+                <p className="mb-1 text-2xs text-muted">
+                  {seqIds.length ? 'Usando só as lutas marcadas.' : plan?.mode === 'fight' ? `O app escolheu: ${plan.pool.map((e) => `${e.ep.name} ${mmss(e.seq.startS)}–${mmss(e.seq.endS)}`).join(' + ')}. Marque para escolher você.` : 'Aguardando a análise ou sem luta clara nos episódios.'}
+                </p>
+                {fights.length > 0 && (
+                  <ul className="max-h-32 space-y-1 overflow-y-auto">
+                    {fights.map(({ ep, q }) => {
+                      const key = `${ep.assetId}#${q.id}`;
+                      return (
+                        <li key={key}>
+                          <label className="flex items-center gap-2 text-xs">
+                            <input type="checkbox" className="accent-violet" checked={seqIds.includes(key)} onChange={() => setSeqIds((xs) => (xs.includes(key) ? xs.filter((x) => x !== key) : [...xs, key]))} />
+                            <span className="min-w-0 flex-1 truncate">
+                              {ep.name} · {mmss(q.startS)}–{mmss(q.endS)}
+                            </span>
+                            <span className="tnum text-2xs text-faint">{q.shotCount} cenas · força {Math.round(q.intensity * 100)}%</span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            ) : (
+              <p className="mt-2 text-2xs text-muted">Pega as cenas mais fortes de qualquer ponto dos episódios (pode misturar lutas diferentes).</p>
+            )}
+            <label className="mt-2 flex items-center gap-2 text-xs">
+              <input type="checkbox" className="accent-violet" checked={hitSync} onChange={(e) => setHitSync(e.target.checked)} /> Encaixar o golpe de cada cena na batida
+            </label>
+
+            {ranges.length > 0 && (
+              <>
+                <p className="mt-4 mb-2 text-xs font-medium text-ink-soft">Trecho da música que combina</p>
+                <ul className="space-y-1">
+                  <li>
+                    <label className="flex items-start gap-2 text-xs">
+                      <input type="radio" name="mrange" className="mt-0.5 accent-violet" checked={chosenStart === null} onChange={() => setMusicStart(null)} />
+                      <span>Automático (o melhor para as cenas escolhidas)</span>
+                    </label>
+                  </li>
+                  {ranges.map((r) => (
+                    <li key={r.startS}>
+                      <label className="flex items-start gap-2 text-xs" title={r.reasons.join(' · ')}>
+                        <input type="radio" name="mrange" className="mt-0.5 accent-violet" checked={chosenStart === r.startS} onChange={() => setMusicStart(r.startS)} />
+                        <span className="min-w-0 flex-1">
+                          <span className="tnum">
+                            {mmss(r.startS)}–{mmss(r.endS)}
+                          </span>{' '}
+                          <span className="text-2xs text-faint">{Math.round(r.score * 100)}%</span>
+                          {r.reasons[0] && <span className="block truncate text-2xs text-muted">{r.reasons[0]}</span>}
+                        </span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
           </div>
 
           <div className="space-y-4">
@@ -246,8 +351,28 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
 
             <div className="space-y-1.5 text-xs">
               <label className="flex items-center gap-2">
-                <input type="checkbox" className="accent-violet" checked={useSpeech} onChange={(e) => setUseSpeech(e.target.checked)} /> Fala marcante antes do drop
+                Falas dos personagens
+                <select className="h-7 rounded-control border border-line bg-base px-1.5 text-xs" value={voiceMoments} onChange={(e) => setVoiceMoments(Number(e.target.value))}>
+                  <option value={0}>Nenhuma</option>
+                  <option value={1}>1 (antes do drop)</option>
+                  <option value={2}>2</option>
+                  <option value={3}>3</option>
+                  <option value={4}>4</option>
+                </select>
               </label>
+              {voiceMoments > 0 && <p className="text-2xs text-muted">A música abaixa sozinha durante cada fala e volta depois.</p>}
+              {hasTwoAudio && voiceMoments > 0 && (
+                <label className="flex items-center gap-2">
+                  Áudio da fala
+                  <select className="h-7 rounded-control border border-line bg-base px-1.5 text-xs" value={voiceLang} onChange={(e) => setVoiceLang(e.target.value as 'original' | 'pt')}>
+                    <option value="original">Original (japonês)</option>
+                    <option value="pt">Português (dublagem)</option>
+                  </select>
+                </label>
+              )}
+              {hasTwoAudio && voiceMoments > 0 && (
+                <p className="text-2xs text-muted">Seus episódios têm 2 faixas de áudio (idiomas). Elas são do anime, não da música.{noOriginal ? ' Em algum episódio não achei a faixa desse idioma: usei a padrão.' : ''}</p>
+              )}
               <label className="flex items-center gap-2">
                 <input type="checkbox" className="accent-violet" checked={useEffects} onChange={(e) => setUseEffects(e.target.checked)} /> Efeitos (clarão, tremida, zoom)
               </label>

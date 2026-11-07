@@ -6,7 +6,7 @@
 import { mean, movingAverage, percentile, rmsFrames, stft, toDb } from './dsp.js';
 import { impactScore, type Cue } from './subtitles.js';
 
-export const EPISODE_ANALYSIS_VERSION = 'e1';
+export const EPISODE_ANALYSIS_VERSION = 'e2';
 
 export interface FrameStat {
   t: number;
@@ -32,6 +32,28 @@ export interface Shot {
   tags: ShotTag[];
   /** Fala de legenda dentro do plano, se houver. */
   line: string | null;
+  /**
+   * Instante (s, no episódio) do maior movimento do plano — o "golpe". O Gerar meu AMV
+   * encaixa esse instante na batida. Heurístico: maior diferença entre quadros.
+   */
+  peakS: number;
+}
+
+/**
+ * Sequência = trecho contínuo do episódio (uma luta, uma cena calma). Serve para o
+ * AMV ficar numa luta só em vez de misturar lutas diferentes.
+ */
+export interface Sequence {
+  /** Estável: `s<início em décimos de segundo>`. */
+  id: string;
+  startS: number;
+  endS: number;
+  kind: 'luta' | 'calma';
+  /** Média das cenas mais fortes (0..1). */
+  intensity: number;
+  /** Maior intensidade de uma cena (0..1). */
+  peak: number;
+  shotCount: number;
 }
 
 export interface SpeechSegment {
@@ -48,6 +70,8 @@ export interface EpisodeAnalysis {
   version: string;
   durationS: number;
   shots: Shot[];
+  /** Lutas e trechos calmos, em ordem. */
+  sequences: Sequence[];
   speech: SpeechSegment[];
   /** Legendas embutidas lidas do arquivo (se texto). */
   subtitles: Cue[];
@@ -208,12 +232,91 @@ export function buildEpisodeAnalysis(frames: FrameStat[], durationS: number, aud
     if (brightness < 0.12) tags.push('escura');
     const intensity = Math.max(0, Math.min(1, 0.55 * motion + 0.3 * loud + (flash ? 0.1 : 0) + (tags.includes('grito') ? 0.1 : 0) - (brightness < 0.06 ? 0.2 : 0)));
     const line = inShot.find((s) => s.text)?.text ?? null;
-    shots.push({ startS: a, endS: b, motion: r2(motion), loud: r2(loud), intensity: r2(intensity), brightness: r2(brightness), tags, line });
+    // golpe: quadro de maior movimento (o 1º é o corte, não conta); sem quadros suficientes, o meio
+    let peakS = (a + b) / 2;
+    if (fs.length >= 3) {
+      let bestY = -1;
+      for (let q = 1; q < fs.length; q++) if (fs[q]!.ydif > bestY) [bestY, peakS] = [fs[q]!.ydif, fs[q]!.t];
+    }
+    shots.push({ startS: a, endS: b, motion: r2(motion), loud: r2(loud), intensity: r2(intensity), brightness: r2(brightness), tags, line, peakS: Math.round(peakS * 1000) / 1000 });
   }
   const step = 1;
   const curve: number[] = [];
   for (let t = 0; t < durationS; t += step) curve.push(shots.find((s) => t >= s.startS && t < s.endS)?.intensity ?? 0);
-  return { version: EPISODE_ANALYSIS_VERSION, durationS, shots, speech, subtitles, intensityCurve: Array.from(movingAverage(curve, 2), r2), curveStepS: step };
+  return { version: EPISODE_ANALYSIS_VERSION, durationS, shots, sequences: buildSequences(shots), speech, subtitles, intensityCurve: Array.from(movingAverage(curve, 2), r2), curveStepS: step };
 }
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
+
+/** Cena "quente" (luta/ação) para formar sequências. */
+const HOT = 0.4;
+/** Pausa fria que ainda cabe dentro de uma mesma luta (respiro, fala, close). */
+const MAX_COLD_GAP_S = 6;
+/** Luta precisa ter pelo menos isto para ser uma sequência. */
+const MIN_FIGHT_S = 8;
+const MIN_FIGHT_SHOTS = 3;
+
+/**
+ * Agrupa planos em sequências sem modelo de visão: uma luta é um bloco de planos
+ * intensos; pausas frias de até 6 s (respiro, close, fala) ficam dentro dela; um
+ * trecho frio mais longo, ou uma cena escura (fade), separa uma luta da outra.
+ * Blocos pequenos viram "calma". Não reconhece personagens: separa por ritmo.
+ */
+export function buildSequences(shots: Shot[]): Sequence[] {
+  const out: Sequence[] = [];
+  const make = (list: Shot[], kind: Sequence['kind']): Sequence => {
+    const top = [...list].map((x) => x.intensity).sort((x, y) => y - x);
+    const strong = top.slice(0, Math.max(1, Math.ceil(top.length * 0.4)));
+    return {
+      id: `s${Math.round(list[0]!.startS * 10)}`,
+      startS: list[0]!.startS,
+      endS: list.at(-1)!.endS,
+      kind,
+      intensity: r2(mean(strong)),
+      peak: r2(top[0] ?? 0),
+      shotCount: list.length,
+    };
+  };
+  let cur: Shot[] = [];
+  let cold: Shot[] = [];
+  const flush = () => {
+    if (!cur.length) return;
+    const dur = cur.at(-1)!.endS - cur[0]!.startS;
+    out.push(make(cur, dur >= MIN_FIGHT_S && cur.length >= MIN_FIGHT_SHOTS ? 'luta' : 'calma'));
+    cur = [];
+  };
+  const flushCold = () => {
+    // trecho frio longo vira sequência calma própria (não entra em luta)
+    if (!cold.length) return;
+    out.push(make(cold, 'calma'));
+    cold = [];
+  };
+  for (const sh of shots) {
+    const dark = sh.tags.includes('escura');
+    const hot = !dark && sh.intensity >= HOT;
+    if (dark) {
+      flush();
+      flushCold();
+      continue;
+    }
+    if (hot) {
+      if (cold.length) {
+        const gap = cold.at(-1)!.endS - cold[0]!.startS;
+        if (cur.length && gap <= MAX_COLD_GAP_S) cur.push(...cold);
+        else {
+          flush();
+          flushCold();
+        }
+        cold = [];
+      }
+      cur.push(sh);
+    } else {
+      cold.push(sh);
+      // frio demais para ser respiro: fecha a luta
+      if (cold.at(-1)!.endS - cold[0]!.startS > MAX_COLD_GAP_S) flush();
+    }
+  }
+  flush();
+  flushCold();
+  return out.sort((x, y) => x.startS - y.startS);
+}

@@ -142,6 +142,10 @@ export const TextContentSchema = z.object({
   shadow: z.boolean().default(false),
   animationIn: z.string().nullable().default(null),
   animationOut: z.string().nullable().default(null),
+  /** Legenda traduzida: o texto de antes da tradução (para voltar ou traduzir de novo). */
+  original: z.string().optional(),
+  /** Idioma do `text` atual (ex.: `en`), quando foi traduzido. */
+  lang: z.string().optional(),
 });
 
 export const OriginSchema = z.enum(['user', 'ai']);

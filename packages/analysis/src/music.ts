@@ -5,7 +5,7 @@
  */
 import { mean, movingAverage, normalize, percentile, rmsFrames, stft, toDb } from './dsp.js';
 
-export const MUSIC_ANALYSIS_VERSION = 'm1';
+export const MUSIC_ANALYSIS_VERSION = 'm2';
 
 export type SectionLabel = 'intro' | 'verso' | 'pré-refrão' | 'refrão' | 'drop' | 'ponte' | 'final';
 
@@ -41,7 +41,12 @@ export interface OnsetEnvelope {
   env: Float32Array;
   /** Quadros por segundo do envelope. */
   rate: number;
-  /** Deslocamento (s) do quadro 0: centro da janela de análise. */
+  /**
+   * Deslocamento (s) do quadro 0 até o ataque que ele detecta. O quadro f cobre
+   * [f·hop, f·hop+janela) e o fluxo compara com o quadro f-1: o pico aparece
+   * meia janela + 1 salto depois do início do ataque. Medido com cliques sintéticos:
+   * com só meia janela, toda batida saía ~24 ms adiantada.
+   */
   offsetS: number;
 }
 
@@ -81,7 +86,7 @@ export function onsetEnvelope(samples: Float32Array, sampleRate: number): OnsetE
   // remove a tendência local (deixa só os picos)
   const trend = movingAverage(env, 8);
   for (let i = 0; i < n; i++) env[i] = Math.max(0, env[i]! - trend[i]!);
-  return { env: normalize(env), rate: sampleRate / hop, offsetS: 2048 / 2 / sampleRate };
+  return { env: normalize(env), rate: sampleRate / hop, offsetS: (2048 / 2 + hop) / sampleRate };
 }
 
 /** BPM por autocorrelação do envelope, com preferência suave por 90–160 BPM. */
@@ -173,7 +178,13 @@ export function trackBeats(o: OnsetEnvelope, bpm: number, tightness = 100): numb
   }
   const beats: number[] = [];
   for (let i = end; i >= 0; i = back[i]!) {
-    beats.push(i / rate + o.offsetS);
+    // refina o pico entre quadros (parábola): sem isso o erro chega a meio quadro de análise (~12 ms)
+    const a = env[i - 1] ?? env[i]!;
+    const b = env[i]!;
+    const c = env[i + 1] ?? env[i]!;
+    const d = a - 2 * b + c;
+    const frac = d < 0 ? Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / d)) : 0;
+    beats.push((i + frac) / rate + o.offsetS);
     if (back[i] === -1) break;
   }
   beats.reverse();

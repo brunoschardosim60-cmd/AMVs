@@ -63,3 +63,11 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 ## 2026-11-07 · Músicas e legendas
 - `packages/music`: biblioteca global (arquivo `biblioteca-musicas.json` na pasta do app), recomendação por tema com pontuação vinda da análise real; reaproveita o cache de análise dos projetos (mesmo hash).
 - `packages/subtitles`: legendas são clipes de texto comuns; importar SRT/ASS/VTT/LRC, puxar falas do episódio pelo trecho de origem do clipe, exportar SRT/VTT/LRC.
+
+## 2026-11-07 · Sincronia, lutas e tradução (0.6.0)
+- **Viés de batida medido, não suposto**: com cliques sintéticos em instantes conhecidos, toda batida saía −24 ms. Causa: `offsetS` assumia janela centrada (`size/2`), mas o quadro começa em `f·hop` e o fluxo espectral compara com o quadro anterior (faltava 1 salto). Correção `offsetS = (size/2 + hop)/sr` + interpolação parabólica do pico. `MUSIC_ANALYSIS_VERSION` m1→m2 (cache antigo é refeito). Teste trava viés < 4 ms.
+- **Lutas por ritmo, sem visão**: `buildSequences` junta planos intensos (≥ 0,4) tolerando pausas frias de até 6 s; cena escura ou pausa maior separa. `EPISODE_ANALYSIS_VERSION` e1→e2 (também grava `peakS` por plano).
+- **Estoque de lutas por contagem de cenas**: cada corte gasta uma cena, então "segundos de imagem" não basta. Junta a próxima luta só se a atual cobrir < 70% dos cortes previstos; acima disso, repetir um pouco é preferível a misturar outra luta (pedido explícito do usuário).
+- **Faixa de áudio**: uma única regra (`pickAudioStreamByLanguage`) para análise e para a fala; padrão = original (japonês).
+- **Tradução** reaproveita o provedor de IA do Assistente (sem dependência nova); o original fica em `text.original` (campo opcional, sem migração de schema) e a tradução sempre parte dele.
+- **YouTube/Spotify**: mantida a decisão do AGENTS.md §3 — não extrair áudio de streaming.

@@ -131,6 +131,7 @@ export function ProjectScreen() {
 
   return (
     <div className="flex h-full min-w-0 flex-col">
+      {assistantOpen && <AssistantPanel session={s} onClose={() => setAssistantOpen(false)} />}
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-line px-5">
         {editingName ? (
           <input
@@ -225,7 +226,6 @@ export function ProjectScreen() {
           <div className="min-w-0 flex-1">
             <EditorView session={s} />
           </div>
-          {assistantOpen && <AssistantPanel session={s} onClose={() => setAssistantOpen(false)} />}
         </div>
       ) : (
       <div className="flex min-h-0 flex-1">

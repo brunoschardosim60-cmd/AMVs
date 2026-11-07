@@ -1,4 +1,5 @@
 /** Extração com FFmpeg: PCM, estatísticas por quadro e legendas embutidas. */
+import { pickAudioStreamByLanguage } from './audio-lang.js';
 import { CancelledError, ToolError, type ProcessRunner } from '@amv/media';
 import type { ProbeInfo } from '@amv/project';
 import { analyzeMusic, type MusicAnalysis } from './music.js';
@@ -158,7 +159,7 @@ export async function analyzeEpisodeFile(runner: ProcessRunner, originalPath: st
   if (probe.audio.length) {
     report(0.03, 'Ouvindo falas e gritos');
     const SR = 16000;
-    const pcm = await decodePcm(runner, originalPath, SR, signal, null, (s) => report(0.03 + 0.25 * Math.min(1, s / Math.max(1, durationS)), 'Ouvindo falas e gritos'));
+    const pcm = await decodePcm(runner, originalPath, SR, signal, pickAudioStreamByLanguage(probe.audio), (s) => report(0.03 + 0.25 * Math.min(1, s / Math.max(1, durationS)), 'Ouvindo falas e gritos'));
     feat = voiceFeatures(pcm, SR);
   }
   const speech = detectSpeech(feat, subtitles);

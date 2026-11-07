@@ -38,6 +38,19 @@ describe('análise de música', () => {
     expect(Math.abs(gaps[5]! - 2)).toBeLessThan(0.06);
   });
 
+  it('sincronia fina: batida detectada a menos de 8 ms do golpe real, sem viés (era −24 ms)', () => {
+    for (const bpm of [90, 128, 174]) {
+      for (const off of [0, 0.13, 0.31]) {
+        const per = 60 / bpm;
+        const a = analyzeMusic(synth(bpm, 40, 1000, off), SR);
+        const errs = a.beats.slice(3, -3).map((t) => t - (off + Math.round((t - off) / per) * per));
+        const bias = errs.reduce((x, y) => x + y, 0) / errs.length;
+        expect(Math.abs(bias), `viés a ${bpm} BPM, início ${off}`).toBeLessThan(0.004);
+        expect(Math.max(...errs.map(Math.abs)), `pior erro a ${bpm} BPM`).toBeLessThan(0.008);
+      }
+    }
+  });
+
   it('acha o drop e dá nome às seções', () => {
     const bpm = 128;
     const period = 60 / bpm;
