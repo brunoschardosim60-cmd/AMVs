@@ -1,4 +1,5 @@
 import type { FileSystem, ProcessRunner } from '@amv/media';
+import type { FetchLike } from '@amv/assistant';
 
 /**
  * Tudo que o app precisa do sistema operacional. Em produção vem do Tauri
@@ -30,4 +31,12 @@ export interface Platform {
   reveal(path: string): Promise<void>;
   /** Abre o arquivo no programa padrão (ex.: o player de vídeo). */
   openFile(path: string): Promise<void>;
+  /** Cofre do sistema (Gerenciador de Credenciais no Windows) para chaves de API. */
+  secrets: {
+    get(name: string): Promise<string | null>;
+    set(name: string, value: string): Promise<void>;
+    delete(name: string): Promise<void>;
+  };
+  /** HTTP fora do webview (sem CORS), para os provedores de IA. */
+  http: FetchLike;
 }

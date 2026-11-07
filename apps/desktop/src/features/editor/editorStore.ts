@@ -90,3 +90,9 @@ export const useEditor = create<EditorState>((set, get) => ({
 
 export const usToPx = (us: number, zoom: number) => (us / 1_000_000) * zoom;
 export const pxToUs = (px: number, zoom: number) => Math.round((px / zoom) * 1_000_000);
+
+/** Atalhos do editor não valem enquanto digita ou com uma janela (diálogo) aberta. */
+export function ignoreEditorKey(e: KeyboardEvent): boolean {
+  if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable], [role="dialog"]')) return true;
+  return !!document.querySelector('[aria-modal="true"]');
+}

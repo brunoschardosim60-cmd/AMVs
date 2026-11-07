@@ -51,3 +51,15 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 ## 2026-11-06 · Dependências do app
 - React 19, Zustand 5 (MIT), Tauri 2 + plugins dialog/fs/shell (MIT/Apache-2.0), Tailwind 4 (MIT), Vite 7 (MIT).
 - Python: FastAPI, Uvicorn (MIT/BSD).
+
+## 2026-11-07 · Assistente de IA: provedores, cofre e HTTP
+- Provedores atrás de uma interface (`packages/assistant`): API compatível com OpenAI (OpenAI, Ollama, LM Studio, OpenRouter, Groq) e API de mensagens da Anthropic. Sem streaming por enquanto.
+- Chaves no cofre do sistema via crate `keyring` 3 (MIT/Apache-2.0): Gerenciador de Credenciais no Windows, Keychain no macOS, keyutils no Linux. Nunca em arquivo.
+- Chamadas HTTP pelo `tauri-plugin-http` (MIT/Apache-2.0): sem CORS, funciona com Ollama local. Escopo: `https://*`, `http://localhost:*`, `http://127.0.0.1:*`.
+- O modelo nunca muda o projeto: ferramentas `propose_*` devolvem um ChangeSet; o usuário escolhe os itens, testa (aplica e volta) e aplica num único desfazer.
+- Sem modelo ligado, o chat entende pedidos diretos por palavras-chave e roda as mesmas ferramentas (funciona offline).
+- Envio para serviço na internet só com a permissão marcada; endereço local não precisa.
+
+## 2026-11-07 · Músicas e legendas
+- `packages/music`: biblioteca global (arquivo `biblioteca-musicas.json` na pasta do app), recomendação por tema com pontuação vinda da análise real; reaproveita o cache de análise dos projetos (mesmo hash).
+- `packages/subtitles`: legendas são clipes de texto comuns; importar SRT/ASS/VTT/LRC, puxar falas do episódio pelo trecho de origem do clipe, exportar SRT/VTT/LRC.

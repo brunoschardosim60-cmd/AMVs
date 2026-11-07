@@ -1,0 +1,17 @@
+{
+  "name": "@amv/assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@amv/analysis": "workspace:*",
+    "@amv/automv": "workspace:*",
+    "@amv/project": "workspace:*"
+  }
+}

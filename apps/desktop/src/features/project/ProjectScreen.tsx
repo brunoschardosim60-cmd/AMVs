@@ -1,5 +1,5 @@
 import type { Asset } from '@amv/project';
-import { AlertTriangle, AudioLines, Download, Film, FolderSearch, Image as ImageIcon, Plus, Redo2, Save, Search, Undo2, Wand2, History } from 'lucide-react';
+import { AlertTriangle, AudioLines, Download, Film, FolderSearch, Image as ImageIcon, Plus, Redo2, Save, Search, Undo2, Wand2, History, Bot } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { duration, fpsLabel, mainCodec, resolution, bytes } from '../../format';
 import { useApp, useSessionVersion } from '../../store';
@@ -9,6 +9,7 @@ import { EditorView } from '../editor/EditorView';
 import { ExportDialog } from '../export/ExportDialog';
 import { GenerateDialog } from '../automv/GenerateDialog';
 import { VersionsMenu } from '../automv/VersionsMenu';
+import { AssistantPanel } from '../assistant/AssistantPanel';
 import type { ProjectSession } from '../../core/session';
 
 type Filter = 'all' | Asset['kind'];
@@ -69,6 +70,7 @@ export function ProjectScreen() {
   const [exporting, setExporting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') {
@@ -191,6 +193,9 @@ export function ProjectScreen() {
             </IconButton>
             {versionsOpen && <VersionsMenu session={s} onClose={() => setVersionsOpen(false)} />}
           </div>
+          <Button icon={<Bot size={15} />} variant={assistantOpen ? 'primary' : undefined} onClick={() => setAssistantOpen((v) => !v)} title="Assistente: peça mudanças, ideias e análise do AMV">
+            Assistente
+          </Button>
           <Button icon={<Wand2 size={15} />} onClick={() => setGenerating(true)} title="Gerar um AMV automaticamente a partir da música e dos episódios">
             Gerar meu AMV
           </Button>
@@ -213,8 +218,11 @@ export function ProjectScreen() {
       )}
 
       {view === 'edit' ? (
-        <div className="min-h-0 flex-1">
-          <EditorView session={s} />
+        <div className="flex min-h-0 flex-1">
+          <div className="min-w-0 flex-1">
+            <EditorView session={s} />
+          </div>
+          {assistantOpen && <AssistantPanel session={s} onClose={() => setAssistantOpen(false)} />}
         </div>
       ) : (
       <div className="flex min-h-0 flex-1">

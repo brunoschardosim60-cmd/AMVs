@@ -10,7 +10,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp, useSessionVersion } from '../../store';
-import { useEditor } from './editorStore';
+import { ignoreEditorKey, useEditor } from './editorStore';
 import { Inspector } from './Inspector';
 import { AssetDragGhost, MediaPanel } from './MediaPanel';
 import { Preview, getPlayer, stepFrames } from './Preview';
@@ -21,7 +21,7 @@ const TIMELINE_MIN = 160;
 function useEditorShortcuts(session: ProjectSession) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable], [role="dialog"]')) return;
+      if (ignoreEditorKey(e)) return;
       const ed = useEditor.getState();
       const app = useApp.getState();
       const p = session.project;

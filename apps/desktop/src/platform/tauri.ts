@@ -1,6 +1,7 @@
 import type { FileSystem, ProcessRunner, RunOptions, RunResult, Tool } from '@amv/media';
 import { ALL_IMPORT_EXTENSIONS, joinPath } from '@amv/media';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { appCacheDir, appDataDir } from '@tauri-apps/api/path';
 import { ask, open, save } from '@tauri-apps/plugin-dialog';
 import * as tfs from '@tauri-apps/plugin-fs';
@@ -125,6 +126,12 @@ export function createTauriPlatform(): Platform {
       return data;
     },
     fileUrl: (p) => convertFileSrc(p),
+    secrets: {
+      get: (name) => invoke<string | null>('secret_get', { name }),
+      set: (name, value) => invoke<void>('secret_set', { name, value }),
+      delete: (name) => invoke<void>('secret_delete', { name }),
+    },
+    http: (url, init) => tauriFetch(url, { method: init.method, headers: init.headers, body: init.method === 'GET' ? undefined : init.body, signal: init.signal, connectTimeout: 15_000 }),
     reveal: (p) => revealItemInDir(p),
     openFile: (p) => openPath(p),
     async listFiles(dir, depth) {

@@ -22,7 +22,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
 import { IconButton } from '../../ui/controls';
-import { pxToUs, useEditor, usToPx, ZOOM_MAX, ZOOM_MIN } from './editorStore';
+import { ignoreEditorKey, pxToUs, useEditor, usToPx, ZOOM_MAX, ZOOM_MIN } from './editorStore';
 import { useStrip, useWaveform } from './mediaCache';
 import { pickLevel } from '@amv/media';
 
@@ -460,7 +460,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select')) return;
+      if (ignoreEditorKey(e)) return;
       if (e.key.toLowerCase() === 't' && !e.ctrlKey && !e.metaKey) addTextRef.current();
     };
     window.addEventListener('keydown', onKey);

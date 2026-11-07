@@ -24,6 +24,14 @@ export function nodePlatform(root: string, answers: Partial<Dialogs> = {}): Plat
     cacheDir: async () => join(root, 'cache'),
     dataDir: async () => join(root, 'data'),
     fileUrl: (p) => `file://${p}`,
+    secrets: (() => {
+      const m = new Map<string, string>();
+      return { get: async (k: string) => m.get(k) ?? null, set: async (k: string, v: string) => void m.set(k, v), delete: async (k: string) => void m.delete(k) };
+    })(),
+    http: async (url, init) => {
+      const r = await fetch(url, { method: init.method, headers: init.headers, body: init.method === 'GET' ? undefined : init.body, signal: init.signal });
+      return { ok: r.ok, status: r.status, text: () => r.text() };
+    },
     reveal: async () => undefined,
     openFile: async () => undefined,
     async listFiles(dir, depth) {
