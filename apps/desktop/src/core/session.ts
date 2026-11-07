@@ -165,8 +165,11 @@ export class ProjectSession {
   private changeCount = 0;
 
   /** Incrementa a cada mudança (projeto, fila de jobs, artefatos). A UI usa para re-renderizar. */
+  /** Só muda quando a UI é avisada: estável durante a renderização (senão o React entra em loop). */
+  private shownCount = 0;
+
   get changes(): number {
-    return this.changeCount;
+    return this.shownCount;
   }
 
   private notifyScheduled = false;
@@ -178,6 +181,7 @@ export class ProjectSession {
     this.notifyScheduled = true;
     setTimeout(() => {
       this.notifyScheduled = false;
+      this.shownCount = this.changeCount;
       for (const l of this.listeners) l();
     }, 0);
   }

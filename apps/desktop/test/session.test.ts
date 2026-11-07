@@ -240,3 +240,19 @@ describe('gerar AMV e versões', () => {
     s.dispose();
   });
 });
+
+describe('aviso à interface', () => {
+  it('o número que a tela lê não muda no meio da renderização, só quando a tela é avisada', async () => {
+    const s = await ProjectSession.create(nodePlatform(root), join(root, 'ui'), 'UI', {});
+    await new Promise((r) => setTimeout(r, 5));
+    let calls = 0;
+    s.subscribe(() => calls++);
+    const before = s.changes;
+    for (let i = 0; i < 50; i++) s.execute({ type: 'project.rename', name: `Nome ${i}` });
+    expect(s.changes).toBe(before); // estável enquanto o React desenha
+    await new Promise((r) => setTimeout(r, 5));
+    expect(s.changes).toBeGreaterThan(before);
+    expect(calls).toBe(1); // 50 mudanças = 1 aviso
+    s.dispose();
+  });
+});

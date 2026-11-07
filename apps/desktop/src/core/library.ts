@@ -26,8 +26,11 @@ export class MusicLibrary {
     this.queue.subscribe(() => this.emit());
   }
 
+  /** Estável durante a renderização; só muda quando a UI é avisada. */
+  private shown = 0;
+
   get changes(): number {
-    return this.version;
+    return this.shown;
   }
 
   subscribe(fn: () => void): () => void {
@@ -41,6 +44,7 @@ export class MusicLibrary {
     this.notifyScheduled = true;
     setTimeout(() => {
       this.notifyScheduled = false;
+      this.shown = this.version;
       for (const l of this.listeners) l();
     }, 0);
   }
