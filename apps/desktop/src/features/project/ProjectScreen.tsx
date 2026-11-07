@@ -1,5 +1,5 @@
 import type { Asset } from '@amv/project';
-import { AlertTriangle, AudioLines, Download, Film, FolderSearch, Image as ImageIcon, Plus, Redo2, Save, Search, Undo2 } from 'lucide-react';
+import { AlertTriangle, AudioLines, Download, Film, FolderSearch, Image as ImageIcon, Plus, Redo2, Save, Search, Undo2, Wand2, History } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { duration, fpsLabel, mainCodec, resolution, bytes } from '../../format';
 import { useApp, useSessionVersion } from '../../store';
@@ -7,6 +7,8 @@ import { Button, IconButton, Kbd, Progress, inputClass } from '../../ui/controls
 import { AssetDetail } from './AssetDetail';
 import { EditorView } from '../editor/EditorView';
 import { ExportDialog } from '../export/ExportDialog';
+import { GenerateDialog } from '../automv/GenerateDialog';
+import { VersionsMenu } from '../automv/VersionsMenu';
 import type { ProjectSession } from '../../core/session';
 
 type Filter = 'all' | Asset['kind'];
@@ -65,6 +67,8 @@ export function ProjectScreen() {
   const [editingName, setEditingName] = useState(false);
   const [view, setView] = useState<'edit' | 'media'>('edit');
   const [exporting, setExporting] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') {
@@ -180,6 +184,15 @@ export function ProjectScreen() {
           </Button>
           <Button icon={<Plus size={16} />} onClick={() => importMedia()} title="Importar mídia (Ctrl+I)">
             Importar
+          </Button>
+          <div className="relative">
+            <IconButton label={`Versões guardadas (${s.project.versions.length})`} onClick={() => setVersionsOpen((v) => !v)}>
+              <History size={16} />
+            </IconButton>
+            {versionsOpen && <VersionsMenu session={s} onClose={() => setVersionsOpen(false)} />}
+          </div>
+          <Button icon={<Wand2 size={15} />} onClick={() => setGenerating(true)} title="Gerar um AMV automaticamente a partir da música e dos episódios">
+            Gerar meu AMV
           </Button>
           <Button variant="primary" icon={<Download size={16} />} onClick={() => setExporting(true)} title="Exportar vídeo (Ctrl+E)">
             Exportar
@@ -301,6 +314,7 @@ export function ProjectScreen() {
         {selected && <AssetDetail asset={selected} session={s} />}
       </div>
       )}
+      {generating && <GenerateDialog session={s} onClose={() => setGenerating(false)} />}
       {exporting && <ExportDialog session={s} onClose={() => setExporting(false)} />}
     </div>
   );

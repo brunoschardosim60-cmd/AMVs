@@ -32,6 +32,8 @@ export type Command =
   | { type: 'marker.add'; marker: Marker; index?: number }
   | { type: 'marker.remove'; markerId: string }
   | { type: 'marker.update'; markerId: string; patch: Partial<Omit<Marker, 'id'>> }
+  | { type: 'version.add'; version: Project['versions'][number] }
+  | { type: 'version.remove'; versionId: string }
   | { type: 'batch'; label?: string; commands: Command[] };
 
 export class CommandError extends Error {
@@ -273,6 +275,17 @@ export function applyCommand(project: Project, command: Command): ApplyResult {
       };
     }
 
+    case 'version.add': {
+      if (project.versions.some((v) => v.id === command.version.id)) throw new CommandError('versão já existe');
+      return { project: { ...project, versions: [...project.versions, command.version] }, inverse: { type: 'version.remove', versionId: command.version.id } };
+    }
+
+    case 'version.remove': {
+      const index = findIndex(project.versions, command.versionId, 'versão');
+      const version = project.versions[index]!;
+      return { project: { ...project, versions: project.versions.filter((v) => v.id !== version.id) }, inverse: { type: 'version.add', version } };
+    }
+
     case 'batch': {
       // aplica em sequência; se qualquer um falhar, nada muda (projeto original é imutável)
       let current = project;
@@ -321,6 +334,10 @@ export function describeCommand(command: Command): string {
       return 'Remover marcador';
     case 'marker.update':
       return 'Editar marcador';
+    case 'version.add':
+      return 'Salvar versão';
+    case 'version.remove':
+      return 'Apagar versão';
     case 'batch':
       return command.label ?? `${command.commands.length} alterações`;
   }

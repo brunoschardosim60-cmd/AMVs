@@ -11,6 +11,7 @@ import {
   type MediaEnv,
 } from '@amv/media';
 import {
+  newId,
   createProject,
   matchMissingAssets,
   parseProject,
@@ -168,9 +169,17 @@ export class ProjectSession {
     return this.changeCount;
   }
 
+  private notifyScheduled = false;
+
+  /** Agrupa avisos à UI: muitas mudanças seguidas viram um só re-render (evita loop de update no React). */
   private emit(): void {
     this.changeCount++;
-    for (const l of this.listeners) l();
+    if (this.notifyScheduled) return;
+    this.notifyScheduled = true;
+    setTimeout(() => {
+      this.notifyScheduled = false;
+      for (const l of this.listeners) l();
+    }, 0);
   }
 
   execute(command: Command, label?: string): void {
@@ -437,6 +446,40 @@ export class ProjectSession {
       for (const id of matches.keys()) void this.process(this.project.assets.find((a) => a.id === id)!);
     }
     return { found: matches.size, stillMissing: missing.length - matches.size };
+  }
+
+  // ---------- versões (o que a geração substitui fica guardado)
+
+  private versionsDir(): string {
+    return `${this.path}.versoes`;
+  }
+
+  /** Guarda a timeline atual como versão (arquivo ao lado do projeto). */
+  async saveVersion(name: string): Promise<string | null> {
+    if (!this.project.clips.length) return null;
+    const id = newId('ver');
+    const dir = this.versionsDir();
+    await this.platform.fs.mkdir(dir);
+    const file = joinPath(dir, `${id}.amvproj`);
+    await writeAtomic(this.platform, file, serializeProject(this.project));
+    this.history.execute({ type: 'version.add', version: { id, name, createdAt: new Date().toISOString(), origin: 'user', file } }, `Guardar versão "${name}"`);
+    return id;
+  }
+
+  /** Volta a timeline de uma versão (clipes e marcadores). Um único desfazer. */
+  async restoreVersion(versionId: string): Promise<void> {
+    const v = this.project.versions.find((x) => x.id === versionId);
+    if (!v) throw new Error('versão não encontrada');
+    const parsed = parseProject(new TextDecoder().decode(await this.platform.fs.readFile(v.file)));
+    if (!parsed.ok) throw new Error(`a versão está corrompida: ${parsed.error}`);
+    const old = parsed.project;
+    const assets = new Set(this.project.assets.map((a) => a.id));
+    const tracks = new Set(this.project.tracks.map((t) => t.id));
+    const cmds: Command[] = [
+      ...this.project.clips.map((c) => ({ type: 'clip.remove' as const, clipId: c.id })),
+      ...old.clips.filter((c) => tracks.has(c.trackId) && (!c.assetId || assets.has(c.assetId))).map((c) => ({ type: 'clip.add' as const, clip: c })),
+    ];
+    this.history.transaction(`Voltar para "${v.name}"`, cmds);
   }
 
   removeAsset(assetId: string): void {

@@ -181,3 +181,31 @@ describe('outros estilos', () => {
     expect(on('Legendas').every((c) => (c.text?.text.split(' ').length ?? 0) <= 3)).toBe(true);
   });
 });
+
+describe('poucas cenas', () => {
+  it('uma cena só: ainda preenche o vídeo inteiro, avisando uma vez', () => {
+    const p = project();
+    const r = generateAmv(p, music(), [episode('ep1', 1, 90)], { ...base, durationS: 10, useSpeech: false });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const v1 = out.clips.filter((c) => c.trackId === out.tracks.find((t) => t.name === 'V1')!.id).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+    expect(v1.length).toBeGreaterThan(3);
+    expect(clipEndUs(v1.at(-1)!)).toBeGreaterThanOrEqual(9.9 * S);
+    for (let i = 1; i < v1.length; i++) expect(v1[i]!.timelineStartUs).toBe(clipEndUs(v1[i - 1]!));
+    expect(r.warnings.filter((w) => w.includes('repetem'))).toHaveLength(1);
+  });
+});
+
+describe('cenas curtas', () => {
+  it('slots longos da intro são divididos na batida: sem buraco antes do drop', () => {
+    const p = project();
+    const ep = episode('ep1', 40, 5);
+    ep.analysis.shots = ep.analysis.shots.map((sh) => ({ ...sh, endS: sh.startS + 1.2 }));
+    const r = generateAmv(p, music(), [ep], { ...base, style: 'emocional', durationS: 30, useSpeech: false });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const v1 = out.clips.filter((c) => c.trackId === out.tracks.find((t) => t.name === 'V1')!.id).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+    expect(v1[0]!.timelineStartUs).toBe(0);
+    for (let i = 1; i < v1.length; i++) expect(v1[i]!.timelineStartUs).toBe(clipEndUs(v1[i - 1]!));
+    expect(clipEndUs(v1.at(-1)!)).toBeGreaterThanOrEqual(29.9 * S);
+    for (const c of v1) expect((c.timelineStartUs / S) % 0.5).toBeCloseTo(0, 5);
+  });
+});

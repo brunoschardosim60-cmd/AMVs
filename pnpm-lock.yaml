@@ -23,6 +23,9 @@ importers:
       '@amv/analysis':
         specifier: workspace:*
         version: link:../../packages/analysis
+      '@amv/automv':
+        specifier: workspace:*
+        version: link:../../packages/automv
       '@amv/media':
         specifier: workspace:*
         version: link:../../packages/media

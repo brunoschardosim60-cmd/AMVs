@@ -173,6 +173,14 @@ describe('fila de jobs', () => {
     const seen: (number | null)[] = [];
     q.subscribe((j) => j.status === 'running' && seen.push(j.progress));
     await q.enqueue({ key: 'p', kind: 'proxy', label: 'p', run: async ({ report }) => { report(0.5); report(0.3); report(0.8); } }).promise;
-    expect(seen).toEqual([0, 0.5, 0.5, 0.8]);
+    expect(seen).toEqual([0, 0.5, 0.8]);
+  });
+
+  it('não inunda a UI com avisos de progresso minúsculos', async () => {
+    const q = new JobQueue(1);
+    let n = 0;
+    q.subscribe((j) => j.status === 'running' && n++);
+    await q.enqueue({ key: 'p', kind: 'analysis', label: 'p', run: async ({ report }) => { for (let i = 0; i <= 10_000; i++) report(i / 10_000); } }).promise;
+    expect(n).toBeLessThan(220);
   });
 });

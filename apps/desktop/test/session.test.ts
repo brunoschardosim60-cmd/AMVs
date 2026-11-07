@@ -211,3 +211,31 @@ describe('análise automática', () => {
     expect(session!.assetRuntime(music!.id).music).toBeTruthy();
   });
 });
+
+describe('gerar AMV e versões', () => {
+  it('gera com mídia analisada, guarda a anterior como versão e volta para ela', async () => {
+    const { generateAmv } = await import('@amv/automv');
+    const p = nodePlatform(root);
+    const s = await ProjectSession.create(p, join(root, 'gen'), 'Gen', {});
+    copyFileSync(join(FIX, 'click_120bpm.wav'), join(media, 'click.wav'));
+    await s.importFiles([join(media, 'click.wav'), join(media, 'hevc10_23976.mkv')]);
+    for (let i = 0; i < 600 && s.project.assets.some((a) => !['done', 'error'].includes(s.assetRuntime(a.id).analysis ?? '')); i++) await new Promise((r) => setTimeout(r, 25));
+    const [m, e] = s.project.assets;
+    const opts = { style: 'hype' as const, intensity: 2 as const, durationS: 8, musicStartS: null, useSpeech: true, useEffects: true, showText: true, seed: 1 };
+    const run = (seed: number) =>
+      generateAmv(s.project, { assetId: m!.id, name: m!.name, analysis: s.assetRuntime(m!.id).music! }, [{ assetId: e!.id, name: e!.name, analysis: s.assetRuntime(e!.id).episode!, hasAudio: true }], { ...opts, seed });
+    const r1 = run(1); 
+    s.history.transaction("Gerar", r1.commands);
+    expect(s.project.clips.length).toBeGreaterThan(2);
+    const first = s.project.clips.map((c) => c.id).sort();
+    const vid = await s.saveVersion('Primeira');
+    expect(vid).toBeTruthy();
+    s.history.transaction('Gerar 2', run(2).commands);
+    expect(s.project.clips.map((c) => c.id).sort()).not.toEqual(first);
+    await s.restoreVersion(vid!);
+    expect(s.project.clips.map((c) => c.id).sort()).toEqual(first);
+    s.undo();
+    expect(s.project.clips.map((c) => c.id).sort()).not.toEqual(first);
+    s.dispose();
+  });
+});

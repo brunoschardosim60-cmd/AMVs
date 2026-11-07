@@ -324,6 +324,7 @@ export function generateAmv(project: Project, music: MusicInput, episodes: Episo
   }
 
   // ---------------------------------------------------------------- cortes na batida
+  const REPEAT_WARNING = 'Poucas cenas para o tamanho do vídeo: algumas se repetem. Importe mais episódios.';
   const slots = makeSlots(m, range, style, opts.intensity, opts.lyrics);
   const candidates: Candidate[] = [];
   for (const ep of episodes) {
@@ -349,7 +350,28 @@ export function generateAmv(project: Project, music: MusicInput, episodes: Episo
     else if (sl.startS < speechUsed.atS - 0.2) visualSlots.push({ ...sl, endS: speechUsed.atS });
   }
 
-  for (const sl of visualSlots) {
+  // cenas curtas demais para um slot longo (intro lenta, episódio com cortes rápidos):
+  // divide o slot na batida mais perto do meio, para nunca deixar buraco
+  const longest = Math.max(...candidates.map((c) => c.shot.endS - c.shot.startS));
+  const fitSlots: Slot[] = [];
+  const splitFit = (sl: Slot) => {
+    const len = sl.endS - sl.startS;
+    if (len * 0.6 <= longest || len < 0.5) return void fitSlots.push(sl);
+    const mid = (sl.startS + sl.endS) / 2;
+    let cut = mid;
+    let bestD = Infinity;
+    for (const mb of m.beats) {
+      const b = mb - range[0];
+      if (b <= sl.startS + 0.25 || b >= sl.endS - 0.25) continue;
+      const d = Math.abs(b - mid);
+      if (d < bestD) [bestD, cut] = [d, b];
+    }
+    splitFit({ ...sl, endS: cut });
+    splitFit({ ...sl, startS: cut, isDrop: false, word: undefined });
+  };
+  for (const sl of visualSlots) splitFit(sl);
+
+  for (const sl of fitSlots) {
     const len = sl.endS - sl.startS;
     const target = Math.min(1, Math.max(0, lowI + (highI - lowI) * sl.energy + boost + (sl.isDrop ? 0.15 : 0)));
     let best: { c: Candidate; score: number; srcIn: number } | null = null;
@@ -378,13 +400,15 @@ export function generateAmv(project: Project, music: MusicInput, episodes: Episo
       }
     }
     if (!best) {
-      // acabaram as cenas novas: reaproveita a melhor já usada (nunca a anterior)
-      warnings.push('Poucas cenas para o tamanho do vídeo: algumas se repetem. Importe mais episódios.');
+      // acabaram as cenas novas: reaproveita (evita a anterior quando há outra opção)
+      if (!warnings.includes(REPEAT_WARNING)) warnings.push(REPEAT_WARNING);
       used.clear();
-      if (prev) used.add(prev.id);
-      const c = candidates.find((x) => !used.has(x.id) && x.shot.endS - x.shot.startS >= len * 0.6);
+      const fits = candidates.filter((x) => x.shot.endS - x.shot.startS >= len * 0.6);
+      const c = fits.find((x) => x.id !== prev?.id) ?? fits[0];
       if (!c) continue;
-      best = { c, score: 0, srcIn: c.shot.startS };
+      // outro pedaço da mesma cena, para não parecer congelado
+      const room = Math.max(0, c.shot.endS - c.shot.startS - len);
+      best = { c, score: 0, srcIn: c.shot.startS + room * rand() };
     }
     const { c } = best;
     const shotLen = c.shot.endS - c.shot.startS;

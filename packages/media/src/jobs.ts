@@ -173,7 +173,12 @@ export class JobQueue {
       report: (fraction, detail) => {
         if (j.snap.status !== 'running') return;
         // progresso nunca regride na UI
-        j.snap.progress = fraction === null ? null : Math.max(j.snap.progress ?? 0, Math.min(1, fraction));
+        const before = j.snap.progress;
+        const next = fraction === null ? null : Math.max(before ?? 0, Math.min(1, fraction));
+        const detailChanged = detail !== undefined && detail !== j.snap.detail;
+        // FFmpeg manda centenas de pedaços por segundo: só avisa a UI a cada 0,5%
+        if (!detailChanged && next !== null && before !== null && next - before < 0.005) return;
+        j.snap.progress = next;
         if (detail !== undefined) j.snap.detail = detail;
         this.emit(j);
       },

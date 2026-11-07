@@ -8,6 +8,15 @@ import { Command } from '@tauri-apps/plugin-shell';
 import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
 import type { Platform } from './types';
 
+/** O plugin entrega string, Uint8Array ou (para bytes que não são UTF-8) um array de números. */
+function toBytes(data: unknown): Uint8Array {
+  if (typeof data === 'string') return new TextEncoder().encode(data);
+  if (data instanceof Uint8Array) return data;
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (Array.isArray(data)) return Uint8Array.from(data as number[]);
+  return new TextEncoder().encode(String(data ?? ''));
+}
+
 /** FFmpeg/FFprobe empacotados como sidecar (src-tauri/binaries). */
 const tauriRunner: ProcessRunner = {
   async run(tool: Tool, args: string[], options: RunOptions = {}): Promise<RunResult> {
@@ -18,19 +27,21 @@ const tauriRunner: ProcessRunner = {
       : Command.sidecar(`binaries/${tool}`, args);
     let stdout = '';
     let stderr = '';
-    const decoder = new TextDecoder();
-    cmd.stdout.on('data', (data: string | Uint8Array) => {
+    // nomes de arquivo em Windows-1252/Shift-JIS não são UTF-8 válido: não pode quebrar
+    const decoder = new TextDecoder('utf-8', { fatal: false });
+    const asText = (data: unknown) => (typeof data === 'string' ? data : decoder.decode(toBytes(data)));
+    cmd.stdout.on('data', (data: unknown) => {
       if (raw) {
-        options.onStdoutBytes!(typeof data === 'string' ? new TextEncoder().encode(data) : data);
+        options.onStdoutBytes!(toBytes(data));
         return;
       }
       // sem "raw", o plugin entrega uma linha por evento, sem a quebra
-      const text = (typeof data === 'string' ? data : decoder.decode(data)) + '\n';
+      const text = asText(data) + '\n';
       stdout += text;
       options.onStdout?.(text);
     });
-    cmd.stderr.on('data', (data: string | Uint8Array) => {
-      const text = (typeof data === 'string' ? data : decoder.decode(data)) + '\n';
+    cmd.stderr.on('data', (data: unknown) => {
+      const text = asText(data) + '\n';
       stderr = (stderr + text).slice(-64_000);
       options.onStderr?.(text);
     });
