@@ -1,4 +1,4 @@
-import { clipEndUs, defaultParams, EFFECTS, formatTimecode, newId, param, sourceDurationUs, TRANSITIONS, trimClip, type Clip, type Command, type EffectId, type Project } from '@amv/project';
+import { clipEndUs, defaultParams, EFFECTS, fillScale, formatTimecode, newId, param, sourceDurationUs, TRANSITIONS, trimClip, type Clip, type Command, type EffectId, type Project } from '@amv/project';
 import { Eye, EyeOff, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { ProjectSession } from '../../core/session';
@@ -158,6 +158,7 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
 
         {visual && (
           <Section title="Transformar" onReset={() => patch('Redefinir transformação', { transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: tr.opacity, crop: { left: 0, top: 0, right: 0, bottom: 0 } } })}>
+            <FitButtons session={session} project={project} ids={[clip.id]} />
             <NumField label="Posição X" suffix="px" value={tr.x} step={1} digits={0} onCommit={(v) => patch('Posição', { transform: { ...tr, x: v } })} />
             <NumField label="Posição Y" suffix="px" value={tr.y} step={1} digits={0} onCommit={(v) => patch('Posição', { transform: { ...tr, y: v } })} />
             <NumField label="Escala" suffix="%" value={tr.scale * 100} min={1} max={1000} step={1} digits={1} onCommit={(v) => patch('Escala', { transform: { ...tr, scale: v / 100 } })} />
@@ -368,6 +369,8 @@ export function Inspector({ session, project, selectedAssetId }: { session: Proj
       <aside className="w-[300px] shrink-0 border-l border-line bg-panel p-4 text-sm" aria-label="Propriedades">
         <p className="font-semibold">{clips.length} clipes selecionados</p>
         <p className="mt-1 text-xs text-muted">Arraste para mover juntos, Delete para excluir, Ctrl+C para copiar.</p>
+        <p className="mt-3 mb-1 text-xs font-semibold text-ink-soft">Enquadramento de todos</p>
+        <FitButtons session={session} project={project} ids={clips.map((c) => c.id)} />
         <div className="-mx-4 mt-3">
           <AskAi />
         </div>
@@ -448,6 +451,30 @@ function AskAi() {
           ✦ {q}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** Encaixar (inteiro, com faixas pretas) ou Preencher (ocupa o quadro, corta as sobras). */
+function FitButtons({ session, project, ids }: { session: ProjectSession; project: Project; ids: string[] }) {
+  const clips = project.clips.filter((c) => ids.includes(c.id) && c.assetId);
+  const withAsset = clips.map((c) => ({ c, a: project.assets.find((x) => x.id === c.assetId) })).filter((x) => x.a?.probe?.video);
+  if (!withAsset.length) return null;
+  const apply = (mode: 'fit' | 'fill') =>
+    session.history.transaction(
+      mode === 'fill' ? 'Preencher a tela' : 'Encaixar na tela',
+      withAsset.map(({ c, a }) => ({ type: 'clip.update' as const, clipId: c.id, patch: { transform: { ...c.transform, x: 0, y: 0, scale: mode === 'fill' ? fillScale(project, a!) : 1 } } })),
+    );
+  const allFill = withAsset.every(({ c, a }) => Math.abs(c.transform.scale - fillScale(project, a!)) < 0.001);
+  const allFit = withAsset.every(({ c }) => c.transform.scale === 1);
+  return (
+    <div className="mb-2 grid grid-cols-2 gap-1 rounded-control bg-base p-1">
+      <button type="button" title="Mostra o vídeo inteiro (pode sobrar faixa preta)" onClick={() => apply('fit')} className={`rounded-[4px] py-1 text-xs ${allFit ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
+        Encaixar
+      </button>
+      <button type="button" title="Ocupa a tela toda (corta as sobras) — ideal para vídeo horizontal em projeto vertical" onClick={() => apply('fill')} className={`rounded-[4px] py-1 text-xs ${allFill ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
+        Preencher
+      </button>
     </div>
   );
 }

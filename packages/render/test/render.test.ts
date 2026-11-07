@@ -253,3 +253,29 @@ describe('auxiliares de áudio', () => {
     expect(gainCurve([{ atUs: 0, value: 0 }, { atUs: S, value: -20 }])).toContain('if(lt(t,1)');
   });
 });
+
+describe('projeto vertical com episódio horizontal', () => {
+  async function topPixel(file: string): Promise<[number, number, number]> {
+    const chunks: Uint8Array[] = [];
+    // faixa perto do topo (10% da altura), no centro
+    await runner.run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-ss', '0.5', '-i', file, '-frames:v', '1', '-vf', 'crop=8:8:(iw-8)/2:ih*0.1,scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { onStdoutBytes: (b) => chunks.push(b) });
+    const b = chunks[0]!;
+    return [b[0]!, b[1]!, b[2]!];
+  }
+  it('"Preencher" ocupa o quadro todo na exportação; "Encaixar" deixa faixa preta', async () => {
+    const { fillScale } = await import('@amv/project');
+    const a = await asset(join(dir, 'rg.mp4'), 'rg');
+    let p = createProject({ name: 'v', settings: { width: 180, height: 320, fps: { num: 30, den: 1 } } });
+    p = applyCommand(p, { type: 'asset.add', asset: a }).project;
+    const v1 = track(p, 'V1');
+    const fill = fillScale(p, a);
+    const mk = async (scale: number, name: string) => {
+      const q = applyCommand(p, { type: 'clip.add', clip: clip(v1, 'rg', 0, 1 * S, 0, { transform: { x: 0, y: 0, scale, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } } }) }).project;
+      const out = join(dir, `${name}.mp4`);
+      await renderProject(q, out, { width: 180, height: 320, enc: { codec: 'h264', quality: 0 }, audioBitrateK: 128 }, env(q, name), () => undefined);
+      return topPixel(out);
+    };
+    expect(near(await mk(fill, 'vert-fill'), RED)).toBe(true);
+    expect(near(await mk(1, 'vert-fit'), BLACK)).toBe(true);
+  });
+});

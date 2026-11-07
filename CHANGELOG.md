@@ -1,5 +1,11 @@
 # Novidades
 
+## 0.5.5
+
+- Preview no formato certo: projeto vertical (ou quadrado) aparece inteiro na tela, sem cortar.
+- Episódio horizontal em projeto vertical já entra **preenchendo** a tela (sem faixas pretas enormes). Nas propriedades do clipe há **Encaixar / Preencher**; com vários clipes selecionados (Ctrl+A) arruma todos de uma vez.
+- Preview mais leve: reaproveita o vídeo entre os cortes do mesmo episódio (antes abria um por clipe).
+
 ## 0.5.4
 
 Correção: a análise de episódios longos parava em 33% ("Analisando cenas e falas"). Agora o FFmpeg grava os dados num arquivo temporário em vez de mandar mais de 1 milhão de mensagens para a tela.

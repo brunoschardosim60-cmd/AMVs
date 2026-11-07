@@ -209,3 +209,15 @@ describe('cenas curtas', () => {
     for (const c of v1) expect((c.timelineStartUs / S) % 0.5).toBeCloseTo(0, 5);
   });
 });
+
+describe('formato do projeto', () => {
+  it('projeto vertical: cenas do episódio horizontal preenchem o quadro', () => {
+    let p = project();
+    p = applyCommand(p, { type: 'settings.update', patch: { width: 1080, height: 1920 } }).project;
+    const r = generateAmv(p, music(), [episode('ep1', 150, 3)], { ...base, durationS: 10, useSpeech: false });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const v1 = out.tracks.find((t) => t.name === 'V1')!.id;
+    const scales = new Set(out.clips.filter((c) => c.trackId === v1).map((c) => c.transform.scale));
+    expect([...scales]).toEqual([Math.round(((1920 / 1080) / (1080 / 1920)) * 10000) / 10000]);
+  });
+});

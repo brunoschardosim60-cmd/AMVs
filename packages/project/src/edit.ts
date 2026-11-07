@@ -9,7 +9,7 @@
  */
 import { applyCommand, type Command } from './commands.js';
 import { newId } from './factory.js';
-import type { Clip, Project, Track } from './schema.js';
+import type { Asset, Clip, Project, Track } from './schema.js';
 import { clipEndUs } from './timeline.js';
 import type { Us } from './time.js';
 
@@ -353,6 +353,31 @@ export function duplicateClips(project: Project, ids: string[]): { commands: Com
 
 // ---------------------------------------------------------------- inserir mídia
 
+/**
+ * Escala que faz a mídia PREENCHER o quadro do projeto (corta as sobras), partindo do
+ * "encaixar" que o preview e a exportação usam (escala 1 = encaixar inteiro).
+ */
+export function fillScale(project: Project, asset: Asset): number {
+  const v = asset.probe?.video;
+  if (!v?.width || !v.height) return 1;
+  const P = project.settings;
+  const contain = Math.min(P.width / v.width, P.height / v.height);
+  const cover = Math.max(P.width / v.width, P.height / v.height);
+  return Math.round((cover / contain) * 10000) / 10000;
+}
+
+/**
+ * Escala inicial de um clipe: se o formato for diferente do projeto (episódio horizontal
+ * num projeto vertical ou quadrado), já entra preenchendo — senão sobram faixas pretas enormes.
+ */
+export function defaultScale(project: Project, asset: Asset): number {
+  const v = asset.probe?.video;
+  if (!v?.width || !v.height) return 1;
+  const P = project.settings;
+  const orient = (w: number, h: number) => (w > h * 1.05 ? 'h' : h > w * 1.05 ? 'v' : 'q');
+  return orient(P.width, P.height) !== orient(v.width, v.height) ? fillScale(project, asset) : 1;
+}
+
 export interface InsertOptions {
   assetId: string;
   trackId: string;
@@ -385,7 +410,7 @@ export function insertAsset(project: Project, o: InsertOptions): Command[] {
     sourceInUs: sIn,
     sourceOutUs: sOut,
     speed: 1,
-    transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
+    transform: { x: 0, y: 0, scale: track.kind === 'video' ? defaultScale(project, asset) : 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
     audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, streamIndex: null },
     effects: [],
     transitionIn: null,

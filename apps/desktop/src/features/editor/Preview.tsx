@@ -77,6 +77,24 @@ export function Preview({ session, project }: { session: ProjectSession; project
     else player.pause();
   }, [player, playing]);
 
+  // tamanho na tela: cabe na caixa mantendo a proporção do projeto (vertical, quadrado, 16:9)
+  useEffect(() => {
+    const box = boxRef.current!;
+    const cv = canvasRef.current!;
+    const fit = () => {
+      const pad = 24;
+      const bw = Math.max(1, box.clientWidth - pad);
+      const bh = Math.max(1, box.clientHeight - pad);
+      const s = Math.min(bw / P.width, bh / P.height);
+      cv.style.width = `${Math.floor(P.width * s)}px`;
+      cv.style.height = `${Math.floor(P.height * s)}px`;
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, [P.width, P.height]);
+
   // resolução interna do canvas = projeto × escala do preview
   useEffect(() => {
     const cv = canvasRef.current!;
@@ -95,8 +113,7 @@ export function Preview({ session, project }: { session: ProjectSession; project
       <div ref={boxRef} className="grid min-h-0 flex-1 place-items-center overflow-hidden bg-[#0e0f12] p-3">
         <canvas
           ref={canvasRef}
-          className="max-h-full max-w-full bg-black shadow-lg shadow-black/40"
-          style={{ aspectRatio: `${P.width} / ${P.height}` }}
+          className="bg-black shadow-lg shadow-black/40"
           onClick={() => setPlaying(!playing)}
         />
       </div>

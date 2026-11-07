@@ -291,3 +291,19 @@ describe('encaixe', () => {
     expect(snapPoints(q, 0, new Set(['a'])).some((x) => x.atUs === 2 * S)).toBe(false);
   });
 });
+
+import { defaultScale, fillScale } from '../src/edit.js';
+import { createProject } from '../src/factory.js';
+describe('encaixar × preencher', () => {
+  const asset = (w: number, h: number) => ({ id: 'a', name: 'a', path: '', hash: '', kind: 'video' as const, status: 'ok' as const, error: null, importedAt: '', tags: [], favorite: false, probe: { container: '', durationUs: 1, sizeBytes: 1, bitRate: null, video: { codec: 'h264', profile: null, width: w, height: h, pixFmt: null, bitDepth: 8, fps: null, avgFps: null, vfr: false, frameCount: null }, audio: [], subtitles: [], tags: {} } });
+  const proj = (w: number, h: number) => createProject({ name: 't', settings: { width: w, height: h, fps: { num: 30, den: 1 } } });
+  it('episódio 16:9 num projeto vertical entra preenchendo (sem faixas pretas)', () => {
+    expect(fillScale(proj(1080, 1920), asset(1920, 1080))).toBeCloseTo((1920 / 1080) / (1080 / 1920), 3);
+    expect(defaultScale(proj(1080, 1920), asset(1920, 1080))).toBeGreaterThan(3);
+    expect(defaultScale(proj(1080, 1080), asset(1920, 1080))).toBeCloseTo(1920 / 1080, 3);
+  });
+  it('mesmo formato (ou parecido) continua encaixado', () => {
+    expect(defaultScale(proj(1920, 1080), asset(1920, 1080))).toBe(1);
+    expect(defaultScale(proj(1920, 1080), asset(1440, 1080))).toBe(1);
+  });
+});

@@ -29,7 +29,13 @@ const PRELOAD_US = 2_000_000;
 const DRIFT_PLAYING_S = 0.12;
 /** Pausado: busca o quadro exato se estiver a mais de meio quadro. */
 const DRIFT_PAUSED_S = 0.02;
-const MAX_SLOTS = 24;
+/**
+ * Poucos elementos de mídia vivos: cada um mantém uma conexão aberta com o proxy, e o
+ * WebView2 só abre ~6 por endereço. Com 24 vivos, os novos ficavam esperando e o preview preto.
+ */
+const MAX_SLOTS = 6;
+/** Elemento fora do playhead há mais que isso é fechado (libera a conexão). */
+const IDLE_RELEASE_MS = 1500;
 
 export function sourceTimeS(clip: Clip, atUs: number): number {
   return (clip.sourceInUs + (atUs - clip.timelineStartUs) * clip.speed) / 1e6;
@@ -174,6 +180,16 @@ export class Player {
       return existing;
     }
     if (existing) this.release(existing);
+    // reaproveita um elemento da mesma mídia que não está em uso neste quadro (mesmo episódio = mesmo proxy)
+    for (const [id, s] of this.slots) {
+      if (s.url === url && s.kind === kind && !this.frameUsed.has(id)) {
+        this.slots.delete(id);
+        s.clipId = clip.id;
+        s.lastUsed = performance.now();
+        this.slots.set(clip.id, s);
+        return s;
+      }
+    }
     let el: Slot['el'];
     if (kind === 'image') {
       const img = new Image();
@@ -242,10 +258,14 @@ export class Player {
     for (const l of this.listeners) l(this.timeUs);
   };
 
+  /** Clipes que já pegaram um elemento neste quadro (não podem ser reaproveitados). */
+  private frameUsed = new Set<string>();
+
   private renderAt(t: number): void {
     const ctx = this.ctx;
     const p = this.project;
     const used = new Set<string>();
+    this.frameUsed = used;
     const anySolo = p.tracks.some((x) => x.solo);
 
     // áudio: todas as trilhas de áudio
@@ -282,8 +302,10 @@ export class Player {
       const track = visual[i]!;
       if (track.hidden) continue;
       const trackClips = p.clips.filter((c) => c.trackId === track.id);
+      // pré-carrega só o PRÓXIMO clipe da trilha (com cortes rápidos, seriam vários)
+      const next = trackClips.filter((c) => c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t).sort((a, b) => a.timelineStartUs - b.timelineStartUs)[0];
       for (const c of trackClips) {
-        const near = t >= c.timelineStartUs - PRELOAD_US && t < clipEndUs(c);
+        const near = (t >= c.timelineStartUs && t < clipEndUs(c)) || c === next;
         if (!near) continue;
         const active = t >= c.timelineStartUs;
         const localS = (t - c.timelineStartUs) / 1e6;
@@ -309,11 +331,15 @@ export class Player {
       }
     }
 
-    // pausa o que não está mais perto do playhead
+    // pausa o que não está mais perto do playhead; fecha o que ficou parado (libera a conexão)
+    const now = performance.now();
     for (const [id, s] of this.slots) {
-      if (!used.has(id) && s.kind !== 'image') {
-        const m = s.el as HTMLMediaElement;
-        if (!m.paused) m.pause();
+      if (used.has(id) || s.kind === 'image') continue;
+      const m = s.el as HTMLMediaElement;
+      if (!m.paused) m.pause();
+      if (now - s.lastUsed > IDLE_RELEASE_MS) {
+        this.release(s);
+        this.slots.delete(id);
       }
     }
   }

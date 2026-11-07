@@ -4,7 +4,7 @@
  * cada clipe com `origin: 'ai'` e um `reason` legível.
  */
 import type { Cue, EpisodeAnalysis, MusicAnalysis, Shot, SpeechSegment } from '@amv/analysis';
-import { newId, type Clip, type Command, type EffectInstance, type Project, type Track } from '@amv/project';
+import { defaultScale, newId, type Clip, type Command, type EffectInstance, type Project, type Track } from '@amv/project';
 import { styleDef, type StyleDef, type StyleId } from './styles.js';
 
 export interface EpisodeInput {
@@ -238,6 +238,18 @@ function textClip(trackId: string, startS: number, durS: number, text: string, H
 
 /** Gera a montagem. Não mexe em nada: devolve os comandos para aplicar (um único desfazer). */
 export function generateAmv(project: Project, music: MusicInput, episodes: EpisodeInput[], opts: GenerateOptions): GenerateResult {
+  const r = generateInner(project, music, episodes, opts);
+  // episódio horizontal em projeto vertical/quadrado: preenche o quadro em vez de faixas pretas
+  const video = new Set(project.tracks.filter((t) => t.kind === 'video').map((t) => t.id));
+  for (const c of r.commands) {
+    if (c.type !== 'clip.add' || !c.clip.assetId || !video.has(c.clip.trackId)) continue;
+    const asset = project.assets.find((a) => a.id === c.clip.assetId);
+    if (asset) c.clip.transform = { ...c.clip.transform, scale: defaultScale(project, asset) };
+  }
+  return r;
+}
+
+function generateInner(project: Project, music: MusicInput, episodes: EpisodeInput[], opts: GenerateOptions): GenerateResult {
   const style = styleDef(opts.style);
   const warnings: string[] = [];
   const rand = rng(opts.seed);
