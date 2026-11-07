@@ -1,6 +1,6 @@
 [package]
 name = "amv-studio"
-version = "0.1.1"
+version = "0.1.2"
 description = "AMV Studio — editor de Anime Music Videos"
 authors = ["Bruno"]
 edition = "2021"
