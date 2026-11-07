@@ -35,5 +35,19 @@ Fase atual: **1 — Fundação** — concluída. CI verde no Windows (FFmpeg 9.0
 | Atualização automática (plugin updater, assinatura minisign) | feito | Release v0.1.1 publicada com `latest.json` e `.sig` |
 | Publicar versão: `node scripts/release.mjs x.y.z --push` (branch `release`) | feito | workflow Release verde |
 
-## Próximo: Fase 2 — Editor
-Timeline multipista, preview sincronizado, cortes, propriedades, snapping.
+## Fase 2 — Editor (em andamento)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Operações: inserir, dividir, aparar, mover em grupo com sobrescrita, excluir (com/sem fechar buraco), copiar/colar/duplicar, encaixe | feito | 18 testes em `packages/project/test/edit.test.ts` |
+| Timeline: régua, trilhas, travar/ocultar/silenciar, zoom (Ctrl+roda, botões, "ajustar tudo"), miniaturas e forma de onda nos clipes | feito | app real no Linux (Xvfb) |
+| Arrastar mídia da biblioteca para a timeline (eventos de ponteiro, não HTML5 DnD) | feito | app real; bug de clipe duplicado achado e corrigido |
+| Arrastar clipes (entre trilhas do mesmo tipo), aparar pelas bordas, encaixe com linha guia | feito | app real |
+| Preview: player sincronizado com proxies, composição em canvas (posição, escala, rotação, opacidade, recorte, texto) | feito | Chromium headless com vídeo de tempo gravado: quadro certo em 3 posições, incluindo tocando |
+| Painel de propriedades: tempo, velocidade, deslizar origem, transformar, volume e fades | feito | app real |
+| Atalhos: Espaço, S, Delete (Shift = fechar buraco), Ctrl+C/X/V/D/A, setas (Shift = 10 quadros), Home/End, +/− | feito | app real (parcial) |
+| Preview de vídeo no Windows (WebView2) | pendente | depende do teste do Bruno |
+
+### Limitações da Fase 2
+- Volume acima de 0 dB e escolha da faixa de áudio (episódios com japonês/português) chegam com o mixer na Fase 3: o preview usa a primeira faixa do proxy.
+- Adicionar texto pela interface ainda não existe (o preview já desenha clipes de texto).

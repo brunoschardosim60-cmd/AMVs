@@ -5,6 +5,7 @@ import { duration, fpsLabel, mainCodec, resolution, bytes } from '../../format';
 import { useApp, useSessionVersion } from '../../store';
 import { Button, IconButton, Kbd, Progress, inputClass } from '../../ui/controls';
 import { AssetDetail } from './AssetDetail';
+import { EditorView } from '../editor/EditorView';
 import type { ProjectSession } from '../../core/session';
 
 type Filter = 'all' | Asset['kind'];
@@ -61,6 +62,7 @@ export function ProjectScreen() {
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const [editingName, setEditingName] = useState(false);
+  const [view, setView] = useState<'edit' | 'media'>('edit');
 
   const project = session!.project;
   const assets = useMemo(
@@ -133,6 +135,25 @@ export function ProjectScreen() {
           {project.settings.width}×{project.settings.height}, {fpsLabel(project.settings.fps)} fps
         </span>
         <span className={`text-xs ${s.dirty ? 'text-warn' : 'text-muted'}`}>{s.dirty ? 'Alterações não salvas' : 'Salvo'}</span>
+        <div className="ml-4 flex gap-0.5 rounded-control bg-base p-0.5 text-xs" role="tablist" aria-label="Modo">
+          {(
+            [
+              ['edit', 'Edição'],
+              ['media', 'Mídia'],
+            ] as const
+          ).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              role="tab"
+              aria-selected={view === k}
+              onClick={() => setView(k)}
+              className={`rounded-[4px] px-3 py-1 ${view === k ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
         <div className="ml-auto flex items-center gap-1">
           <IconButton label={s.history.undoLabel ? `Desfazer: ${s.history.undoLabel} (Ctrl+Z)` : 'Nada para desfazer'} disabled={!s.history.canUndo} onClick={() => s.undo()}>
@@ -163,6 +184,11 @@ export function ProjectScreen() {
         </div>
       )}
 
+      {view === 'edit' ? (
+        <div className="min-h-0 flex-1">
+          <EditorView session={s} />
+        </div>
+      ) : (
       <div className="flex min-h-0 flex-1">
         <section className="flex min-w-0 flex-1 flex-col" aria-label="Mídia do projeto">
           <div className="flex shrink-0 items-center gap-3 px-5 py-3">
@@ -259,6 +285,7 @@ export function ProjectScreen() {
 
         {selected && <AssetDetail asset={selected} session={s} />}
       </div>
+      )}
     </div>
   );
 }

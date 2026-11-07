@@ -47,6 +47,7 @@ body,
   margin: 0;
   overflow: hidden;
   user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Números de tempo, duração e tamanho não "dançam" */
@@ -56,8 +57,10 @@ body,
 
 input,
 textarea,
-select {
+select,
+.select-text {
   user-select: text;
+  -webkit-user-select: text;
 }
 
 :focus-visible {
