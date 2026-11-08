@@ -1,4 +1,4 @@
-import { clipEndUs, defaultParams, EFFECTS, fillScale, formatTimecode, newId, param, sourceDurationUs, TRANSITIONS, trimClip, type Clip, type Command, type EffectId, type Project } from '@amv/project';
+import { clipEndUs, defaultParams, isSfxAsset, EFFECTS, fillScale, formatTimecode, newId, param, sourceDurationUs, TRANSITIONS, trimClip, type Clip, type Command, type EffectId, type Project } from '@amv/project';
 import { Eye, EyeOff, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { ProjectSession } from '../../core/session';
@@ -383,7 +383,7 @@ export function Inspector({ session, project, selectedAssetId }: { session: Proj
 
 /** Sem seleção: mostra o próximo passo em vez de um painel vazio. */
 function EmptyInspector({ project }: { project: Project }) {
-  const hasMusic = project.assets.some((a) => a.kind === 'audio');
+  const hasMusic = project.assets.some((a) => a.kind === 'audio' && !isSfxAsset(a));
   const hasVideo = project.assets.some((a) => a.kind === 'video');
   const hasClips = project.clips.length > 0;
   const steps: [boolean, string, string][] = [

@@ -14,7 +14,7 @@ import { ignoreEditorKey, useEditor } from './editorStore';
 import { Inspector } from './Inspector';
 import { AssetDragGhost, MediaPanel } from './MediaPanel';
 import { Preview, getPlayer, stepFrames } from './Preview';
-import { Timeline } from './Timeline';
+import { Timeline, TRACK_H } from './Timeline';
 
 const TIMELINE_MIN = 160;
 
@@ -140,7 +140,11 @@ export function EditorView({ session }: { session: ProjectSession }) {
   const bind = useEditor((s) => s.bind);
   const selection = useEditor((s) => s.selection);
   const select = useEditor((s) => s.select);
-  const [timelineH, setTimelineH] = useState(300);
+  // altura inicial: cabem todas as trilhas (sem esconder "Efeitos" atrás de rolagem), até ~56% da janela
+  const [timelineH, setTimelineH] = useState(() => {
+    const need = project.tracks.reduce((a, t) => a + TRACK_H[t.kind], 0) + 76; // + barra de ferramentas e régua
+    return Math.round(Math.max(TIMELINE_MIN, Math.min(need, (window.innerHeight - 90) * 0.56)));
+  });
   const dragRef = useRef<{ y: number; h: number } | null>(null);
 
   useEffect(() => bind(project.id), [bind, project.id]);

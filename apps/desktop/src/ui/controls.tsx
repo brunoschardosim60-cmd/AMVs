@@ -64,12 +64,16 @@ export function Dialog({
   width?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // onClose pode mudar a cada render do pai: guarda numa ref para o foco inicial rodar UMA vez
+  // (senão o foco voltaria ao primeiro botão a cada atualização, e Espaço/Enter poderiam fechar o diálogo)
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current();
     window.addEventListener('keydown', onKey);
-    ref.current?.querySelector<HTMLElement>('input, select, button')?.focus();
+    ref.current?.querySelector<HTMLElement>('input, select, button:not([aria-label="Fechar"])')?.focus();
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, []);
   return (
     <div className="fixed inset-0 z-40 grid place-items-center bg-black/55" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div ref={ref} role="dialog" aria-modal="true" aria-label={title} className={`${width} max-w-[calc(100vw-32px)] rounded-panel border border-line bg-panel shadow-2xl shadow-black/50`}>

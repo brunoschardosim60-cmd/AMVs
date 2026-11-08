@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSequences, type EpisodeAnalysis, type MusicAnalysis, type Shot, type SpeechSegment } from '@amv/analysis';
+import { buildSequences, shotKey, type EpisodeAnalysis, type MusicAnalysis, type Shot, type SpeechSegment } from '@amv/analysis';
 import { applyCommand, clipEndUs, createProject, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
 import { chooseSequences, generateAmv, pickAudioStream, planFootage, suggestMusicRanges, type EpisodeInput, type GenerateOptions, type MusicInput } from '../src/index.js';
 
@@ -40,7 +40,8 @@ function project(): Project {
     id, name: id, path: `/m/${id}`, hash: id, kind, status: 'ok', error: null, importedAt: '', tags: [], favorite: false,
     probe: { container: 'x', durationUs: dur * S, sizeBytes: 1, bitRate: null, video: kind === 'video' ? { codec: 'h264', profile: null, width: 1920, height: 1080, pixFmt: null, bitDepth: 8, fps: { num: 24, den: 1 }, avgFps: null, vfr: false, frameCount: null } : null, audio: [{ index: 1, codec: 'aac', sampleRate: 48000, channels: 2, channelLayout: null, language: null, title: null }], subtitles: [], tags: {} },
   });
-  for (const a of [asset('mus', 'audio', 90), asset('ep1', 'video', 600), asset('ep2', 'video', 600)]) p = applyCommand(p, { type: 'asset.add', asset: a }).project;
+  const sfx = (id: string, dur: number): Asset => ({ ...asset(id, 'audio', dur), tags: ['sfx'] });
+  for (const a of [asset('mus', 'audio', 90), asset('ep1', 'video', 600), asset('ep2', 'video', 600), sfx('sfx-impact', 1.4), sfx('sfx-hit', 0.3), sfx('sfx-whoosh', 0.6), sfx('sfx-riser', 2)]) p = applyCommand(p, { type: 'asset.add', asset: a }).project;
   return p;
 }
 
@@ -292,5 +293,165 @@ describe('faixa de áudio da fala (japonês × português)', () => {
     const ep = { ...twoFights('ep1', 0.7, 0.7, [{ startS: 20, endS: 22, kind: 'fala' as const, confidence: 0.9, text: 'Vamos!', impact: 0.9 }]), audioStreams: two };
     expect(run([ep], { focus: 'fight', useSpeech: true }).on('Vozes')[0]!.audio.streamIndex).toBe(2);
     expect(run([ep], { focus: 'fight', useSpeech: true, voiceLang: 'pt' }).on('Vozes')[0]!.audio.streamIndex).toBe(1);
+  });
+});
+
+describe('efeitos sonoros', () => {
+  const sfxAssets = { impact: 'sfx-impact', hit: 'sfx-hit', whoosh: 'sfx-whoosh', riser: 'sfx-riser' };
+  const ep = () => twoFights('ep1', 0.7, 0.7);
+  const sp = (startS: number, endS: number): SpeechSegment => ({ startS, endS, kind: 'fala', confidence: 0.9, text: 'Vou vencer!', impact: 0.9 });
+
+  it('impacto exatamente no drop e a subida termina nele', () => {
+    const { r, on } = run([ep()], { sfxAssets });
+    const fx = on('Efeitos');
+    const drop = r.summary.drop!;
+    const impact = fx.find((c) => c.assetId === 'sfx-impact')!;
+    const riser = fx.find((c) => c.assetId === 'sfx-riser')!;
+    expect(impact.timelineStartUs / S).toBeCloseTo(drop - 0.004, 3);
+    expect(clipEndUs(riser)).toBe(impact.timelineStartUs); // a subida termina no instante em que o impacto começa (colados, sem sobrepor)
+    expect(riser.audio.fadeInUs).toBeGreaterThan(0);
+  });
+
+  it('a trilha de efeitos não tem sobreposição, nem passa do fim do vídeo', () => {
+    const { out, on } = run([ep()], { sfxAssets });
+    expect(findOverlaps(out)).toEqual([]);
+    for (const c of on('Efeitos')) expect(clipEndUs(c)).toBeLessThanOrEqual(60 * S + 1);
+    expect(on('Efeitos').length).toBeGreaterThan(4);
+  });
+
+  it('golpes são seletivos (não metralhadora): espaçados e em número razoável', () => {
+    const fx = run([ep()], { sfxAssets }).on('Efeitos').filter((c) => c.assetId === 'sfx-hit' || c.assetId === 'sfx-whoosh');
+    expect(fx.length).toBeGreaterThan(3);
+    expect(fx.length).toBeLessThan(60 / 1.6 + 1);
+    for (let i = 1; i < fx.length; i++) expect(fx[i]!.timelineStartUs - fx[i - 1]!.timelineStartUs).toBeGreaterThanOrEqual(0.74 * S);
+  });
+
+  it('golpes e whoosh aparecem na luta, mais baixos que o impacto', () => {
+    const { on } = run([ep()], { sfxAssets });
+    const fx = on('Efeitos');
+    expect(fx.some((c) => c.assetId === 'sfx-hit')).toBe(true);
+    const gain = (id: string) => fx.find((c) => c.assetId === id)!.audio.gainDb;
+    expect(gain('sfx-hit')).toBeLessThan(gain('sfx-impact'));
+  });
+
+  it('cada golpe sonoro cai no instante do golpe da imagem (não solto no vídeo)', () => {
+    const e = ep();
+    const { on } = run([e], { sfxAssets });
+    const v1 = on('V1');
+    for (const h of on('Efeitos').filter((c) => c.assetId === 'sfx-hit')) {
+      const at = h.timelineStartUs / S + 0.004;
+      const clip = v1.find((c) => c.timelineStartUs <= h.timelineStartUs + 1 && clipEndUs(c) > h.timelineStartUs)!;
+      const sh = e.analysis.shots.find((x) => srcS(clip) >= x.startS - 1e-6 && srcS(clip) < x.endS)!;
+      const peakAt = clip.timelineStartUs / S + (sh.peakS - srcS(clip)) / clip.speed;
+      expect(Math.abs(at - peakAt)).toBeLessThan(0.01);
+    }
+  });
+
+  it('com fala antes do drop: nenhum efeito por cima da fala e sem subida', () => {
+    const e = twoFights('ep1', 0.7, 0.7, [sp(20, 22)]);
+    const { on } = run([e], { sfxAssets, useSpeech: true });
+    const voice = on('Vozes')[0]!;
+    // tolerância de 20 ms: o impacto começa 4 ms antes do drop, onde a fala termina
+    for (const c of on('Efeitos')) expect(c.timelineStartUs >= clipEndUs(voice) - 0.02 * S || clipEndUs(c) <= voice.timelineStartUs + 0.02 * S).toBe(true);
+    expect(on('Efeitos').some((c) => c.assetId === 'sfx-riser')).toBe(false);
+    expect(on('Efeitos').some((c) => c.assetId === 'sfx-impact')).toBe(true);
+  });
+
+  it('ligar os efeitos sonoros não muda a escolha das cenas (mesma semente = mesmos cortes)', () => {
+    const key = (xs: Clip[]) => xs.map((c) => `${c.timelineStartUs}|${c.sourceInUs}|${c.durationUs}`);
+    const a = run([ep()], { seed: 5 }).on('V1');
+    const b = run([ep()], { seed: 5, sfxAssets }).on('V1');
+    expect(key(b)).toEqual(key(a));
+  });
+
+  it('sem os efeitos (ou desligado): trilha vazia', () => {
+    expect(run([ep()], {}).on('Efeitos')).toHaveLength(0);
+    expect(run([ep()], { sfxAssets, useSfx: false }).on('Efeitos')).toHaveLength(0);
+    expect(run([ep()], { sfxAssets: { impact: 'sfx-impact' } }).on('Efeitos').every((c) => c.assetId === 'sfx-impact')).toBe(true);
+  });
+
+  it('gerar de novo substitui os efeitos (não acumula)', () => {
+    const p = project();
+    const m = music();
+    const eps = [ep()];
+    const gen = (pr: Project, seed: number) => applyCommand(pr, { type: 'batch', commands: generateAmv(pr, m, eps, { ...base, seed, sfxAssets }).commands }).project;
+    const once = gen(p, 1);
+    const twice = gen(once, 2);
+    const n = (pr: Project) => pr.clips.filter((c) => c.trackId === pr.tracks.find((t) => t.name === 'Efeitos')!.id).length;
+    expect(n(twice)).toBeGreaterThan(4);
+    expect(n(twice)).toBeLessThan(n(once) + 12);
+    expect(findOverlaps(twice)).toEqual([]);
+  });
+
+  it('o resumo conta os efeitos', () => {
+    expect(run([ep()], { sfxAssets }).r.summary.sfx).toBeGreaterThan(4);
+    expect(run([ep()], {}).r.summary.sfx).toBe(0);
+  });
+});
+
+describe('visão: personagens e cenas de luta', () => {
+  /** Luta A (80 cenas): pares = Goku, ímpares = Vegeta; a cada 5ª cena "não é luta". Luta B sem rótulo. */
+  function labelled(): EpisodeInput {
+    const e = twoFights('ep1', 0.7, 0.7);
+    const shotsA = e.analysis.shots.filter((x) => x.startS < 120);
+    const vis: EpisodeInput['vision'] = { version: 'v1', model: 'teste', shots: {} };
+    shotsA.forEach((sh, i) => {
+      vis.shots[shotKey(sh.startS)] = { characters: i % 2 === 0 ? ['Goku'] : ['Vegeta'], fight: i % 5 !== 4, note: '' };
+    });
+    return { ...e, vision: vis };
+  }
+  const who = (e: EpisodeInput, c: Clip) => {
+    const sh = e.analysis.shots.find((x) => srcS(c) >= x.startS - 1e-6 && srcS(c) < x.endS)!;
+    return e.vision!.shots[shotKey(sh.startS)];
+  };
+
+  it('só cenas do personagem escolhido (sem diferenciar maiúscula/acento)', () => {
+    const e = labelled();
+    for (const name of ['Goku', 'goku', 'GOKU ']) {
+      const v1 = run([e], { focus: 'fight', characters: [name], durationS: 30 }).on('V1');
+      expect(v1.length).toBeGreaterThan(10);
+      for (const c of v1) expect(who(e, c)?.characters).toContain('Goku');
+    }
+  });
+
+  it('cenas sem análise não entram quando se pede um personagem', () => {
+    const e = labelled();
+    const v1 = run([e], { focus: 'fight', characters: ['Goku'], durationS: 30 }).on('V1');
+    expect(v1.every((c) => srcS(c) < 120)).toBe(true); // a luta B não tem rótulo
+  });
+
+  it('o resumo de cada clipe diz com quem é a cena', () => {
+    const v1 = run([labelled()], { focus: 'fight', characters: ['Vegeta'], durationS: 30 }).on('V1');
+    expect(v1.filter((c) => c.reason?.includes('com Vegeta')).length).toBe(v1.length);
+  });
+
+  it('personagem que quase não aparece: usa todas as cenas e avisa (não faz vídeo vazio nem repetido)', () => {
+    const e = labelled();
+    const { r, on } = run([e], { focus: 'fight', characters: ['Naruto'], durationS: 30 });
+    expect(r.warnings.join(' ')).toMatch(/Só achei 0 cena\(s\) com Naruto/);
+    expect(on('V1').length).toBeGreaterThan(10);
+    expect(planFootage([e], { ...base, characters: ['Naruto'], focus: 'fight' }).wanted).toBeNull();
+  });
+
+  it('sem pedir personagem: cena que não é luta fica fora dos golpes fortes (depois do drop)', () => {
+    const e = labelled();
+    const { r, on } = run([e], { focus: 'fight', durationS: 30, seed: 3 });
+    const after = on('V1').filter((c) => c.timelineStartUs / S >= r.summary.drop! + 0.5);
+    const bad = after.filter((c) => who(e, c)?.fight === false);
+    expect(after.length).toBeGreaterThan(10);
+    expect(bad.length / after.length).toBeLessThan(0.1);
+  });
+
+  it('sem nenhuma análise de visão, o resultado é idêntico ao de antes (mesma semente)', () => {
+    const plain = twoFights('ep1', 0.7, 0.7);
+    const key = (xs: Clip[]) => xs.map((c) => `${c.timelineStartUs}|${c.sourceInUs}`);
+    expect(key(run([{ ...plain, vision: { version: 'v1', model: 't', shots: {} } }], { seed: 4 }).on('V1'))).toEqual(key(run([plain], { seed: 4 }).on('V1')));
+  });
+
+  it('o vídeo continua sem buracos nem sobreposição com o filtro de personagem', () => {
+    const { out, on } = run([labelled()], { focus: 'fight', characters: ['Goku'], durationS: 30 });
+    const v1 = on('V1');
+    expect(findOverlaps(out)).toEqual([]);
+    for (let i = 1; i < v1.length; i++) expect(v1[i]!.timelineStartUs).toBe(clipEndUs(v1[i - 1]!));
   });
 });

@@ -3,7 +3,8 @@
  * Determinístico para a mesma `seed`. Saída: Commands comuns (tudo editável depois),
  * cada clipe com `origin: 'ai'` e um `reason` legível.
  */
-import { pickAudioStreamByLanguage, type Cue, type EpisodeAnalysis, type MusicAnalysis, type Sequence, type Shot, type SpeechSegment } from '@amv/analysis';
+import { SFX_ANCHOR_S, SFX_DURATION_S, type SfxKind } from '@amv/sfx';
+import { normLabel, pickAudioStreamByLanguage, shotKey, type EpisodeVision, type ShotVision, type Cue, type EpisodeAnalysis, type MusicAnalysis, type Sequence, type Shot, type SpeechSegment } from '@amv/analysis';
 import { defaultScale, newId, type Clip, type Command, type EffectInstance, type Project, type Track } from '@amv/project';
 import { styleDef, type StyleDef, type StyleId } from './styles.js';
 
@@ -14,6 +15,8 @@ export interface EpisodeInput {
   hasAudio: boolean;
   /** Faixas de áudio do arquivo (ex.: japonês e português): para escolher a da fala. */
   audioStreams?: { index: number; language: string | null; title?: string | null }[];
+  /** Quem aparece em cada cena e se é luta (análise com IA com visão), se a pessoa rodou. */
+  vision?: EpisodeVision;
 }
 
 export interface MusicInput {
@@ -51,11 +54,20 @@ export interface GenerateOptions {
   voiceMoments?: number;
   /** Faixa de áudio da fala: `original` (japonês) ou `pt` (dublagem). Padrão: original. */
   voiceLang?: 'original' | 'pt';
+  /** Efeitos sonoros (subida, impacto no drop, golpes, whoosh). Padrão: ligado, se `sfxAssets` vier. */
+  useSfx?: boolean;
+  /**
+   * Só cenas em que aparece algum destes personagens (exige a análise com visão). Se não houver
+   * cenas suficientes, usa todas e avisa.
+   */
+  characters?: string[];
+  /** Onde estão os efeitos (id do asset de cada um). Sem isso, não coloca efeito sonoro. */
+  sfxAssets?: Partial<Record<SfxKind, string>>;
 }
 
 export interface GenerateResult {
   commands: Command[];
-  summary: { clips: number; cuts: number; speech: string | null; musicRange: [number, number]; drop: number | null; focus: 'fight' | 'mix'; fights: string[]; voices: number; hitsSynced: number };
+  summary: { clips: number; cuts: number; speech: string | null; musicRange: [number, number]; drop: number | null; focus: 'fight' | 'mix'; fights: string[]; voices: number; hitsSynced: number; sfx: number };
   warnings: string[];
 }
 
@@ -212,6 +224,8 @@ export interface FootageFit {
 }
 
 export interface FootagePlan {
+  /** Personagens pedidos que realmente filtram as cenas (vazio = sem filtro). */
+  wanted: Set<string> | null;
   mode: 'fight' | 'mix';
   pool: PoolEntry[];
   fit: FootageFit;
@@ -228,20 +242,28 @@ const POOL_ROOM = 1.6;
  */
 const POOL_SHOT_MIN = 0.7;
 
-function usableShots(ep: EpisodeInput, seq: Sequence): Shot[] {
-  return ep.analysis.shots.filter((sh) => sh.startS >= seq.startS - 1e-3 && sh.endS <= seq.endS + 1e-3 && sh.endS - sh.startS >= MIN_SHOT_S && !sh.tags.includes('escura'));
+const visionOf = (ep: EpisodeInput, shot: Shot): ShotVision | undefined => ep.vision?.shots[shotKey(shot.startS)];
+
+/** A cena tem algum dos personagens pedidos? Sem análise da cena = não dá para saber = não. */
+function hasCharacter(ep: EpisodeInput, shot: Shot, wanted: Set<string>): boolean {
+  const v = visionOf(ep, shot);
+  return !!v && v.characters.some((c) => wanted.has(normLabel(c)));
+}
+
+function usableShots(ep: EpisodeInput, seq: Sequence, wanted?: Set<string> | null): Shot[] {
+  return ep.analysis.shots.filter((sh) => sh.startS >= seq.startS - 1e-3 && sh.endS <= seq.endS + 1e-3 && sh.endS - sh.startS >= MIN_SHOT_S && !sh.tags.includes('escura') && (!wanted || hasCharacter(ep, sh, wanted)));
 }
 
 /**
  * Escolhe as lutas do vídeo: as mais fortes primeiro, até haver imagem de sobra
  * (1,6× a duração). Com `sequenceIds`, usa exatamente as que a pessoa marcou.
  */
-export function chooseSequences(eps: EpisodeInput[], neededS: number, o: { sequenceIds?: string[]; exclude?: Set<string>; jitter?: () => number; neededShots?: number }): PoolEntry[] {
+export function chooseSequences(eps: EpisodeInput[], neededS: number, o: { sequenceIds?: string[]; exclude?: Set<string>; jitter?: () => number; neededShots?: number; wanted?: Set<string> | null }): PoolEntry[] {
   const all: PoolEntry[] = [];
   for (const ep of eps) {
     if (o.exclude?.has(ep.assetId)) continue;
     for (const seq of ep.analysis.sequences ?? []) {
-      const shots = usableShots(ep, seq);
+      const shots = usableShots(ep, seq, o.wanted);
       if (!shots.length) continue;
       all.push({ ep, seq, usableS: shots.reduce((a, x) => a + (x.endS - x.startS), 0), shotCount: shots.length });
     }
@@ -271,28 +293,46 @@ export function chooseSequences(eps: EpisodeInput[], neededS: number, o: { seque
 }
 
 /** Define de onde saem as cenas (lutas escolhidas ou tudo) e o perfil de intensidade delas. */
-export function planFootage(eps: EpisodeInput[], o: Pick<GenerateOptions, 'style' | 'intensity' | 'durationS' | 'focus' | 'sequenceIds' | 'exclude' | 'seed'>, m?: MusicAnalysis): FootagePlan {
+export function planFootage(eps: EpisodeInput[], o: Pick<GenerateOptions, 'style' | 'intensity' | 'durationS' | 'focus' | 'sequenceIds' | 'exclude' | 'seed' | 'characters'>, m?: MusicAnalysis): FootagePlan {
   const style = styleDef(o.style);
   const exclude = new Set(o.exclude ?? []);
   const warnings: string[] = [];
   const wantFight = (o.focus ?? 'fight') === 'fight' && o.style !== 'discurso';
+  // quantos cortes o vídeo terá, pela música (no trecho padrão: serve de estimativa)
+  const neededShots = m ? makeSlots(m, chooseMusicRange(m, o.durationS, null), style, o.intensity).length : 0;
+  const jitterSeed = ((o.seed * 40503) ^ 0x9e3779b9) >>> 0;
+  let wanted: Set<string> | null = o.characters?.length ? new Set(o.characters.map(normLabel)) : null;
+  const countMatches = () => {
+    let n = 0;
+    for (const ep of eps) {
+      if (exclude.has(ep.assetId)) continue;
+      for (const sh of ep.analysis.shots) if (sh.endS - sh.startS >= MIN_SHOT_S && !sh.tags.includes('escura') && hasCharacter(ep, sh, wanted!)) n++;
+    }
+    return n;
+  };
+  // poucas cenas com esses personagens: melhor usar todas (e avisar) do que um vídeo repetido ou vazio
+  if (wanted) {
+    const have = countMatches();
+    if (have < Math.max(8, Math.round(neededShots * 0.3))) {
+      warnings.push(`Só achei ${have} cena(s) com ${o.characters!.join(', ')} (o vídeo pede ~${neededShots} cortes): usei cenas de todos os personagens. Rode a análise com IA em mais lutas.`);
+      wanted = null;
+    }
+  }
   let pool: PoolEntry[] = [];
   if (wantFight) {
-    // quantos cortes o vídeo terá, pela música (no trecho padrão: serve de estimativa)
-    const neededShots = m ? makeSlots(m, chooseMusicRange(m, o.durationS, null), style, o.intensity).length : 0;
-    pool = chooseSequences(eps, o.durationS, { sequenceIds: o.sequenceIds, exclude, jitter: rng(((o.seed * 40503) ^ 0x9e3779b9) >>> 0), neededShots });
+    pool = chooseSequences(eps, o.durationS, { sequenceIds: o.sequenceIds, exclude, jitter: rng(jitterSeed), neededShots, wanted });
     if (!pool.length) warnings.push('Não achei uma luta bem definida nos episódios: usei cenas de vários pontos. Escolha as lutas à mão ou use "Misturar".');
   }
   const mode: FootagePlan['mode'] = pool.length ? 'fight' : 'mix';
   const intensities: number[] = [];
-  if (mode === 'fight') for (const e of pool) for (const sh of usableShots(e.ep, e.seq)) intensities.push(sh.intensity);
+  if (mode === 'fight') for (const e of pool) for (const sh of usableShots(e.ep, e.seq, wanted)) intensities.push(sh.intensity);
   else
     for (const ep of eps) {
       if (exclude.has(ep.assetId)) continue;
-      for (const sh of ep.analysis.shots) if (sh.endS - sh.startS >= MIN_SHOT_S && !sh.tags.includes('escura')) intensities.push(sh.intensity);
+      for (const sh of ep.analysis.shots) if (sh.endS - sh.startS >= MIN_SHOT_S && !sh.tags.includes('escura') && (!wanted || hasCharacter(ep, sh, wanted))) intensities.push(sh.intensity);
     }
   const boost = [-0.1, 0, 0.05, 0.1][o.intensity]!;
-  return { mode, pool, fit: { intensities, lowI: Math.max(0, style.targetIntensity[0] + boost), highI: Math.min(1, style.targetIntensity[1] + boost) }, warnings };
+  return { wanted, mode, pool, fit: { intensities, lowI: Math.max(0, style.targetIntensity[0] + boost), highI: Math.min(1, style.targetIntensity[1] + boost) }, warnings };
 }
 
 // ---------------------------------------------------------------- trecho da música que combina
@@ -362,7 +402,8 @@ function findTracks(p: Project) {
   const text = p.tracks.find((t) => t.kind === 'text');
   const music = p.tracks.find((t) => t.kind === 'audio' && t.role === 'music') ?? p.tracks.find((t) => t.kind === 'audio');
   const voice = p.tracks.find((t) => t.kind === 'audio' && t.role === 'voice') ?? p.tracks.filter((t) => t.kind === 'audio')[1];
-  return { v1, text, music, voice };
+  const sfx = p.tracks.find((t) => t.kind === 'audio' && t.role === 'sfx');
+  return { v1, text, music, voice, sfx };
 }
 
 function baseClip(trackId: string, assetId: string | null, startS: number, durS: number, srcIn: number, reason: string, extra: Partial<Clip> = {}): Clip {
@@ -450,7 +491,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const style = styleDef(opts.style);
   const warnings: string[] = [];
   const rand = rng(opts.seed);
-  const { v1, text, music: musicTrack, voice } = findTracks(project);
+  const { v1, text, music: musicTrack, voice, sfx: sfxTrack } = findTracks(project);
   if (!v1 || !musicTrack) throw new Error('o projeto precisa de uma trilha de vídeo e uma de música');
   const H = project.settings.height;
   const exclude = new Set(opts.exclude ?? []);
@@ -486,7 +527,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
 
   const cmds: Command[] = [];
   // limpa as trilhas que a geração preenche (o projeto anterior fica salvo como versão pelo app)
-  const filled = new Set([v1.id, musicTrack.id, voice?.id, text?.id].filter(Boolean) as string[]);
+  const filled = new Set([v1.id, musicTrack.id, voice?.id, text?.id, sfxTrack?.id].filter(Boolean) as string[]);
   for (const c of project.clips) if (filled.has(c.trackId)) cmds.push({ type: 'clip.remove', clipId: c.id });
 
   // ---------------------------------------------------------------- música
@@ -539,7 +580,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       blocks.push({ ep, s: sp, atS: fits[0]!, len, from: fits[0]!, to: fits[0]! + len, preDrop: false });
       placed++;
     }
-    if (placed < extraWanted) warnings.push(`Só coube ${placed + blocks.filter((b) => b.preDrop).length} de ${totalVoice} falas: faltou trecho calmo na música ou fala marcante na luta escolhida.`);
+    // sem nenhuma fala disponível o aviso de "nenhuma fala marcante" já cobre; só avisa se havia falas e não coube
+    if (placed < extraWanted && lines.length > 0) warnings.push(`Só coube ${placed + blocks.filter((b) => b.preDrop).length} de ${totalVoice} falas: faltou trecho calmo na música ou fala marcante na luta escolhida.`);
   }
   blocks.sort((a, b) => a.atS - b.atS);
   // a música abaixa durante cada fala e volta depois (no drop, rampa curta para o golpe entrar forte)
@@ -593,7 +635,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       clipsMade++;
       t += len + 0.35;
     }
-    return { commands: cmds, summary: { clips: clipsMade, cuts: clipsMade, speech: chosen[0]?.s.text ?? null, musicRange: range, drop: dropT, focus: 'mix', fights: [], voices: chosen.length, hitsSynced: 0 }, warnings };
+    return { commands: cmds, summary: { clips: clipsMade, cuts: clipsMade, speech: chosen[0]?.s.text ?? null, musicRange: range, drop: dropT, focus: 'mix', fights: [], voices: chosen.length, hitsSynced: 0, sfx: 0 }, warnings };
   }
 
   // ---------------------------------------------------------------- cortes na batida
@@ -603,6 +645,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const consider = (ep: EpisodeInput, shot: Shot) => {
     const id = `${ep.assetId}@${shot.startS}`;
     if (exclude.has(id) || shot.endS - shot.startS < 0.25 || shot.tags.includes('escura')) return;
+    if (plan.wanted && !hasCharacter(ep, shot, plan.wanted)) return;
     candidates.push({ ep, shot, id, seq: fight ? seqKeyOf(ep, shot) : '' });
   };
   if (fight) {
@@ -615,7 +658,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   }
   if (!candidates.length) {
     warnings.push('Nenhuma cena analisada ainda: espere a análise dos episódios terminar.');
-    return { commands: cmds, summary: { clips: 0, cuts: 0, speech: null, musicRange: range, drop: dropT, focus: plan.mode, fights: [], voices: 0, hitsSynced: 0 }, warnings };
+    return { commands: cmds, summary: { clips: 0, cuts: 0, speech: null, musicRange: range, drop: dropT, focus: plan.mode, fights: [], voices: 0, hitsSynced: 0, sfx: 0 }, warnings };
   }
   const { lowI, highI } = plan.fit;
   const boost = 0; // já embutido em plan.fit
@@ -671,6 +714,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const narr = fight ? Math.max(0.7, style.narrative) : style.narrative;
   let syncedHits = 0;
   let hitSlots = 0;
+  /** Para os efeitos sonoros: onde cada corte/golpe aconteceu na timeline. */
+  const cutsLog: { startS: number; len: number; energy: number; intensity: number; isDrop: boolean; hitAtS: number | null }[] = [];
 
   for (const sl of fitSlots) {
     const len = sl.endS - sl.startS;
@@ -686,6 +731,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       if (sl.energy > 0.7 && c.shot.tags.includes('ação')) score += 0.15;
       if (sl.energy < 0.35 && c.shot.tags.includes('calma')) score += 0.2;
       if (c.shot.tags.includes('fala') && style.id !== 'discurso') score -= 0.08;
+      // visão (se rodou): cena que não é luta não entra nos golpes; serve de respiro nos trechos calmos
+      const vis = visionOf(c.ep, c.shot);
+      if (vis) score += vis.fight ? (sl.energy > 0.5 ? 0.1 : 0) : sl.energy > 0.5 ? -0.35 : 0.1;
       if (prev && prev.ep.assetId === c.ep.assetId) {
         score -= 0.12;
         // narrativa: andar para frente no mesmo episódio é bom; voltar é ruim
@@ -759,6 +807,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       `cena de ${c.shot.tags.join('/') || 'intensidade'} ${c.shot.intensity.toFixed(2)}`,
       `${c.ep.name} ${fmt(c.shot.startS)}`,
       fight ? 'luta escolhida' : null,
+      visionOf(c.ep, c.shot)?.characters.length ? `com ${visionOf(c.ep, c.shot)!.characters.join(' e ')}` : null,
       hit ? 'golpe na batida' : null,
       speed < 1 ? `câmera lenta ${speed.toFixed(2)}×` : null,
     ]
@@ -769,11 +818,70 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     cmds.push({ type: 'clip.add', clip });
     if (opts.showText && text && sl.word) cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra') });
     used.add(c.id);
+    cutsLog.push({ startS: sl.startS, len, energy: sl.energy, intensity: c.shot.intensity, isDrop: sl.isDrop, hitAtS: hit ? sl.startS + (c.shot.peakS - srcIn) / speed : null });
     prev = c;
     prevSrcEnd = srcIn + srcLen;
     clipsMade++;
   }
   if (opts.hitSync !== false && hitSlots > 0 && syncedHits < hitSlots * 0.5) warnings.push(`Só ${syncedHits} de ${hitSlots} cortes fortes tiveram o golpe encaixado na batida (as cenas escolhidas têm o golpe longe do começo).`);
+
+
+  // ---------------------------------------------------------------- efeitos sonoros
+  const sfxCount = sfxTrack && opts.useSfx !== false && opts.sfxAssets ? placeSfx() : 0;
+  function placeSfx(): number {
+    const assets = opts.sfxAssets!;
+    const r2 = rng(((opts.seed * 2654435761) ^ 0x51f15e) >>> 0); // sorteio próprio: não mexe na escolha das cenas
+    type Cand = { kind: SfxKind; startS: number; srcIn: number; durS: number; gainDb: number; prio: number; why: string };
+    const cands: Cand[] = [];
+    const anchored = (kind: SfxKind, atS: number, gainDb: number, prio: number, why: string) => {
+      let start = atS - SFX_ANCHOR_S[kind];
+      let srcIn = 0;
+      if (start < 0) {
+        srcIn = -start; // começa no meio do efeito para o ponto-chave cair no instante certo
+        start = 0;
+      }
+      const dur = Math.min(SFX_DURATION_S[kind] - srcIn, D - start);
+      if (assets[kind] && dur > 0.05) cands.push({ kind, startS: start, srcIn, durS: dur, gainDb, prio, why });
+    };
+    const hasPreDropVoice = blocks.some((b) => b.preDrop);
+    if (dropT !== null) {
+      anchored('impact', dropT, 0, 1000, 'Impacto no drop');
+      // a subida termina quando o impacto começa; não entra por cima da fala que vem antes do drop
+      if (!hasPreDropVoice) anchored('riser', dropT - SFX_ANCHOR_S.impact, -5, 900, 'Subida até o drop');
+    }
+    // golpes e whoosh são seletivos: os cortes mais fortes primeiro, com respiro entre eles
+    const perHit = Math.min(1, 0.35 + 0.65 * style.impactFx);
+    for (const c of cutsLog) {
+      if (c.isDrop) continue;
+      if (c.hitAtS !== null && c.energy >= 0.5 && r2() < 0.5 * perHit) anchored('hit', c.hitAtS, -7, 50 + 40 * c.intensity, 'Golpe');
+      else if (c.len >= 0.9 && c.energy >= 0.3 && c.energy < 0.8 && r2() < 0.22 * perHit) anchored('whoosh', c.startS, -9, 30, 'Whoosh antes do corte');
+    }
+    // resolve conflitos: o mais importante primeiro; nada por cima de fala nem de outro efeito (mesma trilha)
+    cands.sort((a, b) => b.prio - a.prio || a.startS - b.startS);
+    const kept: Cand[] = [];
+    const maxN = Math.max(4, Math.ceil(D / 1.6));
+    const SPACING_S = 0.75; // entre golpes/whoosh (impacto e subida ficam de fora)
+    for (const c of cands) {
+      if (kept.length >= maxN) break;
+      const end = c.startS + c.durS;
+      // 20 ms de tolerância: o impacto começa 4 ms antes do drop, onde a fala e a subida terminam
+      if (blocks.some((b) => c.startS < b.atS + b.len - 0.02 && end > b.atS + 0.02)) continue;
+      if (kept.some((k) => c.startS < k.startS + k.durS - 0.02 && end > k.startS + 0.02)) continue;
+      const soft = c.kind === 'hit' || c.kind === 'whoosh';
+      if (soft && kept.some((k) => (k.kind === 'hit' || k.kind === 'whoosh') && Math.abs(k.startS - c.startS) < SPACING_S)) continue;
+      kept.push(c);
+    }
+    kept.sort((a, b) => a.startS - b.startS);
+    for (const k of kept) {
+      cmds.push({
+        type: 'clip.add',
+        clip: baseClip(sfxTrack!.id, assets[k.kind]!, k.startS, k.durS, k.srcIn, `Efeito sonoro: ${k.why}`, {
+          audio: { gainDb: k.gainDb, fadeInUs: k.kind === 'riser' ? us(0.08) : 0, fadeOutUs: k.kind === 'riser' ? 0 : us(0.03), pitchSemitones: 0, streamIndex: null },
+        }),
+      });
+    }
+    return kept.length;
+  }
 
   // ---------------------------------------------------------------- falas + imagem do personagem
   for (const b of blocks) {
@@ -812,6 +920,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       fights: plan.pool.map((e) => `${e.ep.name} ${fmt(e.seq.startS)}–${fmt(e.seq.endS)}`),
       voices: blocks.length,
       hitsSynced: syncedHits,
+      sfx: sfxCount,
     },
     warnings: [...new Set(warnings)],
   };

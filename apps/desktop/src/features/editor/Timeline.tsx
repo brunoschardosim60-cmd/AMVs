@@ -28,7 +28,7 @@ import { pickLevel } from '@amv/media';
 
 const HEADER_W = 168;
 const RULER_H = 26;
-const TRACK_H: Record<Track['kind'], number> = { video: 58, audio: 50, text: 34 };
+export const TRACK_H: Record<Track['kind'], number> = { video: 58, audio: 50, text: 34 };
 const SNAP_PX = 8;
 const EDGE_PX = 6;
 

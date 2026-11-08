@@ -1,4 +1,4 @@
-import type { Asset } from '@amv/project';
+import { isSfxAsset, type Asset } from '@amv/project';
 import { AlertTriangle, AudioLines, Download, Film, FolderSearch, Image as ImageIcon, Plus, Redo2, Save, Search, Undo2, Wand2, History, Bot } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { duration, fpsLabel, mainCodec, resolution, bytes } from '../../format';
@@ -86,17 +86,19 @@ export function ProjectScreen() {
   }, []);
 
   const project = session!.project;
+  // os efeitos sonoros do app ficam no projeto, mas fora das listas
+  const userAssets = useMemo(() => project.assets.filter((a) => !isSfxAsset(a)), [project.assets]);
   const assets = useMemo(
     () =>
-      project.assets.filter(
+      userAssets.filter(
         (a) => (filter === 'all' || a.kind === filter) && (!query || a.name.toLowerCase().includes(query.toLowerCase())),
       ),
-    [project.assets, filter, query],
+    [userAssets, filter, query],
   );
   const selected = project.assets.find((a) => a.id === selectedAssetId) ?? null;
-  const missing = project.assets.filter((a) => a.status === 'missing').length;
-  const counts = { all: project.assets.length, video: 0, audio: 0, image: 0 };
-  for (const a of project.assets) counts[a.kind]++;
+  const missing = userAssets.filter((a) => a.status === 'missing').length;
+  const counts = { all: userAssets.length, video: 0, audio: 0, image: 0 };
+  for (const a of userAssets) counts[a.kind]++;
 
   useEffect(() => {
     if (selectedAssetId && !selected) selectAsset(null);
@@ -259,7 +261,7 @@ export function ProjectScreen() {
             </label>
           </div>
 
-          {project.assets.length === 0 ? (
+          {userAssets.length === 0 ? (
             <div className="mx-5 mb-5 grid flex-1 place-items-center rounded-panel border border-dashed border-line">
               <div className="max-w-sm text-center">
                 <p className="text-[15px] font-semibold">Arraste episódios, músicas e imagens para cá</p>

@@ -32,6 +32,7 @@ function buildContext(session: ProjectSession): AssistantContext {
   const music = new Map<string, MusicAnalysis>();
   const episodes = new Map<string, EpisodeAnalysis>();
   for (const a of session.project.assets) {
+    if (a.tags.includes('sfx')) continue;
     const rt = session.assetRuntime(a.id);
     if (rt.music) music.set(a.id, rt.music);
     if (rt.episode) episodes.set(a.id, rt.episode);
@@ -59,8 +60,10 @@ function loadPos(): Pos {
   return { x: Math.max(8, window.innerWidth - 384), y: 72 };
 }
 
-/** Mantém pelo menos um pedaço da janela visível (a tela pode ter diminuído). */
-const clampPos = (p: Pos): Pos => ({ x: Math.max(0, Math.min(p.x, window.innerWidth - 80)), y: Math.max(0, Math.min(p.y, window.innerHeight - 44)) });
+const PANEL_W = 380;
+const BUBBLE = 44;
+/** Mantém a janela (ou a bolinha) inteira na tela, mesmo se a janela do app diminuir. */
+const clampPos = (p: Pos, w = PANEL_W): Pos => ({ x: Math.max(0, Math.min(p.x, window.innerWidth - Math.min(w, window.innerWidth))), y: Math.max(0, Math.min(p.y, window.innerHeight - 44)) });
 
 /**
  * Posição e arrasto da janela do assistente. Arrastar pelo cabeçalho; o clique curto na
@@ -72,14 +75,22 @@ function useFloating() {
   const drag = useRef<{ dx: number; dy: number; sx: number; sy: number; moved: boolean } | null>(null);
   const posRef = useRef(pos);
   posRef.current = pos;
+  const minimizedRef = useRef(minimized);
+  minimizedRef.current = minimized;
+  /** O último gesto foi um arrasto (então o `click` que vem junto não deve abrir a bolinha). */
+  const dragged = useRef(false);
   useEffect(() => {
-    const onResize = () => setPos((p) => clampPos(p));
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+    const w = minimized ? BUBBLE : PANEL_W;
+    const fit = () => setPos((p) => clampPos(p, w));
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, [minimized]);
   const handlers = {
     onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
-      if ((e.target as HTMLElement).closest('button, input, textarea, select')) return;
+      // botões/campos dentro do cabeçalho não arrastam; mas a própria bolinha (que é um botão) arrasta
+      const hit = (e.target as HTMLElement).closest('button, input, textarea, select');
+      if (hit && hit !== e.currentTarget) return;
       e.currentTarget.setPointerCapture(e.pointerId);
       drag.current = { dx: e.clientX - posRef.current.x, dy: e.clientY - posRef.current.y, sx: e.clientX, sy: e.clientY, moved: false };
     },
@@ -87,11 +98,12 @@ function useFloating() {
       const d = drag.current;
       if (!d) return;
       if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 4) d.moved = true;
-      if (d.moved) setPos(clampPos({ x: e.clientX - d.dx, y: e.clientY - d.dy }));
+      if (d.moved) setPos(clampPos({ x: e.clientX - d.dx, y: e.clientY - d.dy }, minimizedRef.current ? BUBBLE : PANEL_W));
     },
     onPointerUp: () => {
       const d = drag.current;
       drag.current = null;
+      dragged.current = !!d?.moved;
       if (d?.moved) {
         try {
           window.localStorage.setItem(POS_KEY, JSON.stringify(posRef.current));
@@ -102,7 +114,15 @@ function useFloating() {
       return d;
     },
   };
-  return { pos, minimized, setMinimized, handlers, wasDrag: () => drag.current?.moved ?? false };
+  /** Clique na bolinha: abre, a não ser que o gesto tenha sido um arrasto. Também vale para Enter/Espaço. */
+  const openFromBubble = () => {
+    if (dragged.current) {
+      dragged.current = false;
+      return;
+    }
+    setMinimized(false);
+  };
+  return { pos, minimized, setMinimized, handlers, openFromBubble };
 }
 
 let seq = 0;
@@ -187,10 +207,10 @@ export function AssistantPanel({ session, onClose }: { session: ProjectSession; 
         onPointerDown={float.handlers.onPointerDown}
         onPointerMove={float.handlers.onPointerMove}
         onPointerUp={(e) => {
-          const d = float.handlers.onPointerUp();
-          if (d && !d.moved) float.setMinimized(false);
+          float.handlers.onPointerUp();
           e.currentTarget.releasePointerCapture?.(e.pointerId);
         }}
+        onClick={float.openFromBubble}
       >
         <Bot size={20} />
         {busy && <Loader2 size={12} className="absolute -top-0.5 -right-0.5 animate-spin text-violet-strong" />}

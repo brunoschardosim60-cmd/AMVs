@@ -76,7 +76,7 @@ export function JobsDock() {
             <>
               <CircleCheck size={14} className={failed.length ? 'text-warn' : 'text-ok'} />
               <span className="text-muted">
-                {failed.length ? `${failed.length} tarefa(s) falharam` : session.project.assets.length ? 'Mídia pronta para edição' : 'Nenhuma tarefa em andamento'}
+                {failed.length ? `${failed.length} tarefa(s) falharam` : session.project.assets.some((a) => !a.tags.includes('sfx')) ? 'Mídia pronta para edição' : 'Nenhuma tarefa em andamento'}
               </span>
             </>
           )}

@@ -41,6 +41,9 @@ importers:
       '@amv/render':
         specifier: workspace:*
         version: link:../../packages/render
+      '@amv/sfx':
+        specifier: workspace:*
+        version: link:../../packages/sfx
       '@amv/subtitles':
         specifier: workspace:*
         version: link:../../packages/subtitles
@@ -135,6 +138,9 @@ importers:
       '@amv/project':
         specifier: workspace:*
         version: link:../project
+      '@amv/sfx':
+        specifier: workspace:*
+        version: link:../sfx
 
   packages/media:
     dependencies:
@@ -162,6 +168,8 @@ importers:
       '@amv/project':
         specifier: workspace:*
         version: link:../project
+
+  packages/sfx: {}
 
   packages/subtitles:
     dependencies:

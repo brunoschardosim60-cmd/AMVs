@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@amv/analysis": "workspace:*",
-    "@amv/project": "workspace:*"
+    "@amv/project": "workspace:*",
+    "@amv/sfx": "workspace:*"
   }
 }

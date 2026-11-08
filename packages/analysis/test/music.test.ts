@@ -51,6 +51,18 @@ describe('análise de música', () => {
     }
   });
 
+  it('drop fora da grade de 4 compassos: achado e no primeiro golpe forte (antes: perdido ou 1-2 s atrasado)', () => {
+    for (const [bpm, dropAt, off] of [[128, 32.3, 0], [128, 30, 0.2], [120, 28, 0.1], [140, 26.5, 0], [100, 19.2, 0], [128, 35, 0.3]] as const) {
+      const per = 60 / bpm;
+      const a = analyzeMusic(synth(bpm, 70, dropAt, off), SR);
+      // primeira batida já forte: a primeira do sintetizador com início >= dropAt
+      const firstLoud = off + Math.ceil((dropAt - off) / per - 1e-9) * per;
+      expect(a.drops.length, `${bpm} BPM, drop ${dropAt}`).toBeGreaterThan(0);
+      expect(Math.abs(a.drops[0]! - firstLoud), `${bpm} BPM, drop ${dropAt}: achou ${a.drops[0]}`).toBeLessThan(0.05);
+      expect(a.sections.some((x) => x.label === 'drop' && Math.abs(x.startS - firstLoud) < 0.05)).toBe(true);
+    }
+  });
+
   it('acha o drop e dá nome às seções', () => {
     const bpm = 128;
     const period = 60 / bpm;

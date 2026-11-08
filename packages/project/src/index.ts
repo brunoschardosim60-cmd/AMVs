@@ -8,3 +8,7 @@ export * from './hash.js';
 export * from './timeline.js';
 export * from './edit.js';
 export * from './effects.js';
+
+/** Efeitos sonoros que o app gera (impacto, whoosh…): ficam no projeto, mas fora das listas do usuário. */
+export const SFX_TAG = 'sfx';
+export const isSfxAsset = (a: { tags: string[] }) => a.tags.includes(SFX_TAG);

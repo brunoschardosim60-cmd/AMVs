@@ -37,8 +37,14 @@ export interface ToolCall {
   args: Record<string, unknown>;
 }
 
+/** Imagem enviada a um modelo com visão (base64, sem o prefixo `data:`). */
+export interface ChatImage {
+  mime: 'image/jpeg' | 'image/png';
+  base64: string;
+}
+
 export type ChatMessage =
-  | { role: 'user'; content: string }
+  | { role: 'user'; content: string; images?: ChatImage[] }
   | { role: 'assistant'; content: string; toolCalls?: ToolCall[] }
   | { role: 'tool'; toolCallId: string; name: string; content: string };
 
@@ -114,6 +120,8 @@ function toOpenAi(system: string, messages: ChatMessage[]) {
     if (m.role === 'tool') out.push({ role: 'tool', tool_call_id: m.toolCallId, content: m.content });
     else if (m.role === 'assistant' && m.toolCalls?.length)
       out.push({ role: 'assistant', content: m.content || null, tool_calls: m.toolCalls.map((t) => ({ id: t.id, type: 'function', function: { name: t.name, arguments: JSON.stringify(t.args) } })) });
+    else if (m.role === 'user' && m.images?.length)
+      out.push({ role: 'user', content: [{ type: 'text', text: m.content }, ...m.images.map((i) => ({ type: 'image_url', image_url: { url: `data:${i.mime};base64,${i.base64}` } }))] });
     else out.push({ role: m.role, content: m.content });
   }
   return out;
@@ -155,7 +163,11 @@ function toAnthropic(messages: ChatMessage[]) {
     else out.push({ role, content: [block] });
   };
   for (const m of messages) {
-    if (m.role === 'user') push('user', { type: 'text', text: m.content });
+    if (m.role === 'user') {
+      // a Anthropic recomenda as imagens antes do texto
+      for (const i of m.images ?? []) push('user', { type: 'image', source: { type: 'base64', media_type: i.mime, data: i.base64 } });
+      push('user', { type: 'text', text: m.content });
+    }
     else if (m.role === 'tool') push('user', { type: 'tool_result', tool_use_id: m.toolCallId, content: m.content });
     else {
       if (m.content) push('assistant', { type: 'text', text: m.content });

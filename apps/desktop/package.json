@@ -18,6 +18,7 @@
     "@amv/music": "workspace:*",
     "@amv/project": "workspace:*",
     "@amv/render": "workspace:*",
+    "@amv/sfx": "workspace:*",
     "@amv/subtitles": "workspace:*",
     "@fontsource-variable/manrope": "^5.3.0",
     "@tauri-apps/api": "^2.12.4",

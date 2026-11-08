@@ -5,7 +5,7 @@
  */
 import { mean, movingAverage, normalize, percentile, rmsFrames, stft, toDb } from './dsp.js';
 
-export const MUSIC_ANALYSIS_VERSION = 'm2';
+export const MUSIC_ANALYSIS_VERSION = 'm3';
 
 export type SectionLabel = 'intro' | 'verso' | 'pré-refrão' | 'refrão' | 'drop' | 'ponte' | 'final';
 
@@ -235,17 +235,38 @@ export function energyCurve(samples: Float32Array, sampleRate: number, stepS = 0
  * compassos) e dá nome pela energia relativa e posição. Drop = maior salto de
  * energia num início de compasso, depois de um trecho mais baixo.
  */
-export function findSections(downbeats: number[], energy: number[], stepS: number, durationS: number): { sections: Section[]; drops: number[] } {
+export function findSections(downbeats: number[], energy: number[], stepS: number, durationS: number, beats: number[] = []): { sections: Section[]; drops: number[] } {
   const eAt = (a: number, b: number) => {
     const i0 = Math.floor(a / stepS);
     const i1 = Math.max(i0 + 1, Math.floor(b / stepS));
     return mean(energy.slice(i0, i1));
   };
-  // candidatos: a cada 4 compassos (ou a cada 8 s se não houver compassos confiáveis)
-  const grid: number[] = downbeats.length >= 8 ? downbeats.filter((_, i) => i % 4 === 0) : Array.from({ length: Math.ceil(durationS / 8) }, (_, i) => i * 8);
-  if (grid[0] !== 0) grid.unshift(0);
-  grid.push(durationS);
-  // junta blocos vizinhos com energia parecida
+  // ---- drops, com precisão de batida: compara os 4 s antes e depois de CADA batida (não só a
+  // cada 4 compassos: um drop fora dessa grade era perdido ou saía 1-2 s atrasado)
+  const downSet = new Set(downbeats.map((d) => Math.round(d * 100)));
+  const cand = (beats.length >= 8 ? beats : downbeats).filter((t) => t >= 4 && t <= durationS - 2);
+  const hiE = percentile(energy, 75);
+  const scored = cand
+    .map((t) => {
+      const before = eAt(Math.max(0, t - 4), t);
+      const after = eAt(t, Math.min(durationS, t + 4));
+      return { at: t, jump: after - before, after, score: after - before + (downSet.has(Math.round(t * 100)) ? 0.02 : 0) };
+    })
+    .filter((c) => c.jump > 0.12 && c.after >= hiE - 0.05)
+    .sort((a, b) => b.score - a.score);
+  const jumps: { at: number; jump: number }[] = [];
+  for (const c of scored) if (jumps.every((j) => Math.abs(j.at - c.at) >= 8)) jumps.push({ at: c.at, jump: c.jump });
+  const drops = jumps.slice(0, 6).map((j) => j.at);
+
+  // seções: blocos de 4 compassos (ou 8 s se não houver compassos confiáveis), com um limite exatamente em cada drop
+  const base: number[] = downbeats.length >= 8 ? downbeats.filter((_, i) => i % 4 === 0) : Array.from({ length: Math.ceil(durationS / 8) }, (_, i) => i * 8);
+  const grid = [...base.filter((g) => drops.every((d) => Math.abs(g - d) >= 2)), ...drops, 0].sort((a, b) => a - b);
+  const uniq: number[] = [];
+  for (const g of grid) if (!uniq.length || g - uniq.at(-1)! > 0.01) uniq.push(g);
+  grid.length = 0;
+  grid.push(...uniq, durationS);
+  // junta blocos vizinhos com energia parecida (nunca atravessa um drop)
+  const dropAt = new Set(drops);
   const blocks: { s: number; e: number; en: number }[] = [];
   for (let i = 0; i + 1 < grid.length; i++) {
     const s = grid[i]!;
@@ -253,7 +274,7 @@ export function findSections(downbeats: number[], energy: number[], stepS: numbe
     if (e - s < 0.5) continue;
     const en = eAt(s, e);
     const prev = blocks.at(-1);
-    if (prev && Math.abs(prev.en - en) < 0.08) {
+    if (prev && !dropAt.has(s) && Math.abs(prev.en - en) < 0.08) {
       prev.e = e;
       prev.en = eAt(prev.s, e);
     } else blocks.push({ s, e, en });
@@ -261,17 +282,6 @@ export function findSections(downbeats: number[], energy: number[], stepS: numbe
   const ens = blocks.map((b) => b.en);
   const hi = percentile(ens, 75);
   const lo = percentile(ens, 30);
-
-  // drops: subida grande de energia entre blocos
-  const jumps: { at: number; jump: number }[] = [];
-  for (let i = 1; i < blocks.length; i++) {
-    const before = eAt(Math.max(0, blocks[i]!.s - 4), blocks[i]!.s);
-    const after = eAt(blocks[i]!.s, Math.min(durationS, blocks[i]!.s + 4));
-    const jump = after - before;
-    if (jump > 0.12 && after >= hi - 0.02) jumps.push({ at: blocks[i]!.s, jump });
-  }
-  jumps.sort((a, b) => b.jump - a.jump);
-  const drops = jumps.map((j) => j.at);
   const dropSet = new Set(drops.slice(0, 3));
 
   if (blocks[0]) blocks[0].s = 0;
@@ -301,7 +311,7 @@ export function analyzeMusic(samples: Float32Array, sampleRate: number): MusicAn
   const downbeats = downbeatsFrom(beats, o);
   const stepS = 0.25;
   const { energy, loudnessDb } = energyCurve(samples, sampleRate, stepS);
-  const { sections, drops } = findSections(downbeats, energy, stepS, durationS);
+  const { sections, drops } = findSections(downbeats, energy, stepS, durationS, beats);
   const onsetDensity = mean(Array.from(o.env).map((v) => (v > 0.3 ? 1 : 0))) * o.rate; // ataques/s
   const intensity = Math.round(Math.max(0, Math.min(100, 70 * mean(energy) + 6 * Math.min(5, onsetDensity))));
   return {

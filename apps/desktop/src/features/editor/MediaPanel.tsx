@@ -1,4 +1,4 @@
-import type { Asset } from '@amv/project';
+import { isSfxAsset, type Asset } from '@amv/project';
 import { AudioLines, Film, Image as ImageIcon, Plus } from 'lucide-react';
 import { useEffect, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
@@ -16,7 +16,7 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
   const { platform, importMedia, selectedAssetId, selectAsset } = useApp();
   const setAssetDrag = useEditor((s) => s.setAssetDrag);
   const select = useEditor((s) => s.select);
-  const assets = session.project.assets;
+  const assets = session.project.assets.filter((a) => !isSfxAsset(a));
   const [tab, setTab] = useState<'media' | 'scenes' | 'lines' | 'subs'>('media');
 
   const startDrag = (e: RPointerEvent, a: Asset) => {
@@ -53,17 +53,20 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
             role="tab"
             aria-selected={tab === k}
             onClick={() => setTab(k)}
-            className={`rounded-control px-2.5 py-1 text-xs ${tab === k ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}
+            className={`rounded-control px-2 py-1 text-xs ${tab === k ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}
           >
             {label}
           </button>
         ))}
-        {tab === 'media' && (
-          <Button size="sm" variant="ghost" className="ml-auto" icon={<Plus size={14} />} onClick={() => importMedia()}>
-            Importar
-          </Button>
-        )}
       </div>
+      {tab === 'media' && (
+        // fora da linha de abas: lá ele era empurrado para além dos 248 px do painel e ficava atrás do preview
+        <div className="shrink-0 px-2 pb-2">
+          <Button size="sm" variant="ghost" className="w-full border border-line" icon={<Plus size={14} />} onClick={() => importMedia()}>
+            Importar episódios e músicas
+          </Button>
+        </div>
+      )}
       {tab === 'subs' ? <SubtitlesPanel session={session} /> : tab === 'scenes' ? <ScenesPanel session={session} /> : tab === 'lines' ? <LinesPanel session={session} /> : assets.length === 0 ? (
         <p className="px-3 text-xs leading-relaxed text-muted">Importe episódios e músicas. Depois arraste para a timeline.</p>
       ) : (

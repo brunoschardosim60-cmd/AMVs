@@ -18,7 +18,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
   const { platform, toast, library } = useApp();
   useLibraryVersion(library);
   const project = session.project;
-  const musics = project.assets.filter((a) => a.kind === 'audio');
+  const musics = project.assets.filter((a) => a.kind === 'audio' && !a.tags.includes('sfx'));
   const episodes = project.assets.filter((a) => a.kind === 'video');
   const [musicId, setMusicId] = useState(musics[0]?.id ?? '');
   const [epIds, setEpIds] = useState<string[]>(episodes.map((e) => e.id));
@@ -30,6 +30,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
   const [focus, setFocus] = useState<'fight' | 'mix'>('fight');
   const [seqIds, setSeqIds] = useState<string[]>([]);
   const [hitSync, setHitSync] = useState(true);
+  const [useSfx, setUseSfx] = useState(true);
   const [musicStart, setMusicStart] = useState<number | null>(null);
   const [useEffects, setUseEffects] = useState(true);
   const [showText, setShowText] = useState(true);
@@ -91,9 +92,20 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
     if (!music) return;
     setBusy(true);
     try {
-      const opts: GenerateOptions = { style, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync };
+      // efeitos sonoros: grava/registra uma vez; se falhar, o AMV sai sem eles e avisa
+      let sfxAssets: GenerateOptions['sfxAssets'];
+      let sfxError: string | null = null;
+      if (useSfx) {
+        try {
+          sfxAssets = await session.ensureSfx();
+        } catch (e) {
+          sfxError = (e as Error).message;
+        }
+      }
+      const opts: GenerateOptions = { useSfx, sfxAssets, style, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync };
       const m = musics.find((a) => a.id === musicId)!;
-      const r = generateAmv(project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
+      const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
+      if (sfxError) r.warnings.push(`Não consegui preparar os efeitos sonoros (${sfxError}): o vídeo saiu sem eles.`);
       // guarda o que estava antes: nada se perde
       await session.saveVersion(`Antes de gerar (${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})`);
       const label = STYLES.find((s) => s.id === style)!.label;
@@ -102,7 +114,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
       const s = r.summary;
       setResult({
         warnings: r.warnings,
-        text: `${s.clips} cenas, ${s.cuts} cortes${s.drop !== null ? `, drop em ${s.drop.toFixed(1)} s` : ''}${s.voices ? `, ${s.voices} fala(s)${s.speech ? ` (começando por "${s.speech}")` : ''}` : ''}. Trecho da música: ${mmss(s.musicRange[0])}–${mmss(s.musicRange[1])}.${s.focus === 'fight' && s.fights.length ? ` Luta usada: ${s.fights.join(' + ')}.` : s.focus === 'mix' ? ' Cenas de vários pontos (modo misturar).' : ''}${s.hitsSynced ? ` ${s.hitsSynced} golpes encaixados na batida.` : ''}`,
+        text: `${s.clips} cenas, ${s.cuts} cortes${s.drop !== null ? `, drop em ${s.drop.toFixed(1)} s` : ''}${s.voices ? `, ${s.voices} fala(s)${s.speech ? ` (começando por "${s.speech}")` : ''}` : ''}. Trecho da música: ${mmss(s.musicRange[0])}–${mmss(s.musicRange[1])}.${s.focus === 'fight' && s.fights.length ? ` Luta usada: ${s.fights.join(' + ')}.` : s.focus === 'mix' ? ' Cenas de vários pontos (modo misturar).' : ''}${s.hitsSynced ? ` ${s.hitsSynced} golpes encaixados na batida.` : ''}${s.sfx ? ` ${s.sfx} efeitos sonoros.` : ''}`,
       });
     } catch (e) {
       toast({ tone: 'error', title: 'Não deu para gerar', body: (e as Error).message });
@@ -161,7 +173,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
     <Dialog
       title="Gerar meu AMV"
       onClose={onClose}
-      width="w-[760px]"
+      width="w-[1020px]"
       footer={
         <>
           <span className="mr-auto self-center text-xs text-muted">{waiting > 0 ? `Esperando a análise de ${waiting} arquivo(s)…` : `${sceneCount} cenas de ${ready.length} episódio(s)`}</span>
@@ -177,7 +189,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
       {episodes.length === 0 || (musics.length === 0 && !recs.length) ? (
         <p className="text-sm text-ink-soft">Importe pelo menos <b>uma música</b> e <b>um episódio</b>. O AMV Studio analisa os dois e monta o vídeo a partir deles.</p>
       ) : (
-        <div className="grid max-h-[62vh] grid-cols-[1fr_220px] gap-5 overflow-y-auto pr-1">
+        <div className="grid max-h-[calc(100vh-210px)] grid-cols-[1.05fr_1fr_0.8fr] gap-5 overflow-y-auto pr-1">
           <div>
             <p className="mb-2 text-xs font-medium text-ink-soft">Estilo</p>
             <div className="grid grid-cols-1 gap-1.5">
@@ -210,7 +222,10 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
               ))}
             </div>
 
-            <p className="mt-4 mb-2 text-xs font-medium text-ink-soft">Cenas</p>
+          </div>
+
+          <div>
+            <p className="mb-2 text-xs font-medium text-ink-soft">Cenas</p>
             <div className="flex gap-1 rounded-control bg-base p-1">
               {(
                 [
@@ -373,6 +388,9 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
               {hasTwoAudio && voiceMoments > 0 && (
                 <p className="text-2xs text-muted">Seus episódios têm 2 faixas de áudio (idiomas). Elas são do anime, não da música.{noOriginal ? ' Em algum episódio não achei a faixa desse idioma: usei a padrão.' : ''}</p>
               )}
+              <label className="flex items-center gap-2" title="Subida até o drop, impacto no drop, golpes nas pancadas e whoosh nos cortes. Gerados pelo app, sem direitos autorais.">
+                <input type="checkbox" className="accent-violet" checked={useSfx} onChange={(e) => setUseSfx(e.target.checked)} /> Efeitos sonoros (impacto, subida, whoosh)
+              </label>
               <label className="flex items-center gap-2">
                 <input type="checkbox" className="accent-violet" checked={useEffects} onChange={(e) => setUseEffects(e.target.checked)} /> Efeitos (clarão, tremida, zoom)
               </label>

@@ -11,7 +11,9 @@ import {
   type MediaEnv,
 } from '@amv/media';
 import {
+  isSfxAsset,
   newId,
+  SFX_TAG,
   createProject,
   matchMissingAssets,
   parseProject,
@@ -25,6 +27,7 @@ import {
 } from '@amv/project';
 import type { Platform } from '../platform/types';
 import { analyzeEpisodeFile, analyzeMusicFile, EPISODE_ANALYSIS_VERSION, MUSIC_ANALYSIS_VERSION, type EpisodeAnalysis, type MusicAnalysis } from '@amv/analysis';
+import { renderSfx, SFX_KINDS, SFX_LABEL, sfxFileName, toWav, type SfxKind } from '@amv/sfx';
 import { rememberRecent, updateRecent } from './recents';
 
 export const PROJECT_EXTENSION = 'amvproj';
@@ -303,6 +306,40 @@ export class ProjectSession {
     return report;
   }
 
+
+  /**
+   * Garante os efeitos sonoros do app (impacto, golpe, whoosh, subida) no projeto: grava os WAV
+   * uma vez na pasta de dados e os registra como mídia com a tag `sfx` (fora das listas do usuário).
+   * Devolve o id do asset de cada efeito.
+   */
+  async ensureSfx(): Promise<Partial<Record<SfxKind, string>>> {
+    const dir = joinPath(await this.platform.dataDir(), 'sfx');
+    await this.platform.fs.mkdir(dir);
+    const env = await this.mediaEnv();
+    const ids: Partial<Record<SfxKind, string>> = {};
+    const added: Asset[] = [];
+    for (const kind of SFX_KINDS) {
+      const path = joinPath(dir, sfxFileName(kind));
+      const have = this.project.assets.find((a) => isSfxAsset(a) && a.path === path);
+      if (have) {
+        ids[kind] = have.id;
+        continue;
+      }
+      if (!(await this.platform.fs.exists(path))) await this.platform.fs.writeFile(path, toWav(renderSfx(kind)));
+      const { asset } = await inspectFile(env, path);
+      const a: Asset = { ...asset, name: `Efeito: ${SFX_LABEL[kind]}`, tags: [...asset.tags, SFX_TAG] };
+      this.runtime.set(a.id, { artifacts: null, warnings: [], errors: [] });
+      ids[kind] = a.id;
+      added.push(a);
+    }
+    if (added.length) {
+      this.history.transaction('Adicionar efeitos sonoros', added.map((asset) => ({ type: 'asset.add' as const, asset })));
+      for (const a of added) void this.process(a);
+      this.emit();
+    }
+    return ids;
+  }
+
   /** Gera (ou reaproveita do cache) os artefatos de um asset e atualiza seu estado. */
   private async process(asset: Asset): Promise<void> {
     if (!asset.probe || asset.kind === 'image') {
@@ -330,7 +367,8 @@ export class ProjectSession {
       await updateRecent(this.platform, this.path, { posterPath: result.posterPath }).catch(() => undefined);
     }
     this.emit();
-    if (!cancelled && !essentialFailed) void this.analyze(asset, result);
+    // efeitos sonoros do app não passam pela análise de música
+    if (!cancelled && !essentialFailed && !isSfxAsset(asset)) void this.analyze(asset, result);
   }
 
   /**
