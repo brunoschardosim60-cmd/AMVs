@@ -2,7 +2,7 @@ import { decodeSubtitleBytes, parseSubtitles, toSrt } from '@amv/analysis';
 import { clipEndUs, type Clip } from '@amv/project';
 import { translateLines } from '@amv/assistant';
 import { applyTranslation, langLabel, LOOKS, originalText, placeCues, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
-import { AlertTriangle, Download, FileText, Film, Languages, Trash2 } from 'lucide-react';
+import { AlertTriangle, Download, FileText, Film, Languages, Mic, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import type { ProjectSession } from '../../core/session';
@@ -24,6 +24,10 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   const [look, setLook] = useState<SubtitleLook>('legenda');
   const [lang, setLang] = useState('en');
   const [translating, setTranslating] = useState<{ done: number; total: number } | null>(null);
+  const [speechAssetId, setSpeechAssetId] = useState(project.assets.find((asset) => asset.kind === 'video')?.id ?? '');
+  const [speechModel, setSpeechModel] = useState('small');
+  const [speechLanguage, setSpeechLanguage] = useState('');
+  const [transcribing, setTranscribing] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const selection = useEditor((s) => s.selection);
   const playheadUs = useEditor((s) => s.playheadUs);
@@ -32,6 +36,8 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   const clips = trackId ? subtitleClips(project, trackId) : [];
   const selectedSubs = clips.filter((c) => selection.includes(c.id));
   const target = selectedSubs.length ? selectedSubs : clips;
+  const videoAssets = project.assets.filter((asset) => asset.kind === 'video');
+  const transcriptAssetId = videoAssets.some((asset) => asset.id === speechAssetId) ? speechAssetId : videoAssets[0]?.id ?? '';
 
   if (!tracks.length) return <p className="p-3 text-xs text-muted">O projeto não tem trilha de legendas.</p>;
 
@@ -87,6 +93,55 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     toast({ tone: 'ok', title: `${r.count} fala(s) encaixada(s)`, body: chosen.length ? 'Dos clipes selecionados.' : 'De todos os clipes do vídeo.' });
   };
 
+  const transcribe = async () => {
+    if (!platform || !transcriptAssetId || transcribing) return;
+    const asset = project.assets.find((item) => item.id === transcriptAssetId);
+    if (!asset) return;
+    const videoClips = project.clips.filter((clip) => clip.assetId === transcriptAssetId && project.tracks.find((track) => track.id === clip.trackId)?.kind === 'video');
+    const selectedClips = videoClips.filter((clip) => selection.includes(clip.id));
+    const targetVideoClips = selectedClips.length ? selectedClips : videoClips;
+    if (!targetVideoClips.length) {
+      toast({ tone: 'warn', title: 'Episódio ainda não está na timeline', body: 'Adicione ao menos um clipe deste episódio para posicionar as falas transcritas.' });
+      return;
+    }
+    if (asset.status === 'missing') {
+      toast({ tone: 'error', title: 'Arquivo do episódio ausente', body: 'Relocalize o arquivo antes de transcrever.' });
+      return;
+    }
+    const overlaps = clips.some((subtitle) =>
+      targetVideoClips.some(
+        (video) =>
+          subtitle.timelineStartUs < clipEndUs(video) && clipEndUs(subtitle) > video.timelineStartUs,
+      ),
+    );
+    if (overlaps && !(await platform.dialogs.confirm('As falas transcritas substituem legendas existentes nos trechos escolhidos. Continuar?', 'Substituir legendas no trecho?'))) return;
+    setTranscribing(true);
+    try {
+      const connection = await platform.analyzer.start();
+      const transcript = await platform.analyzer.transcribe(connection, {
+        path: asset.path,
+        model: speechModel,
+        ...(speechLanguage ? { language: speechLanguage } : {}),
+      });
+      const cues = transcript.segments.map((segment) => ({ startS: segment.start, endS: segment.end, text: segment.text }));
+      if (!cues.length) {
+        toast({ tone: 'warn', title: 'Nenhuma fala reconhecida', body: 'Tente outra faixa de áudio ou um modelo maior. O arquivo original não foi alterado.' });
+        return;
+      }
+      const r = pullClipSubtitles(project, targetVideoClips, new Map([[transcriptAssetId, cues]]), trackId, look);
+      if (!r.commands.length) {
+        toast({ tone: 'warn', title: 'As falas não caíram nos clipes', body: 'Confira se o trecho de origem dos clipes coincide com o episódio transcrito.' });
+        return;
+      }
+      session.history.transaction(`Transcrever falas (${r.count} linhas)`, r.commands);
+      const language = transcript.language ? ` Idioma detectado: ${transcript.language}${Math.round(transcript.language_probability * 100)}%.` : '';
+      toast({ tone: 'ok', title: `${r.count} falas adicionadas`, body: `Reveja e edite as legendas na trilha. A transcrição roda localmente.${language}` });
+    } catch (error) {
+      toast({ tone: 'error', title: 'Não deu para transcrever', body: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setTranscribing(false);
+    }
+  };
 
   const translate = async () => {
     if (!platform || !target.length || translating) return;
@@ -160,6 +215,40 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
             Do episódio
           </Button>
         </div>
+        {videoAssets.length > 0 && (
+          <div className="space-y-1.5 rounded-control border border-line-soft p-2">
+            <div className="flex items-center gap-1.5 text-2xs font-medium text-ink-soft">
+              <Mic size={13} />
+              Transcrição local de falas
+            </div>
+            <div className="flex gap-1">
+              <select className="h-7 min-w-0 flex-1 rounded-control border border-line bg-base px-1 text-2xs" value={transcriptAssetId} onChange={(e) => setSpeechAssetId(e.target.value)} aria-label="Episódio para transcrever" disabled={transcribing}>
+                {videoAssets.map((asset) => (
+                  <option key={asset.id} value={asset.id}>{asset.name}</option>
+                ))}
+              </select>
+              <select className="h-7 rounded-control border border-line bg-base px-1 text-2xs" value={speechModel} onChange={(e) => setSpeechModel(e.target.value)} aria-label="Modelo de transcrição" disabled={transcribing}>
+                {['tiny', 'base', 'small', 'medium', 'large-v3'].map((model) => <option key={model} value={model}>{model}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-1">
+              <select className="h-7 min-w-0 flex-1 rounded-control border border-line bg-base px-1 text-2xs" value={speechLanguage} onChange={(e) => setSpeechLanguage(e.target.value)} aria-label="Idioma falado no episódio" disabled={transcribing}>
+                <option value="">Detectar idioma</option>
+                <option value="ja">Japonês</option>
+                <option value="pt">Português</option>
+                <option value="en">Inglês</option>
+                <option value="es">Espanhol</option>
+                <option value="fr">Francês</option>
+              </select>
+              <Button size="sm" onClick={transcribe} disabled={transcribing || !transcriptAssetId} icon={<Mic size={13} />}>
+                {transcribing ? 'Transcrevendo…' : 'Transcrever'}
+              </Button>
+            </div>
+            <p className="text-2xs text-faint">
+              Local, sem enviar áudio. Requer Python e faster-whisper instalados; o modelo pode baixar na primeira execução. Usa os clipes selecionados do episódio ou, se nenhum estiver selecionado, todos os clipes dele. A faixa padrão de áudio do arquivo é usada.
+            </p>
+          </div>
+        )}
         <div className="flex flex-wrap gap-1">
           {LOOKS.map((l) => (
             <button key={l.id} type="button" title={`${l.description}${target.length ? ` Aplica em ${selectedSubs.length ? 'selecionadas' : 'todas'}.` : ''}`} onClick={() => restyle(l.id)} className={`rounded-control border px-2 py-0.5 text-2xs ${look === l.id ? 'border-violet bg-violet/10 text-ink' : 'border-line text-muted hover:text-ink'}`}>

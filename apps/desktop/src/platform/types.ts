@@ -15,6 +15,18 @@ export interface Dialogs {
   confirm(message: string, title: string): Promise<boolean>;
 }
 
+export interface AnalyzerConnection {
+  baseUrl: string;
+  token: string;
+}
+
+export interface SpeechTranscript {
+  language: string | null;
+  language_probability: number;
+  duration: number;
+  segments: { start: number; end: number; text: string; words: { start: number; end: number; text: string }[] }[];
+}
+
 export interface Platform {
   runner: ProcessRunner;
   fs: FileSystem;
@@ -36,6 +48,11 @@ export interface Platform {
     get(name: string): Promise<string | null>;
     set(name: string, value: string): Promise<void>;
     delete(name: string): Promise<void>;
+  };
+  analyzer: {
+    start(): Promise<AnalyzerConnection>;
+    transcribe(connection: AnalyzerConnection, request: { path: string; model: string; language?: string }): Promise<SpeechTranscript>;
+    stop(): Promise<void>;
   };
   /** HTTP fora do webview (sem CORS), para os provedores de IA. */
   http: FetchLike;

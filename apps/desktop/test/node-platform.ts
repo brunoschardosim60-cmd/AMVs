@@ -28,6 +28,15 @@ export function nodePlatform(root: string, answers: Partial<Dialogs> = {}): Plat
       const m = new Map<string, string>();
       return { get: async (k: string) => m.get(k) ?? null, set: async (k: string, v: string) => void m.set(k, v), delete: async (k: string) => void m.delete(k) };
     })(),
+    analyzer: {
+      start: async () => {
+        throw new Error('analisador local só está disponível no app desktop');
+      },
+      transcribe: async () => {
+        throw new Error('transcrição não é suportada na plataforma de testes');
+      },
+      stop: async () => undefined,
+    },
     http: async (url, init) => {
       const r = await fetch(url, { method: init.method, headers: init.headers, body: init.method === 'GET' ? undefined : init.body, signal: init.signal });
       return { ok: r.ok, status: r.status, text: () => r.text() };

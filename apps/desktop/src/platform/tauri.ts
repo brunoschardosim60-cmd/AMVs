@@ -7,7 +7,7 @@ import { ask, open, save } from '@tauri-apps/plugin-dialog';
 import * as tfs from '@tauri-apps/plugin-fs';
 import { Command } from '@tauri-apps/plugin-shell';
 import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
-import type { Platform } from './types';
+import type { AnalyzerConnection, Platform, SpeechTranscript } from './types';
 
 /** O plugin entrega string, Uint8Array ou (para bytes que não são UTF-8) um array de números. */
 function toBytes(data: unknown): Uint8Array {
@@ -89,6 +89,47 @@ const tauriFs: FileSystem = {
 export function createTauriPlatform(): Platform {
   let cache: string | null = null;
   let data: string | null = null;
+  const analyzer = {
+    async start(): Promise<AnalyzerConnection> {
+      const connection = await invoke<AnalyzerConnection>('analyzer_start');
+      let lastError = 'o servidor não respondeu';
+      for (let attempt = 0; attempt < 30; attempt++) {
+        try {
+          const response = await tauriFetch(`${connection.baseUrl}/health`, {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${connection.token}` },
+            connectTimeout: 1_000,
+          });
+          if (response.ok) return connection;
+          lastError = `respondeu ${response.status}`;
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+      throw new Error(`o analisador local iniciou, mas não ficou pronto: ${lastError}`);
+    },
+    async transcribe(connection: AnalyzerConnection, request: { path: string; model: string; language?: string }): Promise<SpeechTranscript> {
+      const response = await tauriFetch(`${connection.baseUrl}/speech/transcribe`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${connection.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+        connectTimeout: 15_000,
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        let detail = text;
+        try {
+          detail = (JSON.parse(text) as { detail?: string }).detail ?? text;
+        } catch {
+          // Mantém a resposta original para facilitar o diagnóstico.
+        }
+        throw new Error(`transcrição respondeu ${response.status}: ${detail}`);
+      }
+      return JSON.parse(text) as SpeechTranscript;
+    },
+    stop: () => invoke<void>('analyzer_stop'),
+  };
   return {
     runner: tauriRunner,
     fs: tauriFs,
@@ -131,6 +172,7 @@ export function createTauriPlatform(): Platform {
       set: (name, value) => invoke<void>('secret_set', { name, value }),
       delete: (name) => invoke<void>('secret_delete', { name }),
     },
+    analyzer,
     http: (url, init) => tauriFetch(url, { method: init.method, headers: init.headers, body: init.method === 'GET' ? undefined : init.body, signal: init.signal, connectTimeout: 15_000 }),
     reveal: (p) => revealItemInDir(p),
     openFile: (p) => openPath(p),

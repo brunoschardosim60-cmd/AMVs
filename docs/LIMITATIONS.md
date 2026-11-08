@@ -5,8 +5,8 @@
 - **Hash parcial**: dois arquivos com mesmo tamanho, início e fim idênticos teriam o mesmo hash. Improvável em mídia real.
 - **Linux (desenvolvimento)**: o WebKitGTK não reproduz vídeo/áudio servido pelo asset protocol do Tauri. Alvo é Windows (WebView2); no Linux a pré-visualização de mídia fica indisponível.
 - **Preview no painel de detalhes** usa `<video>` com o proxy: é para conferir a mídia, não é preciso quadro a quadro (o preview da timeline vem na Fase 2).
-- **Analisador Python** ainda não é iniciado pelo app (entra na Fase 4).
-- **Transcrição faster-whisper**: o analisador expõe um endpoint local autenticado e roda em CPU/int8, mas o app desktop ainda não inicia o serviço nem oferece o botão de transcrever. O extra Python é opcional; na primeira execução, faster-whisper pode baixar o modelo escolhido do Hugging Face (centenas de MB ou mais). Não há fixture de fala sintética nem teste com modelo real neste passo.
+- **Analisador Python**: o app inicia `python -m amv_analyzer` (ou `py -3`) quando a pessoa pede transcrição. O instalador ainda não inclui Python, o pacote do analisador nem faster-whisper; é necessário instalar o serviço com `pip install -e ".[speech]"` em `services/analyzer`. Sem isso, a interface mostra o erro do serviço.
+- **Transcrição faster-whisper**: CPU/int8 e áudio permanece local. O modelo escolhido pode ser baixado do Hugging Face na primeira execução (centenas de MB ou mais). A UI não mostra progresso real nem cancela uma inferência em andamento. Usa a faixa de áudio padrão do arquivo; episódios com múltiplas faixas precisam escolher a correta manualmente antes da transcrição ou usar outra versão do arquivo. Ainda não há teste com áudio/modelo reais.
 - **Tamanho do instalador**: o build GPL completo do FFmpeg tem ~166 MB por executável (ffmpeg + ffprobe). Dá para reduzir com um build enxuto (só os codecs usados) numa fase de polimento.
 
 ## Assistente, músicas e legendas (0.5.0)

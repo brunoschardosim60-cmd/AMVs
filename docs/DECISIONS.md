@@ -91,4 +91,5 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 ## 2026-11-08 · Transcrição local via faster-whisper
 - O serviço Python passa a oferecer transcrição autenticada por arquivo local, com timestamps por segmento e palavra; modelo `small`/CPU/int8 por padrão e tamanhos configuráveis.
 - `faster-whisper` é extra opcional (MIT); a instalação adiciona CTranslate2 e dependências nativas, e os pesos são baixados sob demanda (o tamanho depende do modelo, de centenas de MB a vários GB). Não baixar nem iniciar modelo até a pessoa solicitar a transcrição.
-- Motivo: entregar timestamps locais sem enviar áudio a terceiros. O app ainda precisa empacotar/iniciar o sidecar e conectar o fluxo à UI antes do recurso ficar disponível na interface.
+- O desktop inicia o serviço sob demanda via `python`/`py -3`, autentica com token por sessão e mantém o processo até o app fechar. O instalador ainda não empacota o runtime Python; o usuário precisa instalar o extra no ambiente Python.
+- Motivo: entregar timestamps locais sem enviar áudio a terceiros e manter o editor funcional sem Python. Não instalar dependências nem baixar pesos sem ação explícita do usuário.

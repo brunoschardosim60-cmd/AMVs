@@ -2,9 +2,12 @@
 
 ## Próxima camada — transcrição local (em andamento)
 
-- O sidecar Python agora oferece `POST /speech/transcribe` para transcrever um arquivo local sem carregá-lo inteiro na memória. Retorna idioma detectado, segmentos e timestamps por palavra.
+- O painel de legendas agora permite escolher episódio, modelo e idioma, iniciar a transcrição local, e inserir as falas como clipes de texto editáveis nos trechos correspondentes do episódio. As mudanças entram no histórico e podem ser desfeitas.
+- Se já houver legendas no mesmo trecho, o app pede confirmação antes de substituí-las.
+- O app inicia o sidecar Python sob demanda com token aleatório e porta local; o áudio não é enviado para provedores externos.
+- O endpoint `POST /speech/transcribe` retorna idioma detectado, segmentos e timestamps por palavra sem carregar o arquivo inteiro na memória.
 - Usa faster-whisper em CPU/int8, com modelos `tiny`, `base`, `small`, `medium` ou `large-v3`; idioma pode ser automático ou informado.
-- O extra é opcional e o modelo só é carregado quando a rota é chamada. Empacotamento/inicialização do sidecar e integração com o painel de legendas ainda não foram feitos; portanto esta rota ainda não está disponível como botão no app.
+- Requer Python e `pip install -e ".[speech]"` em `services/analyzer`; o instalador do desktop ainda não empacota essas dependências. Sem elas, o app informa o erro. Não há progresso real/cancelamento da inferência nem escolha da faixa de áudio do episódio nesta versão.
 
 ## 0.6.1 (a publicar)
 
