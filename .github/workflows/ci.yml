@@ -53,6 +53,7 @@ jobs:
         shell: pwsh
         run: |
           $bin = Resolve-Path apps/desktop/src-tauri/binaries
+          $bin.Path | Out-File -Append $env:GITHUB_PATH
           "AMV_FFMPEG=$bin\ffmpeg-x86_64-pc-windows-msvc.exe" | Out-File -Append $env:GITHUB_ENV
           "AMV_FFPROBE=$bin\ffprobe-x86_64-pc-windows-msvc.exe" | Out-File -Append $env:GITHUB_ENV
 

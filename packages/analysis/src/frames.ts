@@ -20,6 +20,14 @@ export async function grabFrameJpeg(runner: ProcessRunner, path: string, timeS: 
     },
   );
   if (signal?.aborted) throw new CancelledError();
+  if (
+    !total &&
+    /Could not open encoder before EOF|Nothing was written into output file, because at least one of its streams received no packets/i.test(
+      r.stderr,
+    )
+  ) {
+    throw new Error(`nenhum quadro em ${timeS.toFixed(2)} s (o instante passa do fim do vídeo?)`);
+  }
   if (r.code !== 0) throw new ToolError('ffmpeg', r.code, r.stderr);
   if (!total) throw new Error(`nenhum quadro em ${timeS.toFixed(2)} s (o instante passa do fim do vídeo?)`);
   const all = new Uint8Array(total);
