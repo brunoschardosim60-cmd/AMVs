@@ -23,7 +23,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Atalhos: Ctrl+N/O/S/Shift+S/I/Z/Shift+Z/Y; bloqueio de atalhos do navegador | feito | código; verificação manual pendente no Windows |
 | Aviso ao fechar com alterações não salvas | feito | código; verificação manual pendente no Windows |
 | Sidecar Python opcional (esqueleto: saúde, módulos, token) | feito | pytest |
-| CI no Windows: testes + instalador NSIS/MSI | feito | run 42532183362 verde no commit d54c7a1, com runtime PyInstaller, typecheck, testes com FFmpeg real e geração de NSIS/MSI. Esse artefato ainda não foi instalado. O teste real de transcrição encontrou incompatibilidade entre faster-whisper 1.2.1 e PyAV 19; o código agora limita PyAV a <19 e o smoke test do pacote decodifica WAV, aguardando novo CI. |
+| CI no Windows: testes + instalador NSIS/MSI | feito | run 42535094450 verde no commit ed6b20c, com PyAV compatível, smoke test que decodifica WAV, typecheck, testes com FFmpeg real e geração de NSIS/MSI. O artefato desse run foi gerado, mas não instalado. O run 42532183362 também passou antes de detectar, no teste de áudio real, incompatibilidade entre faster-whisper 1.2.1 e PyAV 19. |
 
 ### Pendente de verificação no Windows
 - Reprodução do proxy no painel de detalhes (WebView2). No Linux de desenvolvimento não dá para testar: o WebKitGTK não toca mídia pelo protocolo de arquivos do Tauri.
