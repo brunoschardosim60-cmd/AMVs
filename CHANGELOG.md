@@ -1,5 +1,11 @@
 # Novidades
 
+## Próxima camada — transcrição local (em andamento)
+
+- O sidecar Python agora oferece `POST /speech/transcribe` para transcrever um arquivo local sem carregá-lo inteiro na memória. Retorna idioma detectado, segmentos e timestamps por palavra.
+- Usa faster-whisper em CPU/int8, com modelos `tiny`, `base`, `small`, `medium` ou `large-v3`; idioma pode ser automático ou informado.
+- O extra é opcional e o modelo só é carregado quando a rota é chamada. Empacotamento/inicialização do sidecar e integração com o painel de legendas ainda não foram feitos; portanto esta rota ainda não está disponível como botão no app.
+
 ## 0.6.1 (a publicar)
 
 **Análise visual detalhada**

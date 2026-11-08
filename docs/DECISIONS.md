@@ -87,3 +87,8 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 ## 2026-11-08 · Calibração manual da sincronia
 - A geração aceita ajuste entre −500 e +500 ms para deslocar batidas, cortes, drop e falas em relação à faixa de música, sem deslocar o áudio.
 - Motivo: tornar corrigível um deslocamento constante sem fingir que o rastreador atual resolve deriva de andamento variável. A calibração com músicas reais continua necessária.
+
+## 2026-11-08 · Transcrição local via faster-whisper
+- O serviço Python passa a oferecer transcrição autenticada por arquivo local, com timestamps por segmento e palavra; modelo `small`/CPU/int8 por padrão e tamanhos configuráveis.
+- `faster-whisper` é extra opcional (MIT); a instalação adiciona CTranslate2 e dependências nativas, e os pesos são baixados sob demanda (o tamanho depende do modelo, de centenas de MB a vários GB). Não baixar nem iniciar modelo até a pessoa solicitar a transcrição.
+- Motivo: entregar timestamps locais sem enviar áudio a terceiros. O app ainda precisa empacotar/iniciar o sidecar e conectar o fluxo à UI antes do recurso ficar disponível na interface.

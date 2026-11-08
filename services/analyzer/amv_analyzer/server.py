@@ -1,11 +1,7 @@
-"""Servidor local do analisador.
+"""Loopback API do analisador local.
 
-Segurança: escuta só em 127.0.0.1, numa porta escolhida pelo sistema, e exige
-um token gerado por sessão (o app recebe porta e token pela primeira linha do
-stdout). Nada é exposto para a rede.
-
-Fase 1: só o esqueleto (saúde e capacidades). Os módulos de análise entram na
-Fase 4, cada um declarando se está disponível neste computador.
+Escuta apenas em 127.0.0.1, usa uma porta aleatória e autentica cada requisição
+com um token aleatório da sessão. O modelo de fala é opcional e carrega sob demanda.
 """
 from __future__ import annotations
 
@@ -14,18 +10,26 @@ import json
 import secrets
 import socket
 import sys
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from pydantic import BaseModel, Field
 
 from . import __version__
+from .speech import MODEL_SIZES, transcribe
 
-# módulo -> pacote Python que ele exige
 MODULES: dict[str, str] = {
     "beats": "librosa",
     "scenes": "scenedetect",
     "speech": "faster_whisper",
     "separation": "demucs",
 }
+
+
+class TranscriptionRequest(BaseModel):
+    path: str = Field(min_length=1)
+    model: str = "small"
+    language: str | None = None
 
 
 def module_status() -> dict[str, dict[str, object]]:
@@ -51,6 +55,25 @@ def create_app(token: str) -> FastAPI:
     def modules() -> dict[str, dict[str, object]]:
         return module_status()
 
+    @app.post("/speech/transcribe", dependencies=[Depends(auth)])
+    def speech_transcribe(request: TranscriptionRequest) -> dict[str, object]:
+        if request.model not in MODEL_SIZES:
+            raise HTTPException(status_code=422, detail=f"modelo inválido; opções: {', '.join(sorted(MODEL_SIZES))}")
+        if request.language is not None and (
+            len(request.language) not in (2, 3) or not request.language.isascii() or not request.language.isalpha()
+        ):
+            raise HTTPException(status_code=422, detail="idioma deve ser um código ISO de 2 ou 3 letras")
+        if not Path(request.path).is_file():
+            raise HTTPException(status_code=404, detail="arquivo de mídia não encontrado")
+        try:
+            return transcribe(request.path, request.model, request.language)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     return app
 
 
@@ -65,7 +88,6 @@ def main() -> None:
 
     token = secrets.token_urlsafe(32)
     port = free_port()
-    # primeira linha do stdout: o app lê e conecta
     print(json.dumps({"event": "ready", "port": port, "token": token}), flush=True)
     uvicorn.run(create_app(token), host="127.0.0.1", port=port, log_level="warning")
 
