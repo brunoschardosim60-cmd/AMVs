@@ -4,6 +4,7 @@ import { PRESETS, labelScenes, parseSceneLabels, type FetchLike } from '../src/i
 
 const ollama = { ...PRESETS.find((p) => p.id === 'ollama')! };
 const anthropic = { ...PRESETS.find((p) => p.id === 'anthropic')! };
+const gemini = { ...PRESETS.find((p) => p.id === 'gemini')! };
 
 /** Modelo falso: recebe o corpo da requisição e responde. */
 function fake(reply: (body: any, call: number) => string, kind: 'openai' | 'anthropic' = 'openai') {
@@ -22,6 +23,28 @@ const asked = (body: any): string => (typeof body.messages.at(-1).content === 's
 const nImages = (body: any): number => (body.messages.at(-1).content as any[]).filter((c) => c.type === 'image_url').length;
 
 describe('imagens para o modelo', () => {
+  it('Gemini: texto e quadros como inlineData na API oficial', async () => {
+    let request: { url: string; headers: Record<string, string>; body: any } | undefined;
+    const fetch: FetchLike = async (url, init) => {
+      request = { url, headers: init.headers, body: JSON.parse(init.body) };
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          candidates: [{ content: { parts: [{ text: '[{"i":1,"characters":["Goku"],"fight":true,"note":"soco"}]' }] } }],
+          usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 10 },
+        }),
+      };
+    };
+    const result = await labelScenes(gemini, 'secret', fetch, frames(1));
+    expect(request?.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent');
+    expect(request?.headers['x-goog-api-key']).toBe('secret');
+    expect(request?.body.contents[0].parts[0].text).toContain('1 imagem');
+    expect(request?.body.contents[0].parts[1]).toEqual({ inlineData: { mimeType: 'image/jpeg', data: 'IMG0' } });
+    expect(result.labels[frames(1)[0]!.id]).toEqual({ characters: ['Goku'], fight: true, note: 'soco' });
+    expect(result.usage).toEqual({ input: 50, output: 10 });
+  });
+
   it('OpenAI/Ollama: texto + image_url com data URI', async () => {
     const m = fake(() => '[{"i":1,"characters":["A"],"fight":true,"note":"x"}]');
     await labelScenes(ollama, null, m.f, frames(1));

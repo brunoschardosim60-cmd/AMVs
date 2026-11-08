@@ -368,7 +368,11 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
               ) : (
                 <p className="text-2xs text-muted">Descubra quem aparece em cada cena para montar só com um personagem e deixar de fora o que não é luta.</p>
               )}
-              {characters.length > 0 && <p className="mt-1 text-2xs text-muted">Só cenas com {characters.join(' ou ')}. {plan && plan.wanted === null ? 'Poucas cenas: vou usar todas.' : ''}</p>}
+              {characters.length > 0 && (
+                <p className="mt-1 text-2xs text-muted">
+                  Só cenas com {characters.join(' ou ')}. {plan?.warnings.find((warning) => warning.includes('Mantive o filtro'))}
+                </p>
+              )}
               {vision ? (
                 <div className="mt-2 flex items-center gap-2 text-2xs text-muted">
                   <span className="tnum">

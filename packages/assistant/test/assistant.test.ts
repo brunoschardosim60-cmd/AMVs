@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EpisodeAnalysis, MusicAnalysis, Shot } from '@amv/analysis';
 import { applyCommand, clipEndUs, createProject, insertAsset, type Asset, type Project } from '@amv/project';
-import { closeSelection, findWeakPoints, localTurn, parseAnthropic, runTurn, validateSelection, type AssistantContext, type FetchLike } from '../src/index.js';
+import { chat, closeSelection, findWeakPoints, listModels, localTurn, parseAnthropic, PRESETS, runTurn, validateSelection, type AssistantContext, type FetchLike } from '../src/index.js';
 
 const S = 1_000_000;
 function setup(): AssistantContext {
@@ -86,6 +86,56 @@ describe('chat local (sem modelo)', () => {
 });
 
 describe('chat com modelo (respostas gravadas)', () => {
+  it('Gemini usa a API oficial, converte tool calls e contabiliza uso', async () => {
+    const cfg = PRESETS.find((p) => p.id === 'gemini')!;
+    let request: { url: string; headers: Record<string, string>; body: Record<string, unknown> } | undefined;
+    const fetch: FetchLike = async (url, init) => {
+      request = { url, headers: init.headers, body: JSON.parse(init.body) };
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          candidates: [{ content: { parts: [{ functionCall: { name: 'ideas', args: {} } }] } }],
+          usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 4 },
+        }),
+      };
+    };
+    const result = await chat(cfg, 'secret', fetch, 'sistema', [{ role: 'user', content: 'ideias' }], [{ name: 'ideas', description: 'ideias', parameters: { type: 'object' } }]);
+    expect(request?.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent');
+    expect(request?.headers['x-goog-api-key']).toBe('secret');
+    expect(request?.url).not.toContain('secret');
+    expect(request?.body).toMatchObject({
+      systemInstruction: { parts: [{ text: 'sistema' }] },
+      tools: [{ functionDeclarations: [{ name: 'ideas' }] }],
+    });
+    expect(result).toEqual({ text: '', toolCalls: [{ id: 'gemini_call_0', name: 'ideas', args: {} }], usage: { input: 12, output: 4 } });
+  });
+
+  it('Gemini lista somente modelos que aceitam generateContent', async () => {
+    const cfg = PRESETS.find((p) => p.id === 'gemini')!;
+    const fetch: FetchLike = async (url, init) => {
+      expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000');
+      expect(init.headers['x-goog-api-key']).toBe('secret');
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          models: [
+            { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/embedding-001', supportedGenerationMethods: ['embedContent'] },
+          ],
+        }),
+      };
+    };
+    await expect(listModels(cfg, 'secret', fetch)).resolves.toEqual(['gemini-2.5-flash']);
+  });
+
+  it('Gemini recusa endpoints não oficiais antes de enviar a chave', async () => {
+    const cfg = { ...PRESETS.find((p) => p.id === 'gemini')!, baseUrl: 'https://attacker.example/api' };
+    const fetch: FetchLike = async () => { throw new Error('não deveria chamar a rede'); };
+    await expect(chat(cfg, 'secret', fetch, '', [], [])).rejects.toThrow(/API oficial/);
+  });
+
   it('OpenAI: chama ferramenta, recebe resultado e responde; a proposta volta para o app', async () => {
     const calls: { url: string; body: Record<string, unknown> }[] = [];
     const answers = [

@@ -153,6 +153,7 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
     }
   }
   const beats = m.beats.map((t) => t + beatOffsetS).filter((t) => t >= a - 0.01 && t <= b + 0.01);
+  const sectionEdges = m.sections.flatMap((section) => [section.startS, section.endS]).map((t) => t + beatOffsetS);
   const grid = beats.length >= 4 ? beats : Array.from({ length: Math.ceil((b - a) / 0.5) + 1 }, (_, i) => a + beatOffsetS + i * 0.5);
   const speedUp = [1.6, 1.25, 1, 0.75][intensity]!;
   const slots: Slot[] = [];
@@ -174,6 +175,8 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
       next = grid[Math.min(grid.length - 1, i + n)] ?? b;
     }
     if (next <= cur + 0.05 || i + n >= grid.length - 1) next = b;
+    const sectionEdge = sectionEdges.find((edge) => edge > cur + 0.05 && edge < next - 0.05);
+    if (sectionEdge !== undefined) next = sectionEdge;
     slots.push({ startS: cur - a, endS: Math.min(b, next) - a, energy: e, section: sectionAt(m, cur)?.label ?? '', isDrop: drop !== null && Math.abs(cur - drop) < 0.06 });
     i = grid.findIndex((g) => g >= next - 0.01);
     if (i < 0) break;
@@ -316,8 +319,7 @@ export function planFootage(eps: EpisodeInput[], o: Pick<GenerateOptions, 'style
   if (wanted) {
     const have = countMatches();
     if (have < Math.max(8, Math.round(neededShots * 0.3))) {
-      warnings.push(`Só achei ${have} cena(s) com ${o.characters!.join(', ')} (o vídeo pede ~${neededShots} cortes): usei cenas de todos os personagens. Rode a análise com IA em mais lutas.`);
-      wanted = null;
+      warnings.push(`Só achei ${have} cena(s) identificadas com ${o.characters!.join(', ')} (o vídeo pede ~${neededShots} cortes). Mantive o filtro para não misturar personagens; analise mais cenas ou selecione outros personagens.`);
     }
   }
   let pool: PoolEntry[] = [];
@@ -660,7 +662,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     }
   }
   if (!candidates.length) {
-    warnings.push('Nenhuma cena analisada ainda: espere a análise dos episódios terminar.');
+    warnings.push(plan.wanted
+      ? `Nenhuma cena analisada corresponde aos personagens selecionados (${[...plan.wanted].join(', ')}); não misturei outros personagens.`
+      : 'Nenhuma cena analisada ainda: espere a análise dos episódios terminar.');
     return { commands: cmds, summary: { clips: 0, cuts: 0, speech: null, musicRange: range, drop: dropT, focus: plan.mode, fights: [], voices: 0, hitsSynced: 0, sfx: 0 }, warnings };
   }
   const { lowI, highI } = plan.fit;

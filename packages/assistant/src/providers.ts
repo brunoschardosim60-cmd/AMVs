@@ -2,10 +2,11 @@
  * Adaptadores de provedores de LLM atrás de uma interface única.
  * - "openai": API de chat compatível com OpenAI (OpenAI, Ollama, LM Studio, OpenRouter, Groq…)
  * - "anthropic": API de mensagens da Anthropic
+ * - "gemini": Gemini API oficial do Google
  * O fetch é injetado (no app vem do plugin HTTP do Tauri; nos testes, um falso).
  */
 
-export type ProviderKind = 'openai' | 'anthropic';
+export type ProviderKind = 'openai' | 'anthropic' | 'gemini';
 
 export interface ProviderConfig {
   /** Rótulo para o usuário. */
@@ -21,6 +22,7 @@ export const PRESETS: (ProviderConfig & { id: string; help: string; local: boole
   { id: 'ollama', name: 'Ollama (no seu PC)', kind: 'openai', baseUrl: 'http://localhost:11434/v1', model: 'llama3.1', needsKey: false, local: true, help: 'Grátis e offline. Instale o Ollama e rode "ollama pull llama3.1".' },
   { id: 'anthropic', name: 'Claude (Anthropic)', kind: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-5-5', needsKey: true, local: false, help: 'Chave em console.anthropic.com.' },
   { id: 'openai', name: 'OpenAI', kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', needsKey: true, local: false, help: 'Chave em platform.openai.com.' },
+  { id: 'gemini', name: 'Gemini (Google)', kind: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-3.8-flash', needsKey: true, local: false, help: 'API oficial do Gemini. Crie uma chave no Google AI Studio.' },
   { id: 'compat', name: 'Outro compatível com OpenAI', kind: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: '', needsKey: true, local: false, help: 'OpenRouter, Groq, LM Studio… informe o endereço e o modelo.' },
 ];
 
@@ -81,6 +83,11 @@ function explain(status: number, body: string, cfg: ProviderConfig): string {
 }
 
 const trimSlash = (s: string) => s.replace(/\/+$/, '');
+const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+
+function assertGeminiBaseUrl(baseUrl: string): void {
+  if (trimSlash(baseUrl) !== GEMINI_BASE_URL) throw new ProviderError('O Gemini só pode usar a API oficial generativelanguage.googleapis.com.', null);
+}
 /** O plugin HTTP do Tauri rejeita com string, não com Error. */
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -96,7 +103,9 @@ export async function chat(
   if (cfg.needsKey && !key) throw new ProviderError(`Falta a chave do ${cfg.name}. Abra as configurações de IA.`, null);
   let res: Awaited<ReturnType<FetchLike>>;
   try {
-    res = cfg.kind === 'anthropic' ? await callAnthropic(cfg, key!, fetch, system, messages, tools, signal) : await callOpenAi(cfg, key, fetch, system, messages, tools, signal);
+    if (cfg.kind === 'anthropic') res = await callAnthropic(cfg, key!, fetch, system, messages, tools, signal);
+    else if (cfg.kind === 'gemini') res = await callGemini(cfg, key!, fetch, system, messages, tools, signal);
+    else res = await callOpenAi(cfg, key, fetch, system, messages, tools, signal);
   } catch (e) {
     if (e instanceof ProviderError) throw e;
     if (e instanceof Error && e.name === 'AbortError') throw e;
@@ -106,7 +115,9 @@ export async function chat(
   const body = await res.text();
   if (!res.ok) throw new ProviderError(explain(res.status, body, cfg), res.status);
   try {
-    return cfg.kind === 'anthropic' ? parseAnthropic(body) : parseOpenAi(body);
+    if (cfg.kind === 'anthropic') return parseAnthropic(body);
+    if (cfg.kind === 'gemini') return parseGemini(body);
+    return parseOpenAi(body);
   } catch {
     throw new ProviderError(`Resposta inesperada de ${cfg.baseUrl} (não é a API de um modelo). Confira o endereço.`, res.status);
   }
@@ -199,13 +210,77 @@ export function parseAnthropic(body: string): ChatResult {
   return { text, toolCalls, usage: j.usage ? { input: j.usage.input_tokens ?? 0, output: j.usage.output_tokens ?? 0 } : null };
 }
 
+// ---------------------------------------------------------------- Gemini
+
+function toGemini(messages: ChatMessage[]) {
+  const out: { role: 'user' | 'model'; parts: Record<string, unknown>[] }[] = [];
+  const push = (role: 'user' | 'model', part: Record<string, unknown>) => {
+    const last = out.at(-1);
+    if (last?.role === role) last.parts.push(part);
+    else out.push({ role, parts: [part] });
+  };
+  for (const m of messages) {
+    if (m.role === 'user') {
+      push('user', { text: m.content });
+      for (const image of m.images ?? []) push('user', { inlineData: { mimeType: image.mime, data: image.base64 } });
+    } else if (m.role === 'assistant') {
+      if (m.content) push('model', { text: m.content });
+      for (const tool of m.toolCalls ?? []) push('model', { functionCall: { name: tool.name, args: tool.args } });
+    } else {
+      push('user', { functionResponse: { name: m.name, response: { content: m.content } } });
+    }
+  }
+  return out;
+}
+
+function callGemini(cfg: ProviderConfig, key: string, fetch: FetchLike, system: string, messages: ChatMessage[], tools: ToolSpec[], signal?: AbortSignal) {
+  assertGeminiBaseUrl(cfg.baseUrl);
+  const model = encodeURIComponent(cfg.model);
+  const declarations = tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
+  const body: Record<string, unknown> = {
+    systemInstruction: { parts: [{ text: system }] },
+    contents: toGemini(messages),
+    generationConfig: { temperature: 0.4 },
+  };
+  if (declarations.length) body.tools = [{ functionDeclarations: declarations }];
+  return fetch(`${trimSlash(cfg.baseUrl)}/models/${model}:generateContent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
+export function parseGemini(body: string): ChatResult {
+  const j = JSON.parse(body) as {
+    candidates?: { content?: { parts?: ({ text?: string; functionCall?: { id?: string; name: string; args?: Record<string, unknown> } }[]) } }[];
+    usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+  };
+  const parts = j.candidates?.[0]?.content?.parts ?? [];
+  const text = parts.flatMap((part) => (typeof part.text === 'string' ? [part.text] : [])).join('');
+  const toolCalls = parts.flatMap((part, i) => {
+    const call = part.functionCall;
+    return call ? [{ id: call.id || `gemini_call_${i}`, name: call.name, args: call.args ?? {} }] : [];
+  });
+  const usage = j.usageMetadata
+    ? { input: j.usageMetadata.promptTokenCount ?? 0, output: j.usageMetadata.candidatesTokenCount ?? 0 }
+    : null;
+  return { text, toolCalls, usage };
+}
+
 /** Lista os modelos disponíveis (também serve de "testar conexão"). */
 export async function listModels(cfg: ProviderConfig, key: string | null, fetch: FetchLike): Promise<string[]> {
   if (cfg.needsKey && !key) throw new ProviderError(`Falta a chave do ${cfg.name}.`, null);
+  if (cfg.kind === 'gemini') assertGeminiBaseUrl(cfg.baseUrl);
   const headers: Record<string, string> = {};
   if (cfg.kind === 'anthropic') Object.assign(headers, { 'x-api-key': key!, 'anthropic-version': '2023-06-01' });
+  else if (cfg.kind === 'gemini') headers['x-goog-api-key'] = key!;
   else if (key) headers.authorization = `Bearer ${key}`;
-  const url = cfg.kind === 'anthropic' ? `${trimSlash(cfg.baseUrl)}/v1/models?limit=100` : `${trimSlash(cfg.baseUrl)}/models`;
+  const url = cfg.kind === 'anthropic'
+    ? `${trimSlash(cfg.baseUrl)}/v1/models?limit=100`
+    : cfg.kind === 'gemini'
+      ? `${trimSlash(cfg.baseUrl)}/models?pageSize=1000`
+      : `${trimSlash(cfg.baseUrl)}/models`;
   let res: Awaited<ReturnType<FetchLike>>;
   try {
     res = await fetch(url, { method: 'GET', headers, body: '' });
@@ -215,11 +290,14 @@ export async function listModels(cfg: ProviderConfig, key: string | null, fetch:
   }
   const body = await res.text();
   if (!res.ok) throw new ProviderError(explain(res.status, body, cfg), res.status);
-  let j: { data?: { id: string }[]; models?: { name: string }[] };
+  let j: { data?: { id: string }[]; models?: { name: string; supportedGenerationMethods?: string[] }[] };
   try {
     j = JSON.parse(body) as typeof j;
   } catch {
     throw new ProviderError(`Resposta inesperada de ${url} (não é a API de um modelo). Confira o endereço.`, res.status);
   }
-  return (j.data?.map((m) => m.id) ?? j.models?.map((m) => m.name) ?? []).sort();
+  const models = j.data?.map((m) => m.id) ?? j.models
+    ?.filter((m) => cfg.kind !== 'gemini' || m.supportedGenerationMethods?.includes('generateContent'))
+    .map((m) => cfg.kind === 'gemini' ? m.name.replace(/^models\//, '') : m.name) ?? [];
+  return models.sort();
 }

@@ -87,6 +87,18 @@ describe('trecho da música', () => {
     expect(run({ beatOffsetMs: 80 }).r.summary.drop).toBeCloseTo(24.08);
     expect(run().r.summary.musicRange).toEqual(run({ beatOffsetMs: 80 }).r.summary.musicRange);
   });
+
+  it('abre um corte na transição de seção mesmo quando não coincide com o drop', () => {
+    const analysis = music().analysis;
+    analysis.sections = [
+      { startS: 0, endS: 39.25, label: 'intro', energy: 0.25 },
+      { startS: 39.25, endS: 40, label: 'pré-refrão', energy: 0.6 },
+      { startS: 40, endS: 90, label: 'drop', energy: 0.9 },
+    ];
+    const slots = makeSlots(analysis, [16, 76], styleDef('hype'), 2);
+    expect(slots.some((slot) => Math.abs(slot.endS - 23.25) < 0.01)).toBe(true);
+    expect(slots.some((slot) => Math.abs(slot.startS - 23.25) < 0.01)).toBe(true);
+  });
 });
 
 describe('gerar AMV — hype', () => {

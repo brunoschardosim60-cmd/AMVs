@@ -23,7 +23,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Atalhos: Ctrl+N/O/S/Shift+S/I/Z/Shift+Z/Y; bloqueio de atalhos do navegador | feito | código; verificação manual pendente no Windows |
 | Aviso ao fechar com alterações não salvas | feito | código; verificação manual pendente no Windows |
 | Sidecar Python opcional (esqueleto: saúde, módulos, token) | feito | pytest |
-| CI no Windows: testes + instalador NSIS/MSI | feito | run 42305866809 verde; o 1º run pegou uma diferença do FFmpeg 9 nas miniaturas de HEVC, já corrigida |
+| CI no Windows: testes + instalador NSIS/MSI | feito | run 42525280196 verde no commit 3ac18d4; runtime PyInstaller, typecheck, testes com FFmpeg real e geração de NSIS/MSI passaram. O artefato de 406 MB foi instalado em diretório temporário isolado no Windows e o app abriu. Essa validação é do commit 3ac18d4, anterior às mudanças locais de Gemini/montagem; ainda falta CI do commit atual. |
 
 ### Pendente de verificação no Windows
 - Reprodução do proxy no painel de detalhes (WebView2). No Linux de desenvolvimento não dá para testar: o WebKitGTK não toca mídia pelo protocolo de arquivos do Tauri.
@@ -80,7 +80,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 ## Fase 6 — Assistente (primeira versão)
 | Item | Estado | Como foi verificado |
 |---|---|---|
-| Provedores: Ollama/compatível OpenAI e Anthropic; chave no cofre do sistema; teste de conexão | feito | testes com respostas gravadas; app real com servidor falso local |
+| Provedores: Ollama/compatível OpenAI, Anthropic e Gemini oficial; chave no cofre do sistema; teste de conexão | feito | Gemini: chamadas/ferramentas/modelos testados com respostas gravadas; sem chave real |
 | Ferramentas: pontos fracos, cenas, falas, ideias; propostas (trocar cena, efeito, cortes rápidos, fala antes do drop, montagem, remover) | feito | 8 testes |
 | Revisão: itens com dependências, testar (aplica e volta), aplicar parcial num único desfazer, revalidação | feito | testes + app real |
 | Modo local sem modelo | feito | testes + app real |
@@ -101,7 +101,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Importar SRT/ASS/VTT/LRC com detecção de codificação; LRC alinha com a música | feito | testes |
 | Puxar falas do episódio para os clipes (considera velocidade) | feito | testes |
 | Editar texto, ajustar tempo (±), estilos, avisos de leitura, exportar SRT/VTT/LRC | feito | testes + app real |
-| Transcrição local faster-whisper, tradução de legendas | parcial | Transcrição vira clipes editáveis e permite selecionar o stream de áudio; progresso de extração/segmentos e cancelamento cooperativo, com término forçado do sidecar após 5 s. Smoke test Windows do runtime PyInstaller passou; a suíte CI foi corrigida para usar o sidecar e o build final do instalador precisa passar. Ainda falta validar com áudio/modelo reais. Tradução de legendas já funciona. |
+| Transcrição local faster-whisper, tradução de legendas | parcial | Transcrição vira clipes editáveis e permite selecionar o stream de áudio; progresso de extração/segmentos e cancelamento cooperativo, com término forçado do sidecar após 5 s. Runtime PyInstaller empacotado e instalador do CI aberto com sucesso em diretório temporário isolado. Ainda falta validar com áudio/modelo reais. Tradução de legendas já funciona. |
 | Alinhamento automático de letra sem tempo | pendente | — |
 
 ## Pós-0.5.5 (0.6.0, em andamento)
@@ -127,8 +127,8 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 |---|---|---|
 | 1. Sincronia ajustável | primeira entrega feita | Ajuste fino de −500 a +500 ms na geração; desloca batidas, cortes, drop e posições de falas sem deslocar o áudio. Testes do Auto AMV e typecheck; **ainda precisa ser calibrado com músicas reais**. Isso corrige um deslocamento constante, não deriva de andamento variável. |
 | 2. Continuidade de luta/personagem | parcial; primeira melhoria feita | A visão agora oferece escopo "só lutas" ou "todas as cenas"; o modo detalhado revisita rótulos antigos e combina 3 quadros por cena, sem limite fixo de 120. Falta validar modelo real, expor confiança/revisão e melhorar agrupamento heurístico de lutas. |
-| 3. Falas e letras automáticas | parcial; transcrição com stream, progresso e cancelamento | No painel de legendas, escolha episódio, faixa de áudio, modelo e idioma; o app extrai o stream escolhido para WAV em cache e converte falas em clipes editáveis nos trechos selecionados (ou em todos os clipes daquele episódio). Progresso de extração e dos segmentos; cancelar termina o job ou encerra o sidecar após 5 s. Sem progresso detalhado do download dos pesos. 10 testes Python, typecheck e build passaram; smoke test do runtime PyInstaller passou no Windows. Ainda falta CI verde para o instalador, alinhar letra sem tempo e validar com áudio/modelo reais. |
+| 3. Falas e letras automáticas | parcial; transcrição com stream, progresso e cancelamento | No painel de legendas, escolha episódio, faixa de áudio, modelo e idioma; o app extrai o stream escolhido para WAV em cache e converte falas em clipes editáveis nos trechos selecionados (ou em todos os clipes daquele episódio). Progresso de extração e dos segmentos; cancelar termina o job ou encerra o sidecar após 5 s. Sem progresso detalhado do download dos pesos. CI Windows (run 42525280196): runtime PyInstaller, typecheck, testes com FFmpeg real e instalador NSIS/MSI passaram. Ainda falta instalar/abrir em Windows, alinhar letra sem tempo e validar com áudio/modelo reais. |
 | 4. Mixagem e reprodução | parcial; validar | Exportação já separa música/voz, aplica ducking e efeitos. Falta validar no Windows a faixa de áudio escolhida no preview e melhorar a explicação visual das trilhas de idioma do episódio versus música. |
-| 5. Assistente e interface | parcial; validar | Assistente flutuante, minimizável e propostas já existem. Faltam teste de interação no WebView2 e correções guiadas por reproduções concretas dos botões/layout que falham. |
-| 6. YouTube/Spotify oficiais | pendente | Avaliar busca/reprodução por APIs e players oficiais. Streaming continua sendo referência: nunca extrair áudio para timeline ou exportação. |
+| 5. Assistente e interface | parcial; validar | Assistente flutuante, minimizável e propostas já existem; Gemini usa API oficial, chave no cofre, host fixo e opt-in de envio textual/quadros amostrados. Faltam teste de interação no WebView2 e validação com chave real. |
+| 6. YouTube/Spotify oficiais | avaliação técnica feita; spike pendente | YouTube Data API v3 + IFrame Player; Spotify Web API + Embed oficial. CSP atual bloqueia embeds e requer spike/allowlist mínima; OAuth Spotify em desktop requer PKCE. Sem extração/análise de áudio de streaming. |
 | 7. Aceitação ponta a ponta no Windows | pendente | Testar mídia real autorizada pelo usuário, modelos reais com opt-in, render, áudio, legendas, botões e atualização do instalador. |

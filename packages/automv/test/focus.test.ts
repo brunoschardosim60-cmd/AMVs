@@ -425,12 +425,27 @@ describe('visão: personagens e cenas de luta', () => {
     expect(v1.filter((c) => c.reason?.includes('com Vegeta')).length).toBe(v1.length);
   });
 
-  it('personagem que quase não aparece: usa todas as cenas e avisa (não faz vídeo vazio nem repetido)', () => {
+  it('personagem sem cenas suficientes não recebe cenas de outros personagens', () => {
     const e = labelled();
     const { r, on } = run([e], { focus: 'fight', characters: ['Naruto'], durationS: 30 });
-    expect(r.warnings.join(' ')).toMatch(/Só achei 0 cena\(s\) com Naruto/);
-    expect(on('V1').length).toBeGreaterThan(10);
-    expect(planFootage([e], { ...base, characters: ['Naruto'], focus: 'fight' }).wanted).toBeNull();
+    expect(r.warnings.join(' ')).toMatch(/Mantive o filtro para não misturar personagens/);
+    expect(on('V1')).toHaveLength(0);
+    expect(planFootage([e], { ...base, characters: ['Naruto'], focus: 'fight' }).wanted).toEqual(new Set(['naruto']));
+  });
+
+  it('poucas cenas identificadas repetem apenas o personagem pedido', () => {
+    const e = labelled();
+    const vision = { ...e.vision!, shots: { ...e.vision!.shots } };
+    for (const [key, label] of Object.entries(vision.shots)) {
+      vision.shots[key] = { ...label, characters: [] };
+    }
+    const first = e.analysis.shots[0]!;
+    vision.shots[shotKey(first.startS)] = { characters: ['Goku'], fight: true, note: '' };
+    const filtered = { ...e, vision };
+    const { r, on } = run([filtered], { focus: 'fight', characters: ['Goku'], durationS: 30 });
+    expect(r.warnings.join(' ')).toMatch(/Mantive o filtro/);
+    expect(on('V1').length).toBeGreaterThan(1);
+    for (const clip of on('V1')) expect(who(filtered, clip)?.characters).toContain('Goku');
   });
 
   it('sem pedir personagem: cena que não é luta fica fora dos golpes fortes (depois do drop)', () => {

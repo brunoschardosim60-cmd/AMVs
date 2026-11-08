@@ -95,7 +95,7 @@ export function AiSettingsDialog({ settings, onSave, onClose }: { settings: AiSe
 
           <div className="mt-3 grid grid-cols-[90px_1fr] items-center gap-2">
             <span className="text-ink-soft">Endereço</span>
-            <input className="h-8 rounded-control border border-line bg-base px-2 outline-none focus:border-violet" value={s.provider.baseUrl} onChange={(e) => setS({ ...s, provider: { ...s.provider, baseUrl: e.target.value } })} />
+            <input className="h-8 rounded-control border border-line bg-base px-2 outline-none focus:border-violet disabled:opacity-60" value={s.provider.baseUrl} onChange={(e) => setS({ ...s, provider: { ...s.provider, baseUrl: e.target.value } })} disabled={s.provider.kind === 'gemini'} />
             <span className="text-ink-soft">Modelo</span>
             <div className="flex gap-1">
               <input list="ai-models" className="h-8 min-w-0 flex-1 rounded-control border border-line bg-base px-2 outline-none focus:border-violet" value={s.provider.model} onChange={(e) => setS({ ...s, provider: { ...s.provider, model: e.target.value } })} />
@@ -114,7 +114,7 @@ export function AiSettingsDialog({ settings, onSave, onClose }: { settings: AiSe
           </div>
           {s.provider.needsKey && (
             <p className="mt-1 text-2xs text-muted">
-              A chave fica no Gerenciador de Credenciais do Windows, nunca em arquivo.{' '}
+              A chave fica no Gerenciador de Credenciais do Windows, nunca em arquivo. O Gemini usa somente a API oficial do Google.{' '}
               {hasKey && (
                 <button type="button" className="underline hover:text-danger" onClick={() => void platform?.secrets.delete(secretName(s.presetId)).then(() => setHasKey(false))}>
                   Apagar chave
@@ -144,7 +144,7 @@ export function AiSettingsDialog({ settings, onSave, onClose }: { settings: AiSe
             <label className="mt-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 p-2">
               <input type="checkbox" className="mt-0.5 accent-violet" checked={s.allowExternal} onChange={(e) => setS({ ...s, allowExternal: e.target.checked })} />
               <span>
-                <b>Permitir enviar para a internet.</b> O assistente manda um resumo do projeto (nomes dos arquivos, tempos dos clipes, falas das legendas) para {preset.name}. Vídeo e áudio nunca saem do seu PC.
+                <b>Permitir enviar dados para a internet.</b> O assistente envia texto do projeto (nomes, tempos e falas) a {preset.name}. Se você pedir análise visual, quadros amostrados também serão enviados; o áudio e o vídeo completos nunca são enviados.
               </span>
             </label>
           )}
