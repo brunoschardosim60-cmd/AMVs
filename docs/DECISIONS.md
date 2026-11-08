@@ -79,6 +79,11 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - **Visão opcional e retomável**, separada da análise de ritmo (arquivo `vision-v1.json` por episódio): custa chamadas ao modelo, então só roda quando pedida; mostra custo antes; local (Ollama) não envia nada.
 - **Teste de interface real**: harness (`apps/desktop/dev`) roda o app num Chromium com ponte para FFmpeg/arquivos. Achou o botão Importar inclicável e a trilha Efeitos escondida, que a leitura de código não mostrou. Hipótese refutada: o `Dialog` não roubava foco.
 
+## 2026-11-08 · Escopo da análise visual
+- A visão oferece o modo rápido (prioriza lutas, 1 quadro por cena, até 120 cenas) e o detalhado (todas as cenas úteis, 3 quadros por cena, sem limite fixo).
+- No modo detalhado, rótulos antigos com uma amostra são reprocessados. A saída combina personagens e exige maioria clara para marcar luta.
+- Motivo: aumentar a cobertura e reduzir a classificação equivocada de uma cena sem aumentar o custo de todas as gerações. Não foi adicionada dependência; o modo detalhado avisa a estimativa antes de enviar quadros.
+
 ## 2026-11-08 · Calibração manual da sincronia
 - A geração aceita ajuste entre −500 e +500 ms para deslocar batidas, cortes, drop e falas em relação à faixa de música, sem deslocar o áudio.
 - Motivo: tornar corrigível um deslocamento constante sem fingir que o rastreador atual resolve deriva de andamento variável. A calibração com músicas reais continua necessária.

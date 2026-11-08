@@ -1,6 +1,6 @@
 import { parseSubtitles, decodeSubtitleBytes, type Cue } from '@amv/analysis';
 import { generateAmv, planFootage, STYLES, suggestMusicRanges, type EpisodeInput, type GenerateOptions, type StyleId } from '@amv/automv';
-import { characterCounts, pickAudioStreamByLanguage, type EpisodeVision } from '@amv/analysis';
+import { characterCounts, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -34,6 +34,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
   const [beatOffsetMs, setBeatOffsetMs] = useState(0);
   const [useSfx, setUseSfx] = useState(true);
   const [characters, setCharacters] = useState<string[]>([]);
+  const [visionScope, setVisionScope] = useState<VisionScope>('fights');
   const [vision, setVision] = useState<{ done: number; total: number; ep: string } | null>(null);
   const visionAbort = useRef<AbortController | null>(null);
   const [musicStart, setMusicStart] = useState<number | null>(null);
@@ -96,7 +97,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
     return [...all.values()].sort((a, b) => b.shots - a.shots).slice(0, 12);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visionVersion]);
-  const visionTodo = ready.reduce((n, e) => n + session.visionTargets(e.id).length, 0);
+  const visionTodo = ready.reduce((n, e) => n + session.visionTargets(e.id, visionScope).length, 0);
 
   const runVision = async () => {
     if (!platform || vision) return;
@@ -114,15 +115,17 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
       visionAbort.current = new AbortController();
       let labeled = 0;
       let failed = 0;
+      let frameFailures = 0;
       for (const e of ready) {
-        if (!session.visionTargets(e.id).length) continue;
-        setVision({ done: 0, total: session.visionTargets(e.id).length, ep: e.name });
-        const r = await session.runVision(e.id, { provider: settings.provider, key, fetch: platform.http, signal: visionAbort.current.signal, onProgress: (done, total) => setVision({ done, total, ep: e.name }) });
+        if (!session.visionTargets(e.id, visionScope).length) continue;
+        setVision({ done: 0, total: session.visionTargets(e.id, visionScope).length, ep: e.name });
+        const r = await session.runVision(e.id, { provider: settings.provider, key, fetch: platform.http, scope: visionScope, signal: visionAbort.current.signal, onProgress: (done, total) => setVision({ done, total, ep: e.name }) });
         labeled += r.labeled;
         failed += r.failed;
+        frameFailures += r.frameFailures;
         if (visionAbort.current.signal.aborted) break;
       }
-      toast(failed ? { tone: 'warn', title: `${labeled} cenas analisadas, ${failed} sem resposta`, body: 'O modelo não devolveu essas. Rode de novo para tentar só as que faltam.' } : { tone: 'ok', title: `${labeled} cenas analisadas`, body: 'Escolha os personagens ao lado.' });
+      toast(failed || frameFailures ? { tone: 'warn', title: `${labeled} cenas analisadas`, body: `${failed} cenas sem resposta do modelo; ${frameFailures} quadros não puderam ser extraídos. Rode de novo para tentar as cenas incompletas.` } : { tone: 'ok', title: `${labeled} cenas analisadas`, body: 'Escolha os personagens ao lado.' });
     } catch (err) {
       if ((err as Error).name !== 'AbortError') toast({ tone: 'error', title: 'Não deu para analisar as cenas', body: (err as Error).message });
     } finally {
@@ -376,16 +379,33 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
                   </Button>
                 </div>
               ) : (
-                visionTodo > 0 && (
-                  <div className="mt-2">
-                    <Button size="sm" onClick={runVision} title="Manda quadros das cenas de luta a um modelo de IA com visão (Claude, GPT-4o, llava no Ollama…)">
-                      Analisar cenas com IA
-                    </Button>
-                    <p className="mt-1 text-2xs text-faint">
-                      ≈ {visionTodo} imagens em {Math.ceil(visionTodo / 6)} chamadas. Em serviço na nuvem, os quadros são enviados a ele e gera custo; com Ollama fica no seu PC.
-                    </p>
+                <div className="mt-2">
+                  <p className="mb-1 text-2xs text-muted">Escopo da análise visual</p>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1">
+                    <label className="flex items-center gap-1.5 text-2xs text-ink-soft">
+                      <input type="radio" name="vision-scope" className="accent-violet" checked={visionScope === 'fights'} onChange={() => setVisionScope('fights')} />
+                      Só cenas de luta
+                    </label>
+                    <label className="flex items-center gap-1.5 text-2xs text-ink-soft">
+                      <input type="radio" name="vision-scope" className="accent-violet" checked={visionScope === 'all'} onChange={() => setVisionScope('all')} />
+                      Todas as cenas, em detalhe
+                    </label>
                   </div>
-                )
+                  {visionTodo > 0 ? (
+                    <>
+                      <Button size="sm" className="mt-2" onClick={runVision} title="Analisa as cenas selecionadas com um modelo de IA com visão.">
+                        Analisar cenas com IA
+                      </Button>
+                      <p className="mt-1 text-2xs text-faint">
+                        ≈ {visionTodo * (visionScope === 'all' ? 3 : 1)} quadros, até {Math.ceil((visionTodo * (visionScope === 'all' ? 3 : 1)) / 6)} chamadas.{' '}
+                        {visionScope === 'all' ? 'Usa 3 quadros por cena e inclui cenas escuras; pode demorar e gerar mais custo.' : 'Prioriza lutas e usa 1 quadro por cena.'}{' '}
+                        Em serviço na nuvem, os quadros são enviados ao provedor; com Ollama ficam no seu PC.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="mt-1 text-2xs text-faint">Não há cenas pendentes neste escopo.</p>
+                  )}
+                </div>
               )}
             </div>
 

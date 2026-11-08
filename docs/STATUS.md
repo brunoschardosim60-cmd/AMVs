@@ -125,7 +125,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Camada | Estado | Escopo / validação |
 |---|---|---|
 | 1. Sincronia ajustável | primeira entrega feita | Ajuste fino de −500 a +500 ms na geração; desloca batidas, cortes, drop e posições de falas sem deslocar o áudio. Testes do Auto AMV e typecheck; **ainda precisa ser calibrado com músicas reais**. Isso corrige um deslocamento constante, não deriva de andamento variável. |
-| 2. Continuidade de luta/personagem | parcial; melhorar | Já há foco numa luta, seleção manual, mistura opcional e filtro por personagens via visão. Falta validar modelo real e permitir análise detalhada de todas as cenas com confiança/revisão; a heurística ainda pode agrupar lutas coladas. |
+| 2. Continuidade de luta/personagem | parcial; primeira melhoria feita | A visão agora oferece escopo "só lutas" ou "todas as cenas"; o modo detalhado revisita rótulos antigos e combina 3 quadros por cena, sem limite fixo de 120. Falta validar modelo real, expor confiança/revisão e melhorar agrupamento heurístico de lutas. |
 | 3. Falas e letras automáticas | pendente | Transcrição local com timestamps (Whisper), revisão, tradução de falas e alinhamento de letra sem tempo. A tradução atual aplica-se a legendas existentes/importadas. |
 | 4. Mixagem e reprodução | parcial; validar | Exportação já separa música/voz, aplica ducking e efeitos. Falta validar no Windows a faixa de áudio escolhida no preview e melhorar a explicação visual das trilhas de idioma do episódio versus música. |
 | 5. Assistente e interface | parcial; validar | Assistente flutuante, minimizável e propostas já existem. Faltam teste de interação no WebView2 e correções guiadas por reproduções concretas dos botões/layout que falham. |

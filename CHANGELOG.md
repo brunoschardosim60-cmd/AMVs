@@ -1,5 +1,13 @@
 # Novidades
 
+## 0.6.1 (a publicar)
+
+**Análise visual detalhada**
+- Em "Gerar meu AMV", escolha entre priorizar só cenas de luta ou analisar todas as cenas do episódio.
+- O modo detalhado usa 3 quadros por cena, inclui cenas escuras, não tem o limite de 120 cenas e reanalisa cenas que antes só tinham uma amostra.
+- As amostras são combinadas para reduzir rótulos inconsistentes; a estimativa de quadros/chamadas aparece antes de iniciar. Análise interrompida pode ser retomada.
+- Reconhecimento de personagens ainda depende do modelo de visão e não garante identidade; na nuvem, os quadros são enviados ao provedor e podem gerar custo.
+
 ## 0.6.0 (a publicar)
 
 **Sincronia com a música**

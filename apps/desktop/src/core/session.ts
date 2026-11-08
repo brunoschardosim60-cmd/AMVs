@@ -26,7 +26,7 @@ import {
   type ProjectSettings,
 } from '@amv/project';
 import type { Platform } from '../platform/types';
-import { analyzeEpisodeFile, analyzeMusicFile, EPISODE_ANALYSIS_VERSION, grabFrameJpeg, MUSIC_ANALYSIS_VERSION, shotKey, toBase64, VISION_VERSION, type EpisodeAnalysis, type EpisodeVision, type MusicAnalysis } from '@amv/analysis';
+import { analyzeEpisodeFile, analyzeMusicFile, EPISODE_ANALYSIS_VERSION, grabFrameJpeg, mergeShotVision, MUSIC_ANALYSIS_VERSION, selectVisionTargets, shotKey, toBase64, VISION_VERSION, type EpisodeAnalysis, type EpisodeVision, type MusicAnalysis, type VisionScope } from '@amv/analysis';
 import { labelScenes, type FetchLike, type ProviderConfig } from '@amv/assistant';
 import { renderSfx, SFX_KINDS, SFX_LABEL, sfxFileName, toWav, type SfxKind } from '@amv/sfx';
 import { rememberRecent, updateRecent } from './recents';
@@ -369,71 +369,80 @@ export class ProjectSession {
     return v;
   }
 
-  /**
-   * As cenas de luta ainda sem rótulo, das lutas mais fortes para as mais fracas (até `max`).
-   * É o que a análise com IA vai mandar para o modelo: serve também para estimar o custo.
-   */
-  visionTargets(assetId: string, max = 120): { startS: number; midS: number }[] {
+  /** Cenas ainda sem rótulo (ou sem análise detalhada), priorizando lutas no modo padrão. */
+  visionTargets(assetId: string, scope: VisionScope = 'fights', max = scope === 'all' ? Infinity : 120): { startS: number; endS: number; midS: number }[] {
     const ep = this.assetRuntime(assetId).episode;
     if (!ep) return [];
-    const done = this.assetRuntime(assetId).vision?.shots ?? {};
-    const out: { startS: number; midS: number }[] = [];
-    const fights = (ep.sequences ?? []).filter((q) => q.kind === 'luta').sort((a, b) => b.intensity - a.intensity);
-    for (const q of fights) {
-      for (const sh of ep.shots) {
-        if (sh.startS < q.startS - 1e-3 || sh.endS > q.endS + 1e-3 || sh.tags.includes('escura') || sh.endS - sh.startS < 0.25) continue;
-        if (done[shotKey(sh.startS)]) continue;
-        out.push({ startS: sh.startS, midS: (sh.startS + sh.endS) / 2 });
-        if (out.length >= max) return out;
-      }
-    }
-    return out;
+    return selectVisionTargets(ep, this.assetRuntime(assetId).vision?.shots ?? {}, scope, max);
   }
 
-  /**
-   * Manda quadros das cenas de luta a um modelo com visão e guarda quem aparece em cada uma.
-   * Retoma de onde parou (cenas já rotuladas não são enviadas de novo) e salva a cada lote.
-   */
+  /** Analisa cenas visualmente; no modo detalhado usa três quadros por cena e retoma do cache. */
   async runVision(
     assetId: string,
-    o: { provider: ProviderConfig; key: string | null; fetch: FetchLike; max?: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void },
-  ): Promise<{ labeled: number; failed: number; usage: { input: number; output: number } }> {
+    o: { provider: ProviderConfig; key: string | null; fetch: FetchLike; scope?: VisionScope; max?: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void },
+  ): Promise<{ labeled: number; failed: number; frameFailures: number; usage: { input: number; output: number } }> {
     const asset = this.project.assets.find((a) => a.id === assetId);
     if (!asset) throw new Error('episódio não encontrado');
     const prior = await this.loadVision(assetId);
-    const targets = this.visionTargets(assetId, o.max ?? 120);
+    const scope = o.scope ?? 'fights';
+    const targets = this.visionTargets(assetId, scope, o.max ?? (scope === 'all' ? Infinity : 120));
     const env = await this.mediaEnv();
     const src = this.assetRuntime(assetId).artifacts?.proxyPath ?? asset.path;
     const vision: EpisodeVision = { version: VISION_VERSION, model: o.provider.model || o.provider.name, shots: { ...(prior?.shots ?? {}) } };
     const known = [...new Set(Object.values(vision.shots).flatMap((s) => s.characters))];
     const usage = { input: 0, output: 0 };
     let failed = 0;
+    let frameFailures = 0;
     const BATCH = 6;
-    for (let i = 0; i < targets.length; i += BATCH) {
+    const samples = scope === 'all' ? [0.2, 0.5, 0.8] : [0.5];
+    const scenesPerBatch = Math.max(1, Math.floor(BATCH / samples.length));
+    for (let i = 0; i < targets.length; i += scenesPerBatch) {
       if (o.signal?.aborted) break;
-      const chunk = targets.slice(i, i + BATCH);
+      const chunk = targets.slice(i, i + scenesPerBatch);
       const frames: { id: string; jpegBase64: string }[] = [];
+      const idsByScene = new Map<string, string[]>();
       for (const t of chunk) {
-        try {
-          frames.push({ id: shotKey(t.startS), jpegBase64: toBase64(await grabFrameJpeg(env.runner, src, t.midS, 448, o.signal)) });
-        } catch {
-          failed++; // quadro que não saiu: pula a cena, o resto segue
+        const key = shotKey(t.startS);
+        const ids: string[] = [];
+        for (const [sample, fraction] of samples.entries()) {
+          const timeS = t.startS + (t.endS - t.startS) * fraction;
+          const id = `${key}:${sample}`;
+          try {
+            frames.push({ id, jpegBase64: toBase64(await grabFrameJpeg(env.runner, src, timeS, 448, o.signal)) });
+            ids.push(id);
+          } catch (error) {
+            if (o.signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+            frameFailures++;
+          }
         }
+        idsByScene.set(key, ids);
       }
-      if (!frames.length) continue;
-      const r = await labelScenes(o.provider, o.key, o.fetch, frames, { batchSize: BATCH, known, signal: o.signal });
-      usage.input += r.usage.input;
-      usage.output += r.usage.output;
-      failed += r.failed.length;
-      Object.assign(vision.shots, r.labels);
-      for (const c of r.characters) if (!known.includes(c)) known.push(c);
+      const labels: Record<string, (typeof vision.shots)[string]> = {};
+      if (frames.length) {
+        const r = await labelScenes(o.provider, o.key, o.fetch, frames, { batchSize: BATCH, known, signal: o.signal });
+        usage.input += r.usage.input;
+        usage.output += r.usage.output;
+        const failedIds = new Set(r.failed);
+        for (const [key, ids] of idsByScene) {
+          const sceneSamples = ids.flatMap((id) => {
+            const label = r.labels[id];
+            return !failedIds.has(id) && label ? [label] : [];
+          });
+          if (sceneSamples.length) labels[key] = mergeShotVision(sceneSamples);
+          else failed++;
+        }
+        for (const c of r.characters) if (!known.includes(c)) known.push(c);
+      } else {
+        failed += chunk.length;
+      }
+      Object.assign(vision.shots, labels);
       // salva a cada lote: se cancelar ou falhar no meio, o que já foi feito fica
       await this.platform.fs.writeFile(await this.visionFile(asset), new TextEncoder().encode(JSON.stringify(vision)));
       this.runtime.set(assetId, { ...this.assetRuntime(assetId), vision: { ...vision, shots: { ...vision.shots } } });
       this.emit();
       o.onProgress?.(Math.min(targets.length, i + chunk.length), targets.length);
     }
-    return { labeled: Object.keys(vision.shots).length - Object.keys(prior?.shots ?? {}).length, failed, usage };
+    return { labeled: Object.keys(vision.shots).length - Object.keys(prior?.shots ?? {}).length, failed, frameFailures, usage };
   }
 
   /** Gera (ou reaproveita do cache) os artefatos de um asset e atualiza seu estado. */
