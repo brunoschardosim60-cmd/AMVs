@@ -31,6 +31,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
   const [focus, setFocus] = useState<'fight' | 'mix'>('fight');
   const [seqIds, setSeqIds] = useState<string[]>([]);
   const [hitSync, setHitSync] = useState(true);
+  const [beatOffsetMs, setBeatOffsetMs] = useState(0);
   const [useSfx, setUseSfx] = useState(true);
   const [characters, setCharacters] = useState<string[]>([]);
   const [vision, setVision] = useState<{ done: number; total: number; ep: string } | null>(null);
@@ -161,7 +162,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
           sfxError = (e as Error).message;
         }
       }
-      const opts: GenerateOptions = { useSfx, sfxAssets, style, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, characters };
+      const opts: GenerateOptions = { useSfx, sfxAssets, style, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, beatOffsetMs, characters };
       const m = musics.find((a) => a.id === musicId)!;
       const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
       if (sfxError) r.warnings.push(`Não consegui preparar os efeitos sonoros (${sfxError}): o vídeo saiu sem eles.`);
@@ -327,6 +328,26 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
             <label className="mt-2 flex items-center gap-2 text-xs">
               <input type="checkbox" className="accent-violet" checked={hitSync} onChange={(e) => setHitSync(e.target.checked)} /> Encaixar o golpe de cada cena na batida
             </label>
+            <label className="mt-2 flex items-center justify-between gap-2 text-xs">
+              <span title="Ajusta os cortes e o drop, sem deslocar o áudio da música.">Ajuste fino da sincronia</span>
+              <span className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min={-500}
+                  max={500}
+                  step={10}
+                  value={beatOffsetMs}
+                  onChange={(e) => {
+                    const value = Number(e.currentTarget.value);
+                    setBeatOffsetMs(Number.isFinite(value) ? Math.max(-500, Math.min(500, value)) : 0);
+                  }}
+                  className="h-7 w-20 rounded-control border border-line bg-base px-2 text-right text-xs tnum"
+                  aria-label="Ajuste fino da sincronia em milissegundos"
+                />
+                <span className="text-muted">ms</span>
+              </span>
+            </label>
+            <p className="mt-1 text-2xs text-muted">Negativo antecipa os cortes; positivo atrasa. Não altera a faixa de áudio.</p>
 
             <div className="mt-3 rounded-control border border-line-soft p-2">
               <p className="mb-1 text-xs font-medium text-ink-soft">Personagens (análise com IA)</p>

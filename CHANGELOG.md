@@ -5,6 +5,7 @@
 **Sincronia com a música**
 - **Drop com precisão de batida**: o drop era procurado só a cada 4 compassos, então um drop fora dessa grade era perdido (3 de 7 casos de teste) ou detectado 1,4–1,8 s atrasado, e o clarão/tremida caía quase 2 s fora do momento certo. Agora o drop é achado no primeiro golpe forte.
 - Corrigido um desvio de ~24 ms: toda batida era detectada adiantada em relação ao golpe real. Agora o erro médio é ~0,2 ms (pior caso ~5 ms, antes 36 ms). As músicas são reanalisadas sozinhas na primeira vez.
+- **Ajuste fino da sincronia**: na geração, antecipe ou atrase cortes, drop e falas em até 500 ms sem deslocar a música. Útil para corrigir um atraso constante; não elimina deriva em faixas com andamento variável.
 - **Golpe na batida**: cada cena forte entra com o instante do impacto logo depois do corte (no drop, quase junto), em vez de o corte cair em qualquer ponto da cena.
 - **Trecho da música que combina**: o app compara trechos da música com a força das cenas escolhidas e sugere os 3 melhores (com o motivo). "Automático" usa o melhor.
 

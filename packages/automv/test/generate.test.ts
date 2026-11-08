@@ -80,6 +80,13 @@ describe('trecho da música', () => {
     expect(slots.some((s) => s.isDrop && Math.abs(s.startS - 24) < 0.01)).toBe(true);
     expect(slots.every((s) => !(s.startS < 23.95 && s.endS > 24.05))).toBe(true);
   });
+
+  it('ajuste fino desloca batidas e drop sem mover o áudio', () => {
+    const slots = makeSlots(music().analysis, [16, 76], styleDef('hype'), 2, undefined, 0.08);
+    expect(slots.some((s) => s.isDrop && Math.abs(s.startS - 24.08) < 0.01)).toBe(true);
+    expect(run({ beatOffsetMs: 80 }).r.summary.drop).toBeCloseTo(24.08);
+    expect(run().r.summary.musicRange).toEqual(run({ beatOffsetMs: 80 }).r.summary.musicRange);
+  });
 });
 
 describe('gerar AMV — hype', () => {

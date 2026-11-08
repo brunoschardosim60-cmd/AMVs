@@ -50,6 +50,8 @@ export interface GenerateOptions {
   sequenceIds?: string[];
   /** Encaixa o golpe de cada cena forte na batida (padrão: ligado). */
   hitSync?: boolean;
+  /** Ajuste manual da posição dos cortes em relação à música, em milissegundos. */
+  beatOffsetMs?: number;
   /** Quantas falas intercalar, contando a de antes do drop. Padrão: 1 se o estilo usa fala, senão 0. */
   voiceMoments?: number;
   /** Faixa de áudio da fala: `original` (japonês) ou `pt` (dublagem). Padrão: original. */
@@ -121,9 +123,9 @@ export function chooseMusicRange(m: MusicAnalysis, durationS: number, startS: nu
 }
 
 /** Divide o trecho da música em cortes nas batidas, mais curtos quanto mais energia. */
-export function makeSlots(m: MusicAnalysis, range: [number, number], style: StyleDef, intensity: number, lyrics?: Cue[]): Slot[] {
+export function makeSlots(m: MusicAnalysis, range: [number, number], style: StyleDef, intensity: number, lyrics?: Cue[], beatOffsetS = 0): Slot[] {
   const [a, b] = range;
-  const drop = m.drops.find((d) => d > a + 1 && d < b - 1) ?? null;
+  const drop = m.drops.map((d) => d + beatOffsetS).find((d) => d > a + 1 && d < b - 1) ?? null;
   // estilo letra com letra: um corte por palavra (palavras distribuídas na duração da linha)
   if (style.id === 'letra' && lyrics?.length) {
     const words: { t: number; w: string }[] = [];
@@ -145,13 +147,13 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
         lastEnd = end;
       });
       if (lastEnd < b - 0.3) {
-        for (const sl of makeSlots(m, [lastEnd, b], style, intensity)) slots.push({ ...sl, startS: sl.startS + (lastEnd - a), endS: sl.endS + (lastEnd - a) });
+        for (const sl of makeSlots(m, [lastEnd, b], style, intensity, undefined, beatOffsetS)) slots.push({ ...sl, startS: sl.startS + (lastEnd - a), endS: sl.endS + (lastEnd - a) });
       }
       return slots;
     }
   }
-  const beats = m.beats.filter((t) => t >= a - 0.01 && t <= b + 0.01);
-  const grid = beats.length >= 4 ? beats : Array.from({ length: Math.ceil((b - a) / 0.5) + 1 }, (_, i) => a + i * 0.5);
+  const beats = m.beats.map((t) => t + beatOffsetS).filter((t) => t >= a - 0.01 && t <= b + 0.01);
+  const grid = beats.length >= 4 ? beats : Array.from({ length: Math.ceil((b - a) / 0.5) + 1 }, (_, i) => a + beatOffsetS + i * 0.5);
   const speedUp = [1.6, 1.25, 1, 0.75][intensity]!;
   const slots: Slot[] = [];
   let i = 0;
@@ -496,6 +498,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const H = project.settings.height;
   const exclude = new Set(opts.exclude ?? []);
   const m = music.analysis;
+  const beatOffsetS = Math.max(-500, Math.min(500, opts.beatOffsetMs ?? 0)) / 1000;
 
   // ---------------------------------------------------------------- de onde saem as cenas
   const plan = planFootage(episodes, opts, m);
@@ -517,7 +520,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     range = best ? [best.startS, best.endS] : chooseMusicRange(m, opts.durationS, null);
   } else range = chooseMusicRange(m, opts.durationS, null);
   const D = range[1] - range[0];
-  const dropAbs = m.drops.find((d) => d > range[0] + 1 && d < range[1] - 1) ?? null;
+  const dropAbs = m.drops.map((d) => d + beatOffsetS).find((d) => d > range[0] + 1 && d < range[1] - 1) ?? null;
   const dropT = dropAbs === null ? null : dropAbs - range[0];
   if (dropT === null) warnings.push('A música não tem um drop claro nesse trecho: a montagem segue a energia da música.');
   if (opts.style === 'letra' && !opts.lyrics?.length) warnings.push('Sem a letra com tempo (LRC), o estilo "letra" corta na batida mas não escreve as palavras. Importe a letra em Legendas.');
@@ -569,7 +572,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     };
     const free = (a: number, b: number) => blocks.every((x) => b <= x.from - VOICE_GAP_S || a >= x.to + VOICE_GAP_S) && (dropT === null || b <= dropT - 0.5 || a >= dropT + 2.5);
     const limit = blocks[0] ? blocks[0].atS : D;
-    const downs = m.downbeats.map((d) => d - range[0]).filter((t) => t >= 1.5 && t <= D - 3);
+    const downs = m.downbeats.map((d) => d + beatOffsetS - range[0]).filter((t) => t >= 1.5 && t <= D - 3);
     let placed = 0;
     for (const { ep, sp } of lines) {
       if (placed >= extraWanted) break;
@@ -640,7 +643,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
 
   // ---------------------------------------------------------------- cortes na batida
   const REPEAT_WARNING = 'Poucas cenas para o tamanho do vídeo: algumas se repetem. Importe mais episódios ou escolha mais lutas.';
-  const slots = makeSlots(m, range, style, opts.intensity, opts.lyrics);
+  const slots = makeSlots(m, range, style, opts.intensity, opts.lyrics, beatOffsetS);
   const candidates: Candidate[] = [];
   const consider = (ep: EpisodeInput, shot: Shot) => {
     const id = `${ep.assetId}@${shot.startS}`;
@@ -700,7 +703,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     let cut = mid;
     let bestD = Infinity;
     for (const mb of m.beats) {
-      const b = mb - range[0];
+      const b = mb + beatOffsetS - range[0];
       if (b <= sl.startS + 0.25 || b >= sl.endS - 0.25) continue;
       const d = Math.abs(b - mid);
       if (d < bestD) [bestD, cut] = [d, b];

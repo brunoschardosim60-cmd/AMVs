@@ -119,3 +119,15 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Visão por cena (personagens/luta) com IA | feito (modelo falso) | quadros reais via FFmpeg, rotulador, filtro na montagem; **não testado com modelo real** |
 | Correções de interface (Importar, timeline, assistente) | feito | auditoria automática de controles cobertos em 8 estados + navegador real |
 | Whisper (transcrição), YouTube/Spotify, trocar efeitos por arquivos | pendente | — |
+
+## Camadas de melhoria solicitadas (2026-11-08)
+
+| Camada | Estado | Escopo / validação |
+|---|---|---|
+| 1. Sincronia ajustável | primeira entrega feita | Ajuste fino de −500 a +500 ms na geração; desloca batidas, cortes, drop e posições de falas sem deslocar o áudio. Testes do Auto AMV e typecheck; **ainda precisa ser calibrado com músicas reais**. Isso corrige um deslocamento constante, não deriva de andamento variável. |
+| 2. Continuidade de luta/personagem | parcial; melhorar | Já há foco numa luta, seleção manual, mistura opcional e filtro por personagens via visão. Falta validar modelo real e permitir análise detalhada de todas as cenas com confiança/revisão; a heurística ainda pode agrupar lutas coladas. |
+| 3. Falas e letras automáticas | pendente | Transcrição local com timestamps (Whisper), revisão, tradução de falas e alinhamento de letra sem tempo. A tradução atual aplica-se a legendas existentes/importadas. |
+| 4. Mixagem e reprodução | parcial; validar | Exportação já separa música/voz, aplica ducking e efeitos. Falta validar no Windows a faixa de áudio escolhida no preview e melhorar a explicação visual das trilhas de idioma do episódio versus música. |
+| 5. Assistente e interface | parcial; validar | Assistente flutuante, minimizável e propostas já existem. Faltam teste de interação no WebView2 e correções guiadas por reproduções concretas dos botões/layout que falham. |
+| 6. YouTube/Spotify oficiais | pendente | Avaliar busca/reprodução por APIs e players oficiais. Streaming continua sendo referência: nunca extrair áudio para timeline ou exportação. |
+| 7. Aceitação ponta a ponta no Windows | pendente | Testar mídia real autorizada pelo usuário, modelos reais com opt-in, render, áudio, legendas, botões e atualização do instalador. |

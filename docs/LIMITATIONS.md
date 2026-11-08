@@ -16,7 +16,8 @@
 - Legendas: sem transcrição automática (Whisper) e sem tradução por enquanto; letra sem tempo (.txt) precisa ser posicionada à mão.
 
 ## 0.6.0
-- **Sincronia medida só em sinais sintéticos** (cliques/bumbo em andamento fixo): erro ~0,2 ms de viés. Em música real, com andamento que varia, o rastreador de batidas (andamento global) pode se afastar; não há ainda um ajuste fino manual em ms.
+- **Ajuste fino da sincronia**: a geração permite antecipar/atrasar batidas e drop em até 500 ms sem mover a música. Resolve deslocamento constante percebido pelo usuário, mas não corrige deriva causada por andamento variável; a calibração com músicas reais continua pendente.
+- **Sincronia automática validada em sinais sintéticos** (cliques/bumbo em andamento fixo): erro ~0,2 ms de viés. Em música real, o rastreador de andamento global pode se afastar, sobretudo em faixas que aceleram/desaceleram; o ajuste fino manual ajuda com deslocamento constante, mas não elimina deriva.
 - **Golpe na batida** é heurístico: usa o quadro de maior diferença entre quadros. Câmera tremendo ou flash pode ser confundido com o golpe.
 - **Lutas** são separadas por intensidade, pausas frias (> 6 s) e cenas escuras. Duas lutas coladas, sem pausa nem fade, viram uma só. Não reconhece personagens.
 - **Falas**: sem transcrição automática (Whisper). "Entender o que o personagem fala" só funciona em episódios com legenda embutida; sem legenda, o app detecta que alguém fala/grita, mas não o texto.

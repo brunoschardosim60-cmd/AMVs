@@ -78,3 +78,7 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - **Seletividade dos golpes**: a 1ª versão colocava 45 golpes em 60 s (metralhadora); agora espaçamento ≥ 0,75 s e prioridade pela força da cena.
 - **Visão opcional e retomável**, separada da análise de ritmo (arquivo `vision-v1.json` por episódio): custa chamadas ao modelo, então só roda quando pedida; mostra custo antes; local (Ollama) não envia nada.
 - **Teste de interface real**: harness (`apps/desktop/dev`) roda o app num Chromium com ponte para FFmpeg/arquivos. Achou o botão Importar inclicável e a trilha Efeitos escondida, que a leitura de código não mostrou. Hipótese refutada: o `Dialog` não roubava foco.
+
+## 2026-11-08 · Calibração manual da sincronia
+- A geração aceita ajuste entre −500 e +500 ms para deslocar batidas, cortes, drop e falas em relação à faixa de música, sem deslocar o áudio.
+- Motivo: tornar corrigível um deslocamento constante sem fingir que o rastreador atual resolve deriva de andamento variável. A calibração com músicas reais continua necessária.
