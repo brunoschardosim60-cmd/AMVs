@@ -101,7 +101,8 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Importar SRT/ASS/VTT/LRC com detecção de codificação; LRC alinha com a música | feito | testes |
 | Puxar falas do episódio para os clipes (considera velocidade) | feito | testes |
 | Editar texto, ajustar tempo (±), estilos, avisos de leitura, exportar SRT/VTT/LRC | feito | testes + app real |
-| Pendente: transcrição (Whisper), tradução, alinhamento automático de letra sem tempo | pendente | — |
+| Transcrição local faster-whisper, tradução de legendas | parcial | Transcrição vira clipes editáveis e permite selecionar o stream de áudio; progresso de extração/segmentos e cancelamento cooperativo, com término forçado do sidecar após 5 s. Python/modelo real e empacotamento ainda aguardam smoke test do CI Windows. Tradução de legendas já funciona. |
+| Alinhamento automático de letra sem tempo | pendente | — |
 
 ## Pós-0.5.5 (0.6.0, em andamento)
 | Item | Estado | Como foi verificado |
@@ -118,7 +119,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Efeitos sonoros sintetizados + colocação | feito | 11 testes espectrais, 12 de montagem; espectrogramas; **áudio exportado** comparado com/sem efeitos |
 | Visão por cena (personagens/luta) com IA | feito (modelo falso) | quadros reais via FFmpeg, rotulador, filtro na montagem; **não testado com modelo real** |
 | Correções de interface (Importar, timeline, assistente) | feito | auditoria automática de controles cobertos em 8 estados + navegador real |
-| Whisper (transcrição), YouTube/Spotify, trocar efeitos por arquivos | pendente | — |
+| YouTube/Spotify, trocar efeitos por arquivos | pendente | — |
 
 ## Camadas de melhoria solicitadas (2026-11-08)
 
@@ -126,7 +127,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 |---|---|---|
 | 1. Sincronia ajustável | primeira entrega feita | Ajuste fino de −500 a +500 ms na geração; desloca batidas, cortes, drop e posições de falas sem deslocar o áudio. Testes do Auto AMV e typecheck; **ainda precisa ser calibrado com músicas reais**. Isso corrige um deslocamento constante, não deriva de andamento variável. |
 | 2. Continuidade de luta/personagem | parcial; primeira melhoria feita | A visão agora oferece escopo "só lutas" ou "todas as cenas"; o modo detalhado revisita rótulos antigos e combina 3 quadros por cena, sem limite fixo de 120. Falta validar modelo real, expor confiança/revisão e melhorar agrupamento heurístico de lutas. |
-| 3. Falas e letras automáticas | parcial; transcrição integrada | No painel de legendas, escolha episódio, modelo e idioma; o app inicia o analisador local autenticado, transcreve e converte as falas em clipes editáveis nos trechos selecionados (ou em todos os clipes daquele episódio). 8 testes Python e typecheck/build; falta empacotar Python/faster-whisper no instalador, mostrar progresso/cancelamento, escolher faixa de áudio e alinhar letra sem tempo. A tradução de legendas existentes já funciona. |
+| 3. Falas e letras automáticas | parcial; transcrição com stream, progresso e cancelamento | No painel de legendas, escolha episódio, faixa de áudio, modelo e idioma; o app extrai o stream escolhido para WAV em cache e converte falas em clipes editáveis nos trechos selecionados (ou em todos os clipes daquele episódio). Progresso de extração e dos segmentos; cancelar termina o job ou encerra o sidecar após 5 s. Sem progresso detalhado do download dos pesos. 10 testes Python e typecheck/build passaram. PyInstaller/Tauri resource e smoke test do runtime estão implementados, mas aguardam execução no CI Windows; ainda falta alinhar letra sem tempo e validar com áudio/modelo reais. |
 | 4. Mixagem e reprodução | parcial; validar | Exportação já separa música/voz, aplica ducking e efeitos. Falta validar no Windows a faixa de áudio escolhida no preview e melhorar a explicação visual das trilhas de idioma do episódio versus música. |
 | 5. Assistente e interface | parcial; validar | Assistente flutuante, minimizável e propostas já existem. Faltam teste de interação no WebView2 e correções guiadas por reproduções concretas dos botões/layout que falham. |
 | 6. YouTube/Spotify oficiais | pendente | Avaliar busca/reprodução por APIs e players oficiais. Streaming continua sendo referência: nunca extrair áudio para timeline ou exportação. |

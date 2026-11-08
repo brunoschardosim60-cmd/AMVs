@@ -27,6 +27,14 @@ export interface SpeechTranscript {
   segments: { start: number; end: number; text: string; words: { start: number; end: number; text: string }[] }[];
 }
 
+export interface SpeechProgress {
+  status: 'queued' | 'running' | 'completed' | 'cancelled' | 'failed';
+  progress: number;
+  duration: number;
+  result: SpeechTranscript | null;
+  error: string | null;
+}
+
 export interface Platform {
   runner: ProcessRunner;
   fs: FileSystem;
@@ -51,7 +59,11 @@ export interface Platform {
   };
   analyzer: {
     start(): Promise<AnalyzerConnection>;
-    transcribe(connection: AnalyzerConnection, request: { path: string; model: string; language?: string }): Promise<SpeechTranscript>;
+    transcribe(
+      connection: AnalyzerConnection,
+      request: { path: string; model: string; language?: string },
+      options?: { signal?: AbortSignal; onProgress?: (progress: SpeechProgress) => void },
+    ): Promise<SpeechTranscript>;
     stop(): Promise<void>;
   };
   /** HTTP fora do webview (sem CORS), para os provedores de IA. */

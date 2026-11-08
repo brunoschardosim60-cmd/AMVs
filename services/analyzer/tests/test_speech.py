@@ -1,8 +1,9 @@
 from types import SimpleNamespace
+from threading import Event
 
 import pytest
 
-from amv_analyzer.speech import transcribe
+from amv_analyzer.speech import TranscriptionCancelled, transcribe
 
 
 class FakeModel:
@@ -59,3 +60,26 @@ def test_transcribe_rejects_missing_media_and_invalid_model(tmp_path):
     media.touch()
     with pytest.raises(ValueError, match="modelo inválido"):
         transcribe(str(media), "unknown", model_loader=lambda _: None)
+
+
+def test_transcribe_reports_progress_and_cancels_between_segments(tmp_path):
+    media = tmp_path / "episode.mkv"
+    media.touch()
+    model = FakeModel()
+    cancelled = Event()
+    progress = []
+
+    def report_progress(done, total):
+        progress.append((done, total))
+        if done >= 1:
+            cancelled.set()
+
+    with pytest.raises(TranscriptionCancelled, match="cancelada"):
+        transcribe(
+            str(media),
+            model_loader=lambda _: model,
+            cancelled=cancelled.is_set,
+            on_progress=report_progress,
+        )
+
+    assert progress == [(0.0, 2.0), (1.0, 2.0)]

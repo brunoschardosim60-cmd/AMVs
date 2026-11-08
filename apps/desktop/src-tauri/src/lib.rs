@@ -8,7 +8,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::Mutex,
 };
-use tauri::State;
+use tauri::{Manager, State};
 
 const VAULT_SERVICE: &str = "AMV Studio";
 
@@ -70,15 +70,22 @@ fn spawn_analyzer(program: &str, args: &[&str]) -> Result<(Child, String), Strin
     Ok((child, ready))
 }
 
-fn start_analyzer_process() -> Result<AnalyzerProcess, String> {
-    let attempts: [(&str, &[&str]); 3] = [
-        ("python", &["-m", "amv_analyzer"]),
-        ("py", &["-3", "-m", "amv_analyzer"]),
-        ("python3", &["-m", "amv_analyzer"]),
-    ];
+fn start_analyzer_process(app: &tauri::AppHandle) -> Result<AnalyzerProcess, String> {
+    let mut attempts: Vec<(String, Vec<&str>)> = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let bundled = resource_dir.join("analyzer").join("analyzer.exe");
+        if bundled.is_file() {
+            attempts.push((bundled.to_string_lossy().into_owned(), Vec::new()));
+        }
+    }
+    attempts.extend([
+        ("python".to_owned(), vec!["-m", "amv_analyzer"]),
+        ("py".to_owned(), vec!["-3", "-m", "amv_analyzer"]),
+        ("python3".to_owned(), vec!["-m", "amv_analyzer"]),
+    ]);
     let mut errors = Vec::new();
     for (program, args) in attempts {
-        match spawn_analyzer(program, args) {
+        match spawn_analyzer(&program, &args) {
             Ok((mut child, line)) => {
                 let parsed = (|| {
                     let ready: serde_json::Value = serde_json::from_str(line.trim())
@@ -108,13 +115,13 @@ fn start_analyzer_process() -> Result<AnalyzerProcess, String> {
         }
     }
     Err(format!(
-        "{}. Para instalar, acesse services/analyzer e execute: python -m pip install -e \".[speech]\".",
+        "não foi possível iniciar o analisador empacotado nem o Python local ({}). Em desenvolvimento, instale services/analyzer com `python -m pip install -e \".[speech]\"`.",
         errors.join("; ")
     ))
 }
 
 #[tauri::command]
-fn analyzer_start(state: State<'_, AnalyzerState>) -> Result<AnalyzerConnection, String> {
+fn analyzer_start(app: tauri::AppHandle, state: State<'_, AnalyzerState>) -> Result<AnalyzerConnection, String> {
     let mut current = state.0.lock().map_err(|e| e.to_string())?;
     if let Some(existing) = current.as_mut() {
         if existing.child.try_wait().map_err(|e| e.to_string())?.is_none() {
@@ -125,7 +132,7 @@ fn analyzer_start(state: State<'_, AnalyzerState>) -> Result<AnalyzerConnection,
         }
         *current = None;
     }
-    let process = start_analyzer_process()?;
+    let process = start_analyzer_process(&app)?;
     let connection = AnalyzerConnection {
         base_url: format!("http://127.0.0.1:{}", process.port),
         token: process.token.clone(),

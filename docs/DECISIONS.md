@@ -91,5 +91,11 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 ## 2026-11-08 · Transcrição local via faster-whisper
 - O serviço Python passa a oferecer transcrição autenticada por arquivo local, com timestamps por segmento e palavra; modelo `small`/CPU/int8 por padrão e tamanhos configuráveis.
 - `faster-whisper` é extra opcional (MIT); a instalação adiciona CTranslate2 e dependências nativas, e os pesos são baixados sob demanda (o tamanho depende do modelo, de centenas de MB a vários GB). Não baixar nem iniciar modelo até a pessoa solicitar a transcrição.
-- O desktop inicia o serviço sob demanda via `python`/`py -3`, autentica com token por sessão e mantém o processo até o app fechar. O instalador ainda não empacota o runtime Python; o usuário precisa instalar o extra no ambiente Python.
+- O desktop inicia o serviço sob demanda, autentica com token por sessão e mantém o processo até o app fechar. O runtime empacotado é preferido no instalador; Python do sistema é fallback para desenvolvimento.
 - Motivo: entregar timestamps locais sem enviar áudio a terceiros e manter o editor funcional sem Python. Não instalar dependências nem baixar pesos sem ação explícita do usuário.
+
+## 2026-11-08 · Jobs, faixa de áudio e runtime Python empacotado
+- Transcrição roda como job local autenticado com progresso em segundos de áudio e cancelamento cooperativo entre segmentos; cancelar não encerra o sidecar nem outros jobs.
+- O stream escolhido é extraído pelo FFmpeg para WAV mono 16 kHz no cache do app. O original nunca é alterado; chave de cache inclui hash do asset e índice absoluto do stream.
+- O instalador Windows inclui o serviço + faster-whisper via PyInstaller em modo onedir, em `resources/analyzer`; o app prefere esse executável e mantém Python do sistema como fallback de desenvolvimento. O CI constrói o bundle e verifica a API e a disponibilidade do módulo speech.
+- Dependência de empacotamento: PyInstaller 6 (GPLv2 com exceção do bootloader); não é dependência do editor em execução. O tamanho final ainda precisa ser medido no artefato Windows; pesos dos modelos seguem fora do instalador e baixam só quando solicitados.

@@ -1,8 +1,9 @@
-import { decodeSubtitleBytes, parseSubtitles, toSrt } from '@amv/analysis';
+import { decodeSubtitleBytes, parseSubtitles, pickAudioStreamByLanguage, toSrt } from '@amv/analysis';
+import { joinPath } from '@amv/media';
 import { clipEndUs, type Clip } from '@amv/project';
 import { translateLines } from '@amv/assistant';
 import { applyTranslation, langLabel, LOOKS, originalText, placeCues, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
-import { AlertTriangle, Download, FileText, Film, Languages, Mic, Trash2 } from 'lucide-react';
+import { AlertTriangle, Download, FileText, Film, Languages, Mic, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import type { ProjectSession } from '../../core/session';
@@ -27,8 +28,15 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   const [speechAssetId, setSpeechAssetId] = useState(project.assets.find((asset) => asset.kind === 'video')?.id ?? '');
   const [speechModel, setSpeechModel] = useState('small');
   const [speechLanguage, setSpeechLanguage] = useState('');
-  const [transcribing, setTranscribing] = useState(false);
+  const [speechAudioIndex, setSpeechAudioIndex] = useState<number | null>(() => {
+    const asset = project.assets.find((item) => item.id === speechAssetId);
+    const streams = asset?.probe?.audio ?? [];
+    return pickAudioStreamByLanguage(streams, 'original') ?? streams[0]?.index ?? null;
+  });
+  const [speechProgress, setSpeechProgress] = useState<{ stage: 'extracting' | 'preparing' | 'transcribing'; progress: number; duration: number } | null>(null);
+  const [cancellingSpeech, setCancellingSpeech] = useState(false);
   const abort = useRef<AbortController | null>(null);
+  const speechAbort = useRef<AbortController | null>(null);
   const selection = useEditor((s) => s.selection);
   const playheadUs = useEditor((s) => s.playheadUs);
   const setPlayhead = useEditor((s) => s.setPlayhead);
@@ -38,6 +46,21 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   const target = selectedSubs.length ? selectedSubs : clips;
   const videoAssets = project.assets.filter((asset) => asset.kind === 'video');
   const transcriptAssetId = videoAssets.some((asset) => asset.id === speechAssetId) ? speechAssetId : videoAssets[0]?.id ?? '';
+  const transcriptAsset = project.assets.find((asset) => asset.id === transcriptAssetId);
+  const audioStreams = transcriptAsset?.probe?.audio ?? [];
+  const transcribing = speechProgress !== null;
+
+  useEffect(() => {
+    setSpeechAudioIndex(pickAudioStreamByLanguage(audioStreams, 'original') ?? audioStreams[0]?.index ?? null);
+  }, [audioStreams, transcriptAssetId]);
+
+  useEffect(
+    () => () => {
+      abort.current?.abort();
+      speechAbort.current?.abort();
+    },
+    [],
+  );
 
   if (!tracks.length) return <p className="p-3 text-xs text-muted">O projeto não tem trilha de legendas.</p>;
 
@@ -97,6 +120,11 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     if (!platform || !transcriptAssetId || transcribing) return;
     const asset = project.assets.find((item) => item.id === transcriptAssetId);
     if (!asset) return;
+    const audioIndex = speechAudioIndex ?? pickAudioStreamByLanguage(audioStreams, 'original') ?? audioStreams[0]?.index;
+    if (audioIndex === undefined || audioIndex === null) {
+      toast({ tone: 'error', title: 'Não há faixa de áudio', body: 'O episódio não tem uma faixa de áudio selecionável para transcrever.' });
+      return;
+    }
     const videoClips = project.clips.filter((clip) => clip.assetId === transcriptAssetId && project.tracks.find((track) => track.id === clip.trackId)?.kind === 'video');
     const selectedClips = videoClips.filter((clip) => selection.includes(clip.id));
     const targetVideoClips = selectedClips.length ? selectedClips : videoClips;
@@ -115,14 +143,63 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
       ),
     );
     if (overlaps && !(await platform.dialogs.confirm('As falas transcritas substituem legendas existentes nos trechos escolhidos. Continuar?', 'Substituir legendas no trecho?'))) return;
-    setTranscribing(true);
+    const controller = new AbortController();
+    speechAbort.current = controller;
+    const duration = (asset.probe?.durationUs ?? 0) / 1e6;
+    let partialPath: string | null = null;
+    setCancellingSpeech(false);
+    setSpeechProgress({ stage: 'extracting', progress: 0, duration });
     try {
+      const cacheDir = joinPath(await platform.cacheDir(), 'transcription');
+      await platform.fs.mkdir(cacheDir);
+      const cacheKey = (asset.hash || asset.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const audioPath = joinPath(cacheDir, `${cacheKey}-stream-${audioIndex}.wav`);
+      if (!(await platform.fs.exists(audioPath)) || (await platform.fs.size(audioPath)) <= 44) {
+        partialPath = `${audioPath}.partial`;
+        if (await platform.fs.exists(partialPath)) await platform.fs.remove(partialPath);
+        let progressOutput = '';
+        const extracted = await platform.runner.run(
+          'ffmpeg',
+          [
+            '-y', '-hide_banner', '-v', 'error', '-i', asset.path, '-map', `0:${audioIndex}`,
+            '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-progress', 'pipe:1', '-nostats', '-f', 'wav', partialPath,
+          ],
+          {
+            signal: controller.signal,
+            onStdout: (chunk) => {
+              progressOutput = (progressOutput + chunk).slice(-4096);
+              for (const line of progressOutput.split(/\r?\n/)) {
+                const match = /^out_time_us=(\d+)/.exec(line);
+                if (match) setSpeechProgress({ stage: 'extracting', progress: Number(match[1]) / 1e6, duration });
+              }
+            },
+          },
+        );
+        if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
+        if (extracted.code !== 0) {
+          throw new Error(`FFmpeg não conseguiu extrair a faixa ${audioIndex}: ${extracted.stderr.trim() || `código ${extracted.code}`}`);
+        }
+        if (!(await platform.fs.exists(partialPath)) || (await platform.fs.size(partialPath)) <= 44) {
+          throw new Error('FFmpeg não gerou um WAV válido para transcrição.');
+        }
+        await platform.fs.rename(partialPath, audioPath);
+      }
       const connection = await platform.analyzer.start();
-      const transcript = await platform.analyzer.transcribe(connection, {
-        path: asset.path,
-        model: speechModel,
-        ...(speechLanguage ? { language: speechLanguage } : {}),
-      });
+      if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
+      const transcript = await platform.analyzer.transcribe(
+        connection,
+        { path: audioPath, model: speechModel, ...(speechLanguage ? { language: speechLanguage } : {}) },
+        {
+          signal: controller.signal,
+          onProgress: (job) => {
+            setSpeechProgress({
+              stage: job.status === 'queued' || job.progress === 0 ? 'preparing' : 'transcribing',
+              progress: job.progress,
+              duration: job.duration || duration,
+            });
+          },
+        },
+      );
       const cues = transcript.segments.map((segment) => ({ startS: segment.start, endS: segment.end, text: segment.text }));
       if (!cues.length) {
         toast({ tone: 'warn', title: 'Nenhuma fala reconhecida', body: 'Tente outra faixa de áudio ou um modelo maior. O arquivo original não foi alterado.' });
@@ -137,10 +214,29 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
       const language = transcript.language ? ` Idioma detectado: ${transcript.language}${Math.round(transcript.language_probability * 100)}%.` : '';
       toast({ tone: 'ok', title: `${r.count} falas adicionadas`, body: `Reveja e edite as legendas na trilha. A transcrição roda localmente.${language}` });
     } catch (error) {
-      toast({ tone: 'error', title: 'Não deu para transcrever', body: error instanceof Error ? error.message : String(error) });
+      if (partialPath && (await platform.fs.exists(partialPath))) {
+        try {
+          await platform.fs.remove(partialPath);
+        } catch (cleanupError) {
+          console.warn('Não foi possível remover o áudio temporário da transcrição:', cleanupError);
+        }
+      }
+      if (error instanceof Error && error.name === 'AbortError') {
+        toast({ tone: 'info', title: 'Transcrição cancelada', body: 'O áudio original não foi alterado.' });
+      } else {
+        toast({ tone: 'error', title: 'Não deu para transcrever', body: error instanceof Error ? error.message : String(error) });
+      }
     } finally {
-      setTranscribing(false);
+      speechAbort.current = null;
+      setCancellingSpeech(false);
+      setSpeechProgress(null);
     }
+  };
+
+  const cancelTranscription = () => {
+    if (!speechAbort.current) return;
+    setCancellingSpeech(true);
+    speechAbort.current.abort();
   };
 
   const translate = async () => {
@@ -231,6 +327,23 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
                 {['tiny', 'base', 'small', 'medium', 'large-v3'].map((model) => <option key={model} value={model}>{model}</option>)}
               </select>
             </div>
+            <select
+              className="h-7 w-full rounded-control border border-line bg-base px-1 text-2xs"
+              value={speechAudioIndex ?? ''}
+              onChange={(e) => setSpeechAudioIndex(e.target.value ? Number(e.target.value) : null)}
+              aria-label="Faixa de áudio do episódio"
+              disabled={transcribing || audioStreams.length === 0}
+            >
+              {audioStreams.length === 0 ? (
+                <option value="">Nenhuma faixa de áudio</option>
+              ) : (
+                audioStreams.map((stream) => (
+                  <option key={stream.index} value={stream.index}>
+                    {stream.title || stream.language || `Faixa ${stream.index + 1}`} · stream {stream.index}
+                  </option>
+                ))
+              )}
+            </select>
             <div className="flex gap-1">
               <select className="h-7 min-w-0 flex-1 rounded-control border border-line bg-base px-1 text-2xs" value={speechLanguage} onChange={(e) => setSpeechLanguage(e.target.value)} aria-label="Idioma falado no episódio" disabled={transcribing}>
                 <option value="">Detectar idioma</option>
@@ -240,12 +353,42 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
                 <option value="es">Espanhol</option>
                 <option value="fr">Francês</option>
               </select>
-              <Button size="sm" onClick={transcribe} disabled={transcribing || !transcriptAssetId} icon={<Mic size={13} />}>
-                {transcribing ? 'Transcrevendo…' : 'Transcrever'}
-              </Button>
+              {transcribing ? (
+                <Button size="sm" variant="ghost" onClick={cancelTranscription} disabled={cancellingSpeech} icon={<X size={13} />}>
+                  {cancellingSpeech ? 'Cancelando…' : 'Cancelar'}
+                </Button>
+              ) : (
+                <Button size="sm" onClick={transcribe} disabled={!transcriptAssetId || audioStreams.length === 0} icon={<Mic size={13} />}>
+                  Transcrever
+                </Button>
+              )}
             </div>
+            {speechProgress && (
+              <div className="space-y-0.5">
+                <div className="flex justify-between text-2xs text-muted">
+                  <span>
+                    {cancellingSpeech
+                      ? 'Cancelando transcrição…'
+                      : speechProgress.stage === 'extracting'
+                      ? 'Preparando áudio…'
+                      : speechProgress.stage === 'preparing'
+                        ? 'Carregando o modelo ou aguardando o primeiro segmento…'
+                        : 'Transcrevendo…'}
+                  </span>
+                  {speechProgress.duration > 0 && (
+                    <span className="tnum">{Math.min(100, Math.round((speechProgress.progress / speechProgress.duration) * 100))}%</span>
+                  )}
+                </div>
+                <progress
+                  className="h-1 w-full accent-violet"
+                  max={speechProgress.duration || 1}
+                  value={Math.min(speechProgress.progress, speechProgress.duration || 0)}
+                  aria-label={speechProgress.stage === 'extracting' ? 'Progresso da preparação do áudio' : 'Progresso da transcrição'}
+                />
+              </div>
+            )}
             <p className="text-2xs text-faint">
-              Local, sem enviar áudio. Requer Python e faster-whisper instalados; o modelo pode baixar na primeira execução. Usa os clipes selecionados do episódio ou, se nenhum estiver selecionado, todos os clipes dele. A faixa padrão de áudio do arquivo é usada.
+              Local, sem enviar áudio. A faixa escolhida é extraída para cache sem alterar o original; o progresso acompanha extração e segmentos. Cancelar tenta parar no limite do segmento e encerra o analisador após 5 s se necessário. Usa os clipes selecionados ou todos os clipes desse episódio.
             </p>
           </div>
         )}

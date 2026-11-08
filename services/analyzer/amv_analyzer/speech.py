@@ -8,6 +8,10 @@ MODEL_SIZES = {"tiny", "base", "small", "medium", "large-v3"}
 _models: dict[str, Any] = {}
 
 
+class TranscriptionCancelled(Exception):
+    pass
+
+
 def _load_model(size: str) -> Any:
     if size not in MODEL_SIZES:
         raise ValueError(f"modelo inválido: {size}")
@@ -26,6 +30,8 @@ def transcribe(
     language: str | None = None,
     *,
     model_loader: Callable[[str], Any] = _load_model,
+    cancelled: Callable[[], bool] = lambda: False,
+    on_progress: Callable[[float, float], None] = lambda _done, _total: None,
 ) -> dict[str, Any]:
     """Transcribe one media file without reading its contents into application memory."""
     if model_size not in MODEL_SIZES:
@@ -43,7 +49,11 @@ def transcribe(
         word_timestamps=True,
     )
     result: list[dict[str, Any]] = []
+    duration = max(0.0, float(getattr(info, "duration", 0.0)))
+    on_progress(0.0, duration)
     for segment in segments:
+        if cancelled():
+            raise TranscriptionCancelled("transcrição cancelada")
         text = str(segment.text).strip()
         start = max(0.0, float(segment.start))
         end = max(start, float(segment.end))
@@ -61,10 +71,13 @@ def transcribe(
             if word_text and word_end > word_start:
                 words.append({"start": word_start, "end": word_end, "text": word_text})
         result.append({"start": start, "end": end, "text": text, "words": words})
+        on_progress(min(end, duration) if duration else end, duration)
+    if cancelled():
+        raise TranscriptionCancelled("transcrição cancelada")
 
     return {
         "language": getattr(info, "language", None),
         "language_probability": float(getattr(info, "language_probability", 0.0)),
-        "duration": float(getattr(info, "duration", 0.0)),
+        "duration": duration,
         "segments": result,
     }

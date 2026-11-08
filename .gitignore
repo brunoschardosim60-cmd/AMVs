@@ -8,6 +8,9 @@ __pycache__/
 .env.*
 # binários de sidecar baixados por script
 apps/desktop/src-tauri/binaries/
+apps/desktop/src-tauri/resources/analyzer/**
+!apps/desktop/src-tauri/resources/analyzer/.gitkeep
+services/analyzer/build/
 # mídia gerada para testes
 fixtures/generated/
 # cache de projetos

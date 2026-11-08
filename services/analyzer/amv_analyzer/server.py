@@ -10,13 +10,16 @@ import json
 import secrets
 import socket
 import sys
+import threading
+import uuid
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .speech import MODEL_SIZES, transcribe
+from .speech import MODEL_SIZES, TranscriptionCancelled, transcribe
 
 MODULES: dict[str, str] = {
     "beats": "librosa",
@@ -32,6 +35,27 @@ class TranscriptionRequest(BaseModel):
     language: str | None = None
 
 
+class SpeechJob:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.cancelled = threading.Event()
+        self.status = "queued"
+        self.progress = 0.0
+        self.duration = 0.0
+        self.result: dict[str, Any] | None = None
+        self.error: str | None = None
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "status": self.status,
+                "progress": self.progress,
+                "duration": self.duration,
+                "result": self.result,
+                "error": self.error,
+            }
+
+
 def module_status() -> dict[str, dict[str, object]]:
     out: dict[str, dict[str, object]] = {}
     for name, package in MODULES.items():
@@ -42,6 +66,8 @@ def module_status() -> dict[str, dict[str, object]]:
 
 def create_app(token: str) -> FastAPI:
     app = FastAPI(title="AMV Studio Analyzer", version=__version__)
+    jobs: dict[str, SpeechJob] = {}
+    jobs_lock = threading.Lock()
 
     def auth(authorization: str | None = Header(default=None)) -> None:
         if authorization != f"Bearer {token}":
@@ -55,26 +81,81 @@ def create_app(token: str) -> FastAPI:
     def modules() -> dict[str, dict[str, object]]:
         return module_status()
 
-    @app.post("/speech/transcribe", dependencies=[Depends(auth)])
-    def speech_transcribe(request: TranscriptionRequest) -> dict[str, object]:
+    def validate_request(request: TranscriptionRequest) -> Path:
         if request.model not in MODEL_SIZES:
             raise HTTPException(status_code=422, detail=f"modelo inválido; opções: {', '.join(sorted(MODEL_SIZES))}")
         if request.language is not None and (
             len(request.language) not in (2, 3) or not request.language.isascii() or not request.language.isalpha()
         ):
             raise HTTPException(status_code=422, detail="idioma deve ser um código ISO de 2 ou 3 letras")
-        if not Path(request.path).is_file():
+        path = Path(request.path)
+        if not path.is_file():
             raise HTTPException(status_code=404, detail="arquivo de mídia não encontrado")
-        try:
-            return transcribe(request.path, request.model, request.language)
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return path
+
+    @app.post("/speech/jobs", dependencies=[Depends(auth)])
+    def start_speech_job(request: TranscriptionRequest) -> dict[str, str]:
+        path = validate_request(request)
+        job_id = uuid.uuid4().hex
+        job = SpeechJob()
+        with jobs_lock:
+            jobs[job_id] = job
+
+        def run() -> None:
+            with job.lock:
+                job.status = "running"
+            try:
+                if job.cancelled.is_set():
+                    raise TranscriptionCancelled("transcrição cancelada")
+                result = transcribe(
+                    str(path),
+                    request.model,
+                    request.language,
+                    cancelled=job.cancelled.is_set,
+                    on_progress=lambda done, total: update_progress(job, done, total),
+                )
+                with job.lock:
+                    job.result = result
+                    job.status = "completed"
+            except TranscriptionCancelled:
+                with job.lock:
+                    job.status = "cancelled"
+            except RuntimeError as exc:
+                with job.lock:
+                    job.error = str(exc)
+                    job.status = "failed"
+            except Exception as exc:
+                with job.lock:
+                    job.error = f"falha na transcrição: {exc}"
+                    job.status = "failed"
+
+        threading.Thread(target=run, name=f"speech-{job_id[:8]}", daemon=True).start()
+        return {"job_id": job_id}
+
+    @app.get("/speech/jobs/{job_id}", dependencies=[Depends(auth)])
+    def speech_job_status(job_id: str) -> dict[str, Any]:
+        with jobs_lock:
+            job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job de transcrição não encontrado")
+        return job.snapshot()
+
+    @app.delete("/speech/jobs/{job_id}", dependencies=[Depends(auth)])
+    def cancel_speech_job(job_id: str) -> dict[str, str]:
+        with jobs_lock:
+            job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job de transcrição não encontrado")
+        job.cancelled.set()
+        return {"status": "cancelling"}
 
     return app
+
+
+def update_progress(job: SpeechJob, done: float, total: float) -> None:
+    with job.lock:
+        job.progress = max(0.0, done)
+        job.duration = max(0.0, total)
 
 
 def free_port() -> int:

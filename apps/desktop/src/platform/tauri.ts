@@ -7,7 +7,7 @@ import { ask, open, save } from '@tauri-apps/plugin-dialog';
 import * as tfs from '@tauri-apps/plugin-fs';
 import { Command } from '@tauri-apps/plugin-shell';
 import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
-import type { AnalyzerConnection, Platform, SpeechTranscript } from './types';
+import type { AnalyzerConnection, Platform, SpeechProgress, SpeechTranscript } from './types';
 
 /** O plugin entrega string, Uint8Array ou (para bytes que não são UTF-8) um array de números. */
 function toBytes(data: unknown): Uint8Array {
@@ -109,24 +109,107 @@ export function createTauriPlatform(): Platform {
       }
       throw new Error(`o analisador local iniciou, mas não ficou pronto: ${lastError}`);
     },
-    async transcribe(connection: AnalyzerConnection, request: { path: string; model: string; language?: string }): Promise<SpeechTranscript> {
-      const response = await tauriFetch(`${connection.baseUrl}/speech/transcribe`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${connection.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
-        connectTimeout: 15_000,
-      });
-      const text = await response.text();
-      if (!response.ok) {
-        let detail = text;
-        try {
-          detail = (JSON.parse(text) as { detail?: string }).detail ?? text;
-        } catch {
-          // Mantém a resposta original para facilitar o diagnóstico.
+    async transcribe(
+      connection: AnalyzerConnection,
+      request: { path: string; model: string; language?: string },
+      options: { signal?: AbortSignal; onProgress?: (progress: SpeechProgress) => void } = {},
+    ): Promise<SpeechTranscript> {
+      const { signal, onProgress } = options;
+      const headers = { Authorization: `Bearer ${connection.token}`, 'Content-Type': 'application/json' };
+      let jobId: string | null = null;
+      const readJson = async <T>(response: Response): Promise<T> => {
+        const text = await response.text();
+        if (!response.ok) {
+          let detail = text;
+          try {
+            detail = (JSON.parse(text) as { detail?: string }).detail ?? text;
+          } catch {
+            // Mantém a resposta original para facilitar o diagnóstico.
+          }
+          throw new Error(`transcrição respondeu ${response.status}: ${detail}`);
         }
-        throw new Error(`transcrição respondeu ${response.status}: ${detail}`);
+        return JSON.parse(text) as T;
+      };
+      try {
+        if (signal?.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
+        const started = await readJson<{ job_id: string }>(
+          await tauriFetch(`${connection.baseUrl}/speech/jobs`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(request),
+            signal,
+            connectTimeout: 15_000,
+          }),
+        );
+        jobId = started.job_id;
+        while (true) {
+          if (signal?.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
+          await new Promise<void>((resolve, reject) => {
+            let timer: ReturnType<typeof setTimeout>;
+            const onAbort = () => {
+              clearTimeout(timer);
+              signal?.removeEventListener('abort', onAbort);
+              reject(new DOMException('transcrição cancelada', 'AbortError'));
+            };
+            timer = setTimeout(() => {
+              signal?.removeEventListener('abort', onAbort);
+              resolve();
+            }, 400);
+            if (signal?.aborted) {
+              onAbort();
+              return;
+            }
+            signal?.addEventListener('abort', onAbort, { once: true });
+          });
+          const progress = await readJson<SpeechProgress>(
+            await tauriFetch(`${connection.baseUrl}/speech/jobs/${started.job_id}`, {
+              method: 'GET',
+              headers,
+              signal,
+              connectTimeout: 5_000,
+            }),
+          );
+          onProgress?.(progress);
+          if (progress.status === 'completed' && progress.result) return progress.result;
+          if (progress.status === 'failed') throw new Error(progress.error ?? 'falha sem detalhe na transcrição');
+          if (progress.status === 'cancelled') throw new DOMException('transcrição cancelada', 'AbortError');
+        }
+      } catch (error) {
+        if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
+          if (jobId) {
+            try {
+              await tauriFetch(`${connection.baseUrl}/speech/jobs/${jobId}`, {
+                method: 'DELETE',
+                headers,
+                connectTimeout: 5_000,
+              });
+              for (let attempt = 0; attempt < 20; attempt++) {
+                await new Promise((resolve) => setTimeout(resolve, 250));
+                const progress = await readJson<SpeechProgress>(
+                  await tauriFetch(`${connection.baseUrl}/speech/jobs/${jobId}`, {
+                    method: 'GET',
+                    headers,
+                    connectTimeout: 5_000,
+                  }),
+                );
+                onProgress?.(progress);
+                if (progress.status !== 'queued' && progress.status !== 'running') break;
+                if (attempt === 19) await invoke<void>('analyzer_stop');
+              }
+            } catch (cancelError) {
+              try {
+                await invoke<void>('analyzer_stop');
+              } catch (stopError) {
+                throw new AggregateError([cancelError, stopError], 'não foi possível cancelar a transcrição nem encerrar o analisador');
+              }
+            }
+          } else {
+            await invoke<void>('analyzer_stop');
+          }
+          throw new DOMException('transcrição cancelada', 'AbortError');
+        }
+        throw error;
       }
-      return JSON.parse(text) as SpeechTranscript;
     },
     stop: () => invoke<void>('analyzer_stop'),
   };

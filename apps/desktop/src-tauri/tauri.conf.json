@@ -53,6 +53,9 @@
       "binaries/ffmpeg",
       "binaries/ffprobe"
     ],
+    "resources": {
+      "resources/analyzer": "analyzer"
+    },
     "category": "Video",
     "shortDescription": "Editor de Anime Music Videos",
     "windows": {
