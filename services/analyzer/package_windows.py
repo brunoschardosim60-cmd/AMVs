@@ -7,8 +7,10 @@ import queue
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import urllib.request
+import wave
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -95,7 +97,19 @@ def smoke_test() -> None:
             modules = json.loads(response.read())
         if not modules.get("speech", {}).get("available"):
             raise RuntimeError("faster-whisper não está disponível no runtime empacotado")
-        print("Runtime Python empacotado respondeu à API com faster-whisper disponível.")
+        from faster_whisper.audio import decode_audio
+
+        with tempfile.TemporaryDirectory(prefix="amv-analyzer-smoke-") as directory:
+            audio_path = Path(directory) / "smoke.wav"
+            with wave.open(str(audio_path), "wb") as audio_file:
+                audio_file.setnchannels(1)
+                audio_file.setsampwidth(2)
+                audio_file.setframerate(16000)
+                audio_file.writeframes(b"\0" * 8000)
+            samples = decode_audio(str(audio_path))
+        if samples.size != 4000:
+            raise RuntimeError(f"decodificação de áudio inesperada: {samples.size} amostras")
+        print("Runtime Python empacotado respondeu à API e decodificou áudio sintético.")
     finally:
         if process.poll() is None:
             process.terminate()
