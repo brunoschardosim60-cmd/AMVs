@@ -26,7 +26,8 @@ import {
   type ProjectSettings,
 } from '@amv/project';
 import type { Platform } from '../platform/types';
-import { analyzeEpisodeFile, analyzeMusicFile, EPISODE_ANALYSIS_VERSION, MUSIC_ANALYSIS_VERSION, type EpisodeAnalysis, type MusicAnalysis } from '@amv/analysis';
+import { analyzeEpisodeFile, analyzeMusicFile, EPISODE_ANALYSIS_VERSION, grabFrameJpeg, MUSIC_ANALYSIS_VERSION, shotKey, toBase64, VISION_VERSION, type EpisodeAnalysis, type EpisodeVision, type MusicAnalysis } from '@amv/analysis';
+import { labelScenes, type FetchLike, type ProviderConfig } from '@amv/assistant';
 import { renderSfx, SFX_KINDS, SFX_LABEL, sfxFileName, toWav, type SfxKind } from '@amv/sfx';
 import { rememberRecent, updateRecent } from './recents';
 
@@ -40,6 +41,8 @@ export interface AssetRuntime {
   music?: MusicAnalysis | null;
   /** Análise do episódio (vídeos): planos, falas, legendas. */
   episode?: EpisodeAnalysis | null;
+  /** Quem aparece em cada cena (análise com IA com visão), se foi rodada. */
+  vision?: EpisodeVision | null;
   analysis?: 'pending' | 'running' | 'done' | 'error';
   analysisError?: string;
 }
@@ -338,6 +341,99 @@ export class ProjectSession {
       this.emit();
     }
     return ids;
+  }
+
+
+  // ---------------------------------------------------------------- visão (IA) por cena
+
+  private async visionFile(asset: Asset): Promise<string> {
+    const env = await this.mediaEnv();
+    return joinPath(cachePaths(env.cacheRoot, asset.hash, joinPath).dir, `vision-${VISION_VERSION}.json`);
+  }
+
+  /** Carrega do cache a visão já feita de um episódio (se houver). */
+  async loadVision(assetId: string): Promise<EpisodeVision | null> {
+    const asset = this.project.assets.find((a) => a.id === assetId);
+    if (!asset) return null;
+    const rt = this.assetRuntime(assetId);
+    if (rt.vision !== undefined) return rt.vision;
+    let v: EpisodeVision | null = null;
+    try {
+      const f = await this.visionFile(asset);
+      if (await this.platform.fs.exists(f)) v = JSON.parse(new TextDecoder().decode(await this.platform.fs.readFile(f))) as EpisodeVision;
+    } catch {
+      v = null; // arquivo ilegível: refaz quando pedir
+    }
+    this.runtime.set(assetId, { ...this.assetRuntime(assetId), vision: v });
+    this.emit();
+    return v;
+  }
+
+  /**
+   * As cenas de luta ainda sem rótulo, das lutas mais fortes para as mais fracas (até `max`).
+   * É o que a análise com IA vai mandar para o modelo: serve também para estimar o custo.
+   */
+  visionTargets(assetId: string, max = 120): { startS: number; midS: number }[] {
+    const ep = this.assetRuntime(assetId).episode;
+    if (!ep) return [];
+    const done = this.assetRuntime(assetId).vision?.shots ?? {};
+    const out: { startS: number; midS: number }[] = [];
+    const fights = (ep.sequences ?? []).filter((q) => q.kind === 'luta').sort((a, b) => b.intensity - a.intensity);
+    for (const q of fights) {
+      for (const sh of ep.shots) {
+        if (sh.startS < q.startS - 1e-3 || sh.endS > q.endS + 1e-3 || sh.tags.includes('escura') || sh.endS - sh.startS < 0.25) continue;
+        if (done[shotKey(sh.startS)]) continue;
+        out.push({ startS: sh.startS, midS: (sh.startS + sh.endS) / 2 });
+        if (out.length >= max) return out;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Manda quadros das cenas de luta a um modelo com visão e guarda quem aparece em cada uma.
+   * Retoma de onde parou (cenas já rotuladas não são enviadas de novo) e salva a cada lote.
+   */
+  async runVision(
+    assetId: string,
+    o: { provider: ProviderConfig; key: string | null; fetch: FetchLike; max?: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void },
+  ): Promise<{ labeled: number; failed: number; usage: { input: number; output: number } }> {
+    const asset = this.project.assets.find((a) => a.id === assetId);
+    if (!asset) throw new Error('episódio não encontrado');
+    const prior = await this.loadVision(assetId);
+    const targets = this.visionTargets(assetId, o.max ?? 120);
+    const env = await this.mediaEnv();
+    const src = this.assetRuntime(assetId).artifacts?.proxyPath ?? asset.path;
+    const vision: EpisodeVision = { version: VISION_VERSION, model: o.provider.model || o.provider.name, shots: { ...(prior?.shots ?? {}) } };
+    const known = [...new Set(Object.values(vision.shots).flatMap((s) => s.characters))];
+    const usage = { input: 0, output: 0 };
+    let failed = 0;
+    const BATCH = 6;
+    for (let i = 0; i < targets.length; i += BATCH) {
+      if (o.signal?.aborted) break;
+      const chunk = targets.slice(i, i + BATCH);
+      const frames: { id: string; jpegBase64: string }[] = [];
+      for (const t of chunk) {
+        try {
+          frames.push({ id: shotKey(t.startS), jpegBase64: toBase64(await grabFrameJpeg(env.runner, src, t.midS, 448, o.signal)) });
+        } catch {
+          failed++; // quadro que não saiu: pula a cena, o resto segue
+        }
+      }
+      if (!frames.length) continue;
+      const r = await labelScenes(o.provider, o.key, o.fetch, frames, { batchSize: BATCH, known, signal: o.signal });
+      usage.input += r.usage.input;
+      usage.output += r.usage.output;
+      failed += r.failed.length;
+      Object.assign(vision.shots, r.labels);
+      for (const c of r.characters) if (!known.includes(c)) known.push(c);
+      // salva a cada lote: se cancelar ou falhar no meio, o que já foi feito fica
+      await this.platform.fs.writeFile(await this.visionFile(asset), new TextEncoder().encode(JSON.stringify(vision)));
+      this.runtime.set(assetId, { ...this.assetRuntime(assetId), vision: { ...vision, shots: { ...vision.shots } } });
+      this.emit();
+      o.onProgress?.(Math.min(targets.length, i + chunk.length), targets.length);
+    }
+    return { labeled: Object.keys(vision.shots).length - Object.keys(prior?.shots ?? {}).length, failed, usage };
   }
 
   /** Gera (ou reaproveita do cache) os artefatos de um asset e atualiza seu estado. */

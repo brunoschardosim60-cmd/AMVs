@@ -65,6 +65,23 @@ createServer(async (req, res) => {
       const result = await rpc[method](...args);
       return res.writeHead(200, { ...cors, 'content-type': 'application/json' }).end(JSON.stringify({ result: result ?? null }));
     }
+    // Modelo de visão FALSO (compatível com OpenAI) para testar a análise de cenas sem gastar nada:
+    // rotula cada imagem pela paridade da soma dos bytes (determinístico) e marca 1 de cada 5 como "não é luta".
+    if (url.pathname === '/fake-llm/v1/chat/completions') {
+      let body = '';
+      for await (const c of req) body += c;
+      const j = JSON.parse(body);
+      const content = j.messages.at(-1).content;
+      const imgs = Array.isArray(content) ? content.filter((c) => c.type === 'image_url') : [];
+      globalThis.__fakeCalls = (globalThis.__fakeCalls ?? 0) + 1;
+      const out = imgs.map((im, k) => {
+        const b = Buffer.from(im.image_url.url.split(',')[1], 'base64');
+        let sum = 0; for (let i = 0; i < b.length; i += 7) sum += b[i];
+        return { i: k + 1, characters: [sum % 2 ? 'Guerreiro laranja' : 'Vilão roxo'], fight: (sum % 5) !== 0, note: 'cena de teste' };
+      });
+      return res.writeHead(200, { ...cors, 'content-type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(out) } }], usage: { prompt_tokens: 50 * imgs.length, completion_tokens: 15 * imgs.length } }));
+    }
+    if (url.pathname === '/fake-llm/calls') return res.writeHead(200, { ...cors, 'content-type': 'application/json' }).end(JSON.stringify({ calls: globalThis.__fakeCalls ?? 0 }));
     if (url.pathname === '/file') {
       const p = url.searchParams.get('path');
       const st = await stat(p);

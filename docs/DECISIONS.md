@@ -71,3 +71,10 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - **Faixa de áudio**: uma única regra (`pickAudioStreamByLanguage`) para análise e para a fala; padrão = original (japonês).
 - **Tradução** reaproveita o provedor de IA do Assistente (sem dependência nova); o original fica em `text.original` (campo opcional, sem migração de schema) e a tradução sempre parte dele.
 - **YouTube/Spotify**: mantida a decisão do AGENTS.md §3 — não extrair áudio de streaming.
+
+## 2026-11-08 · Efeitos sonoros, visão e achados de interface
+- **Drop por batida**: a grade de 4 compassos perdia ou atrasava o drop. Candidatos = cada batida; salto = energia dos 4 s depois − 4 s antes; seções ganham um limite exato no drop. `MUSIC_ANALYSIS_VERSION` m3.
+- **Efeitos sintetizados por código** (`@amv/sfx`): sem licença, determinísticos, versionados no nome do arquivo. Ficam como mídia com a tag `sfx` (fora das listas) e a trilha "Efeitos" já existia. O sorteio de efeitos usa semente própria: ligar efeitos não muda a escolha das cenas (teste garante).
+- **Seletividade dos golpes**: a 1ª versão colocava 45 golpes em 60 s (metralhadora); agora espaçamento ≥ 0,75 s e prioridade pela força da cena.
+- **Visão opcional e retomável**, separada da análise de ritmo (arquivo `vision-v1.json` por episódio): custa chamadas ao modelo, então só roda quando pedida; mostra custo antes; local (Ollama) não envia nada.
+- **Teste de interface real**: harness (`apps/desktop/dev`) roda o app num Chromium com ponte para FFmpeg/arquivos. Achou o botão Importar inclicável e a trilha Efeitos escondida, que a leitura de código não mostrou. Hipótese refutada: o `Dialog` não roubava foco.

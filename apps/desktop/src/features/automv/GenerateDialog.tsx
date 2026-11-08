@@ -1,8 +1,9 @@
 import { parseSubtitles, decodeSubtitleBytes, type Cue } from '@amv/analysis';
 import { generateAmv, planFootage, STYLES, suggestMusicRanges, type EpisodeInput, type GenerateOptions, type StyleId } from '@amv/automv';
-import { pickAudioStreamByLanguage } from '@amv/analysis';
+import { characterCounts, pickAudioStreamByLanguage, type EpisodeVision } from '@amv/analysis';
+import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp, useLibraryVersion, useSessionVersion } from '../../store';
 import { displayTitle, recommend, STYLE_THEME } from '@amv/music';
@@ -31,6 +32,9 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
   const [seqIds, setSeqIds] = useState<string[]>([]);
   const [hitSync, setHitSync] = useState(true);
   const [useSfx, setUseSfx] = useState(true);
+  const [characters, setCharacters] = useState<string[]>([]);
+  const [vision, setVision] = useState<{ done: number; total: number; ep: string } | null>(null);
+  const visionAbort = useRef<AbortController | null>(null);
   const [musicStart, setMusicStart] = useState<number | null>(null);
   const [useEffects, setUseEffects] = useState(true);
   const [showText, setShowText] = useState(true);
@@ -42,6 +46,8 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
   const music = session.assetRuntime(musicId).music;
   const ready = episodes.filter((e) => epIds.includes(e.id) && session.assetRuntime(e.id).episode);
   const waiting = epIds.filter((id) => !session.assetRuntime(id).episode).length + (musicId && !music ? 1 : 0);
+  // muda quando a visão de algum episódio ganha cenas (para refazer o plano)
+  const visionVersion = ready.map((e) => Object.keys(session.assetRuntime(e.id).vision?.shots ?? {}).length).join(',');
   const inputs = useMemo<EpisodeInput[]>(
     () =>
       ready.map((e) => ({
@@ -50,9 +56,10 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
         analysis: session.assetRuntime(e.id).episode!,
         hasAudio: (e.probe?.audio.length ?? 0) > 0,
         audioStreams: e.probe?.audio.map((a) => ({ index: a.index, language: a.language, title: a.title })),
+        vision: (session.assetRuntime(e.id).vision as EpisodeVision | null | undefined) ?? undefined,
       })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ready.map((e) => e.id).join(','), session],
+    [ready.map((e) => e.id).join(','), session, visionVersion],
   );
   const excluded = useMemo(() => episodes.filter((e) => !epIds.includes(e.id)).map((e) => e.id), [episodes, epIds]);
   const fights = useMemo(
@@ -64,13 +71,65 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
     [inputs],
   );
   const plan = useMemo(
-    () => (music && inputs.length ? planFootage(inputs, { style, intensity, durationS: duration, focus, sequenceIds: seqIds, exclude: excluded, seed }, music) : null),
+    () => (music && inputs.length ? planFootage(inputs, { style, intensity, durationS: duration, focus, sequenceIds: seqIds, exclude: excluded, seed, characters }, music) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [music, inputs, style, intensity, duration, focus, seqIds.join(','), excluded.join(','), seed],
+    [music, inputs, style, intensity, duration, focus, seqIds.join(','), excluded.join(','), seed, characters.join(',')],
   );
   const ranges = useMemo(() => (music && plan ? suggestMusicRanges(music, duration, plan.fit, 3) : []), [music, plan, duration]);
   // o trecho escolhido só vale enquanto ainda é uma das sugestões (mudou duração/estilo/luta: volta ao automático)
   const chosenStart = ranges.some((r) => r.startS === musicStart) ? musicStart : null;
+
+  // carrega do cache a visão já feita (uma vez por episódio)
+  useEffect(() => {
+    for (const e of ready) if (session.assetRuntime(e.id).vision === undefined) void session.loadVision(e.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready.map((e) => e.id).join(',')]);
+  const charList = useMemo(() => {
+    const all = new Map<string, { name: string; shots: number }>();
+    for (const e of ready) for (const c of characterCounts(session.assetRuntime(e.id).vision)) {
+      const k = c.name.toLowerCase();
+      const x = all.get(k);
+      if (x) x.shots += c.shots;
+      else all.set(k, { ...c });
+    }
+    return [...all.values()].sort((a, b) => b.shots - a.shots).slice(0, 12);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visionVersion]);
+  const visionTodo = ready.reduce((n, e) => n + session.visionTargets(e.id).length, 0);
+
+  const runVision = async () => {
+    if (!platform || vision) return;
+    try {
+      const settings = await loadAiSettings(platform);
+      if (!settings.enabled) {
+        toast({ tone: 'warn', title: 'Ligue um modelo de IA com visão', body: 'Abra o Assistente e clique na engrenagem. Serve Claude, GPT-4o ou, no Ollama, um modelo de visão (ex.: llava, qwen2.5vl).' });
+        return;
+      }
+      if (!isLocal(settings) && !settings.allowExternal) {
+        toast({ tone: 'warn', title: 'Envio para a internet desligado', body: 'A análise manda quadros dos episódios ao serviço de IA. Autorize na engrenagem do Assistente ou use um modelo local (Ollama).' });
+        return;
+      }
+      const key = settings.provider.needsKey ? await platform.secrets.get(secretName(settings.presetId)) : null;
+      visionAbort.current = new AbortController();
+      let labeled = 0;
+      let failed = 0;
+      for (const e of ready) {
+        if (!session.visionTargets(e.id).length) continue;
+        setVision({ done: 0, total: session.visionTargets(e.id).length, ep: e.name });
+        const r = await session.runVision(e.id, { provider: settings.provider, key, fetch: platform.http, signal: visionAbort.current.signal, onProgress: (done, total) => setVision({ done, total, ep: e.name }) });
+        labeled += r.labeled;
+        failed += r.failed;
+        if (visionAbort.current.signal.aborted) break;
+      }
+      toast(failed ? { tone: 'warn', title: `${labeled} cenas analisadas, ${failed} sem resposta`, body: 'O modelo não devolveu essas. Rode de novo para tentar só as que faltam.' } : { tone: 'ok', title: `${labeled} cenas analisadas`, body: 'Escolha os personagens ao lado.' });
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') toast({ tone: 'error', title: 'Não deu para analisar as cenas', body: (err as Error).message });
+    } finally {
+      visionAbort.current = null;
+      setVision(null);
+    }
+  };
+
   const hasTwoAudio = ready.some((e) => (e.probe?.audio.length ?? 0) > 1);
   const noOriginal = ready.some((e) => (e.probe?.audio.length ?? 0) > 1 && pickAudioStreamByLanguage(e.probe!.audio, voiceLang) === null);
   const sceneCount = useMemo(() => ready.reduce((a, e) => a + (session.assetRuntime(e.id).episode?.shots.length ?? 0), 0), [ready, session]);
@@ -102,7 +161,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
           sfxError = (e as Error).message;
         }
       }
-      const opts: GenerateOptions = { useSfx, sfxAssets, style, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync };
+      const opts: GenerateOptions = { useSfx, sfxAssets, style, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, characters };
       const m = musics.find((a) => a.id === musicId)!;
       const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
       if (sfxError) r.warnings.push(`Não consegui preparar os efeitos sonoros (${sfxError}): o vídeo saiu sem eles.`);
@@ -268,6 +327,46 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
             <label className="mt-2 flex items-center gap-2 text-xs">
               <input type="checkbox" className="accent-violet" checked={hitSync} onChange={(e) => setHitSync(e.target.checked)} /> Encaixar o golpe de cada cena na batida
             </label>
+
+            <div className="mt-3 rounded-control border border-line-soft p-2">
+              <p className="mb-1 text-xs font-medium text-ink-soft">Personagens (análise com IA)</p>
+              {charList.length > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                  {charList.map((c) => {
+                    const on = characters.some((x) => x.toLowerCase() === c.name.toLowerCase());
+                    return (
+                      <button key={c.name} type="button" aria-pressed={on} className={`rounded-full border px-2 py-0.5 text-2xs ${on ? 'border-violet bg-violet/20 text-ink' : 'border-line text-ink-soft hover:border-violet'}`} onClick={() => setCharacters((xs) => (on ? xs.filter((x) => x.toLowerCase() !== c.name.toLowerCase()) : [...xs, c.name]))}>
+                        {c.name} <span className="text-faint">{c.shots}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-2xs text-muted">Descubra quem aparece em cada cena para montar só com um personagem e deixar de fora o que não é luta.</p>
+              )}
+              {characters.length > 0 && <p className="mt-1 text-2xs text-muted">Só cenas com {characters.join(' ou ')}. {plan && plan.wanted === null ? 'Poucas cenas: vou usar todas.' : ''}</p>}
+              {vision ? (
+                <div className="mt-2 flex items-center gap-2 text-2xs text-muted">
+                  <span className="tnum">
+                    Analisando {vision.ep}: {vision.done}/{vision.total}
+                  </span>
+                  <Button size="sm" onClick={() => visionAbort.current?.abort()}>
+                    Cancelar
+                  </Button>
+                </div>
+              ) : (
+                visionTodo > 0 && (
+                  <div className="mt-2">
+                    <Button size="sm" onClick={runVision} title="Manda quadros das cenas de luta a um modelo de IA com visão (Claude, GPT-4o, llava no Ollama…)">
+                      Analisar cenas com IA
+                    </Button>
+                    <p className="mt-1 text-2xs text-faint">
+                      ≈ {visionTodo} imagens em {Math.ceil(visionTodo / 6)} chamadas. Em serviço na nuvem, os quadros são enviados a ele e gera custo; com Ollama fica no seu PC.
+                    </p>
+                  </div>
+                )
+              )}
+            </div>
 
             {ranges.length > 0 && (
               <>

@@ -3,6 +3,7 @@
 ## 0.6.0 (a publicar)
 
 **Sincronia com a música**
+- **Drop com precisão de batida**: o drop era procurado só a cada 4 compassos, então um drop fora dessa grade era perdido (3 de 7 casos de teste) ou detectado 1,4–1,8 s atrasado, e o clarão/tremida caía quase 2 s fora do momento certo. Agora o drop é achado no primeiro golpe forte.
 - Corrigido um desvio de ~24 ms: toda batida era detectada adiantada em relação ao golpe real. Agora o erro médio é ~0,2 ms (pior caso ~5 ms, antes 36 ms). As músicas são reanalisadas sozinhas na primeira vez.
 - **Golpe na batida**: cada cena forte entra com o instante do impacto logo depois do corte (no drop, quase junto), em vez de o corte cair em qualquer ponto da cena.
 - **Trecho da música que combina**: o app compara trechos da música com a força das cenas escolhidas e sugere os 3 melhores (com o motivo). "Automático" usa o melhor.
@@ -12,6 +13,13 @@
 - Falas só entram se forem da luta escolhida.
 - Limite: separa por ritmo e cortes, não reconhece personagens (isso pede um modelo de visão).
 
+**Efeitos sonoros**
+- O app gera efeitos de AMV por código (sem arquivos de terceiros, sem direitos autorais): **subida** até o drop, **impacto** exatamente no drop, **golpes** nas pancadas e **whoosh** nos cortes. São seletivos (espaçados, mais fortes primeiro), nunca ficam por cima de uma fala e entram na trilha "Efeitos". Ligar/desligar em "Efeitos sonoros".
+- Conferido no vídeo exportado: a diferença entre a versão com e sem efeitos é silêncio até a subida, que cresce até o drop, e o impacto cai a ~25 ms do degrau de energia da música.
+
+**Análise cena a cena com visão (IA)**
+- Botão "Analisar cenas com IA" no Gerar meu AMV: manda quadros das cenas de luta (6 por chamada) a um modelo com visão (Claude, GPT-4o, ou llava/qwen2.5vl no Ollama) e descobre **quem aparece** e **se é luta**. Escolha os personagens e a montagem usa só cenas deles; cenas que não são luta saem dos golpes fortes. Mostra a estimativa de custo antes; retoma de onde parou; com modelo local nada sai do PC.
+
 **Falas e áudio**
 - Escolha de 0 a 4 falas intercaladas; a música abaixa sozinha em cada uma e volta depois.
 - O aviso "2 faixas de áudio" é sobre o arquivo do anime (ex.: japonês + português), não sobre a música. O app usa a faixa **original (japonês)** por padrão, tanto na análise quanto na fala, e você pode trocar para a dublagem.
@@ -19,7 +27,11 @@
 **Legendas**
 - **Troca de idioma**: Traduzir (9 idiomas) usa o modelo de IA do Assistente (Ollama, Claude, OpenAI). O texto original fica guardado: dá para trocar de idioma de novo ou voltar ao original, e a exportação sai no idioma escolhido.
 
-**Interface**
+**Interface (achados reproduzindo o app num navegador com FFmpeg real)**
+- O botão **Importar** do painel de mídia era empurrado para fora do painel e ficava atrás do preview (inclicável): agora é uma linha própria.
+- A trilha **Efeitos** ficava escondida atrás de rolagem: a timeline agora abre com altura para todas as trilhas.
+- O diálogo Gerar meu AMV agora tem 3 colunas (as opções novas ficavam abaixo da dobra).
+- O `Dialog` não rouba mais o foco para o botão Fechar a cada atualização.
 - O **Assistente** virou uma janela flutuante: arraste pelo cabeçalho, redimensione, minimize para uma bolinha. Não ocupa mais espaço e o painel de propriedades não some quando ele abre.
 
 ## 0.5.5

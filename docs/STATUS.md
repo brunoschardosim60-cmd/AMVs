@@ -114,4 +114,8 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Falas intercaladas com a música abaixando; faixa original (japonês) | feito | testes |
 | Tradução de legendas (9 idiomas), original guardado, voltar | feito | 8 testes do tradutor (modelo falso) + 5 de legendas; **não testado com modelo real** |
 | Assistente flutuante/minimizável | feito | typecheck + build; **sem teste visual** |
-| Whisper, YouTube/Spotify, efeitos sonoros, personagens | pendente | — |
+| Drop com precisão de batida (era perdido ou 1,4–1,8 s atrasado) | feito | teste com 6 combinações de andamento/posição; app real mostra "drop em 0:32" |
+| Efeitos sonoros sintetizados + colocação | feito | 11 testes espectrais, 12 de montagem; espectrogramas; **áudio exportado** comparado com/sem efeitos |
+| Visão por cena (personagens/luta) com IA | feito (modelo falso) | quadros reais via FFmpeg, rotulador, filtro na montagem; **não testado com modelo real** |
+| Correções de interface (Importar, timeline, assistente) | feito | auditoria automática de controles cobertos em 8 estados + navegador real |
+| Whisper (transcrição), YouTube/Spotify, trocar efeitos por arquivos | pendente | — |

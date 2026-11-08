@@ -1,0 +1,30 @@
+from audit import *  # noqa
+with sync_playwright() as p:
+    b, pg, logs = open_app(p, 1366, 768)
+    new_project(pg)
+    pg.get_by_role('button', name='Assistente').click(); pg.wait_for_timeout(400)
+    box0 = pg.get_by_label('Assistente', exact=True).bounding_box()
+    # arrastar pelo cabeçalho
+    hdr = pg.get_by_label('Assistente', exact=True).locator('header')
+    hb = hdr.bounding_box()
+    pg.mouse.move(hb['x']+60, hb['y']+15); pg.mouse.down(); pg.mouse.move(hb['x']-240, hb['y']+120, steps=8); pg.mouse.up()
+    box1 = pg.get_by_label('Assistente', exact=True).bounding_box()
+    print('arrastou:', (round(box0['x']),round(box0['y'])), '->', (round(box1['x']),round(box1['y'])))
+    # minimizar -> bolinha -> arrastar bolinha (não abre) -> clicar (abre)
+    pg.get_by_role('button', name='Minimizar assistente').click(); pg.wait_for_timeout(300)
+    bub = pg.get_by_role('button', name='Abrir assistente'); bb = bub.bounding_box()
+    pg.mouse.move(bb['x']+20, bb['y']+20); pg.mouse.down(); pg.mouse.move(bb['x']+120, bb['y']+90, steps=6); pg.mouse.up(); pg.wait_for_timeout(200)
+    print('após arrastar a bolinha, assistente visível?', pg.get_by_label('Assistente', exact=True).is_visible(), '| bolinha em', {k: round(v) for k,v in bub.bounding_box().items() if k in 'xy'})
+    bub.click(); pg.wait_for_timeout(300)
+    print('após clicar, assistente visível?', pg.get_by_label('Assistente', exact=True).is_visible())
+    pg.get_by_role('button', name='Minimizar assistente').click(); pg.wait_for_timeout(200)
+    pg.get_by_role('button', name='Abrir assistente').focus(); pg.keyboard.press('Enter'); pg.wait_for_timeout(300)
+    print('por teclado (Enter), visível?', pg.get_by_label('Assistente', exact=True).is_visible())
+    # fecha e reabre pelo botão do topo
+    pg.get_by_role('button', name='Fechar assistente').click(); pg.wait_for_timeout(200)
+    print('fechado:', pg.get_by_label('Assistente', exact=True).count()==0)
+    # janela pequena: arrasta pra fora da tela -> fica visível
+    pg.get_by_role('button', name='Assistente').click(); pg.wait_for_timeout(300)
+    pg.set_viewport_size({'width': 900, 'height': 600}); pg.wait_for_timeout(300)
+    bx = pg.get_by_label('Assistente', exact=True).bounding_box(); print('após reduzir janela p/ 900x600, x,y =', round(bx['x']), round(bx['y']), '(deve estar dentro da tela)')
+    print('LOGS', logs[:6]); b.close()
