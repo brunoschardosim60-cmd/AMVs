@@ -1,13 +1,13 @@
 # Novidades
 
-## Próxima camada — transcrição local (em andamento)
+## Próxima camada — transcrição local com progresso e seleção de áudio (em andamento)
 
-- O painel de legendas agora permite escolher episódio, modelo e idioma, iniciar a transcrição local, e inserir as falas como clipes de texto editáveis nos trechos correspondentes do episódio. As mudanças entram no histórico e podem ser desfeitas.
+- O painel de legendas permite escolher episódio, stream de áudio, modelo e idioma, e inserir as falas como clipes de texto editáveis nos trechos correspondentes do episódio. O stream escolhido é extraído para WAV mono no cache; o original nunca é alterado.
 - Se já houver legendas no mesmo trecho, o app pede confirmação antes de substituí-las.
-- O app inicia o sidecar Python sob demanda com token aleatório e porta local; o áudio não é enviado para provedores externos.
-- O endpoint `POST /speech/transcribe` retorna idioma detectado, segmentos e timestamps por palavra sem carregar o arquivo inteiro na memória.
+- O app inicia o analisador local autenticado com token aleatório e porta local; o áudio não é enviado para provedores externos.
+- A API usa jobs `POST /speech/jobs`, `GET /speech/jobs/{id}` e `DELETE /speech/jobs/{id}` para progresso por segmento e cancelamento. O app tenta cancelar cooperativamente e encerra o processo do analisador se o job não parar em 5 s.
 - Usa faster-whisper em CPU/int8, com modelos `tiny`, `base`, `small`, `medium` ou `large-v3`; idioma pode ser automático ou informado.
-- Requer Python e `pip install -e ".[speech]"` em `services/analyzer`; o instalador do desktop ainda não empacota essas dependências. Sem elas, o app informa o erro. Não há progresso real/cancelamento da inferência nem escolha da faixa de áudio do episódio nesta versão.
+- O runtime Windows é empacotado com PyInstaller no instalador; o CI também testa a API empacotada. Os pesos do modelo continuam sendo baixados sob demanda na primeira transcrição. A validação com áudio/modelo reais ainda está pendente.
 
 ## 0.6.1 (a publicar)
 
