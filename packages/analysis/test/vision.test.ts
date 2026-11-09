@@ -29,6 +29,25 @@ describe('mergeShotVision', () => {
     ).toEqual({ characters: [], fight: false, note: '', samples: 2 });
   });
 
+  it('combines detailed visual cues without letting a minority sample decide the result', () => {
+    expect(
+      mergeShotVision([
+        { characters: [], fight: true, note: 'soco', action: 'combate', emotion: 'determinação', visualIntensity: 0.8, confidence: 0.9 },
+        { characters: [], fight: true, note: 'impacto', action: 'combate', emotion: 'raiva', visualIntensity: 0.6, confidence: 0.7 },
+        { characters: [], fight: false, note: 'close', action: 'reação', emotion: 'raiva', visualIntensity: 0.2, confidence: 0.5 },
+      ]),
+    ).toEqual({
+      characters: [],
+      fight: true,
+      note: 'soco',
+      samples: 3,
+      visualIntensity: 0.533,
+      emotion: 'raiva',
+      action: 'combate',
+      confidence: 0.7,
+    });
+  });
+
   it('rejects an empty sample set', () => {
     expect(() => mergeShotVision([])).toThrow('é preciso pelo menos uma amostra visual');
   });

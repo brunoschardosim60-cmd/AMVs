@@ -9,6 +9,14 @@
 - Usa faster-whisper em CPU/int8, com modelos `tiny`, `base`, `small`, `medium` ou `large-v3`; idioma pode ser automático ou informado.
 - O runtime Windows é empacotado com PyInstaller no instalador; o CI também testa a API empacotada. Os pesos do modelo continuam sendo baixados sob demanda na primeira transcrição. A validação com áudio/modelo reais ainda está pendente.
 
+## 0.6.2
+
+**Encaixe de cenas com contexto de música**
+- A análise visual considera o estilo/intensidade escolhidos, BPM, seções, drop e até seis frases de impacto da letra importada; quando disponíveis, também recebe as falas/legendas do trecho analisado.
+- Cada cena agora recebe rótulos estruturados de ação, emoção, intensidade visual e confiança, além de personagem/luta. A montagem combina a intensidade visual com a análise local e favorece ação no refrão/drop e cenas mais calmas em trechos suaves.
+- O áudio e o vídeo completos nunca são enviados: somente quadros amostrados e o contexto textual/musical resumido. Serviço externo continua dependendo do consentimento nas configurações de IA; Ollama mantém os dados localmente.
+- A análise visual é refeita nesta versão para produzir os novos rótulos. A qualidade com uma chave Gemini e mídia real ainda precisa de validação.
+
 ## 0.6.1
 
 **Análise visual detalhada**
@@ -17,7 +25,7 @@
 - As amostras são combinadas para reduzir rótulos inconsistentes; a estimativa de quadros/chamadas aparece antes de iniciar. Análise interrompida pode ser retomada.
 - Reconhecimento de personagens ainda depende do modelo de visão e não garante identidade; na nuvem, os quadros são enviados ao provedor e podem gerar custo.
 
-## 0.6.0 (a publicar)
+## 0.6.0 (incluído na 0.6.1)
 
 **Sincronia com a música**
 - **Drop com precisão de batida**: o drop era procurado só a cada 4 compassos, então um drop fora dessa grade era perdido (3 de 7 casos de teste) ou detectado 1,4–1,8 s atrasado, e o clarão/tremida caía quase 2 s fora do momento certo. Agora o drop é achado no primeiro golpe forte.

@@ -1,5 +1,5 @@
-import { parseSubtitles, decodeSubtitleBytes, type Cue } from '@amv/analysis';
-import { generateAmv, planFootage, STYLES, suggestMusicRanges, type EpisodeInput, type GenerateOptions, type StyleId } from '@amv/automv';
+import { impactScore, parseSubtitles, decodeSubtitleBytes, type Cue } from '@amv/analysis';
+import { chooseMusicRange, generateAmv, planFootage, STYLES, suggestMusicRanges, type EpisodeInput, type GenerateOptions, type StyleId } from '@amv/automv';
 import { characterCounts, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2 } from 'lucide-react';
@@ -104,7 +104,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
     try {
       const settings = await loadAiSettings(platform);
       if (!settings.enabled) {
-        toast({ tone: 'warn', title: 'Ligue um modelo de IA com visão', body: 'Abra o Assistente e clique na engrenagem. Serve Claude, GPT-4o ou, no Ollama, um modelo de visão (ex.: llava, qwen2.5vl).' });
+        toast({ tone: 'warn', title: 'Ligue um modelo de IA com visão', body: 'Abra o Assistente e clique na engrenagem. Gemini, Claude, GPT-4o e modelos de visão no Ollama são compatíveis.' });
         return;
       }
       if (!isLocal(settings) && !settings.allowExternal) {
@@ -112,6 +112,26 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
         return;
       }
       const key = settings.provider.needsKey ? await platform.secrets.get(secretName(settings.presetId)) : null;
+      const musicRange = music ? chooseMusicRange(music, duration, chosenStart) : null;
+      const context = music
+        ? {
+            style: STYLES.find((item) => item.id === style)!.label,
+            targetIntensity: INTENSITY[intensity],
+            music: {
+              bpm: music.bpm,
+              bpmConfidence: music.bpmConfidence,
+              intensity: music.intensity,
+              sections: music.sections.map(({ label, energy }) => ({ label, energy })),
+              dropsS: music.drops.filter((drop) => !musicRange || (drop >= musicRange[0] && drop <= musicRange[1])),
+            },
+            lyrics: lyrics?.cues
+              .filter((cue) => !musicRange || (cue.endS > musicRange[0] && cue.startS < musicRange[1]))
+              .sort((a, b) => impactScore(b.text) - impactScore(a.text))
+              .slice(0, 6)
+              .sort((a, b) => a.startS - b.startS)
+              .map((cue) => `[${mmss(cue.startS)}] ${cue.text}`),
+          }
+        : undefined;
       visionAbort.current = new AbortController();
       let labeled = 0;
       let failed = 0;
@@ -119,7 +139,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
       for (const e of ready) {
         if (!session.visionTargets(e.id, visionScope).length) continue;
         setVision({ done: 0, total: session.visionTargets(e.id, visionScope).length, ep: e.name });
-        const r = await session.runVision(e.id, { provider: settings.provider, key, fetch: platform.http, scope: visionScope, signal: visionAbort.current.signal, onProgress: (done, total) => setVision({ done, total, ep: e.name }) });
+        const r = await session.runVision(e.id, { provider: settings.provider, key, fetch: platform.http, scope: visionScope, context, signal: visionAbort.current.signal, onProgress: (done, total) => setVision({ done, total, ep: e.name }) });
         labeled += r.labeled;
         failed += r.failed;
         frameFailures += r.frameFailures;
@@ -397,13 +417,13 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
                   </div>
                   {visionTodo > 0 ? (
                     <>
-                      <Button size="sm" className="mt-2" onClick={runVision} title="Analisa as cenas selecionadas com um modelo de IA com visão.">
+                      <Button size="sm" className="mt-2" onClick={runVision} title="Analisa cenas com o contexto da música selecionada; o áudio não é enviado.">
                         Analisar cenas com IA
                       </Button>
                       <p className="mt-1 text-2xs text-faint">
                         ≈ {visionTodo * (visionScope === 'all' ? 3 : 1)} quadros, até {Math.ceil((visionTodo * (visionScope === 'all' ? 3 : 1)) / 6)} chamadas.{' '}
                         {visionScope === 'all' ? 'Usa 3 quadros por cena e inclui cenas escuras; pode demorar e gerar mais custo.' : 'Prioriza lutas e usa 1 quadro por cena.'}{' '}
-                        Em serviço na nuvem, os quadros são enviados ao provedor; com Ollama ficam no seu PC.
+                        A análise combina quadros, ritmo/seções e letras/legendas fornecidas; não envia o áudio ou vídeo completos. Em serviço na nuvem esses dados e os quadros amostrados vão ao provedor; com Ollama ficam no seu PC.
                       </p>
                     </>
                   ) : (

@@ -249,6 +249,13 @@ const POOL_SHOT_MIN = 0.7;
 
 const visionOf = (ep: EpisodeInput, shot: Shot): ShotVision | undefined => ep.vision?.shots[shotKey(shot.startS)];
 
+/** IA visual só pesa quando declara confiança; o sinal local continua sendo a base. */
+function effectiveShotIntensity(ep: EpisodeInput, shot: Shot): number {
+  const visual = visionOf(ep, shot);
+  if (visual?.confidence === undefined || visual.confidence < 0.55 || visual.visualIntensity === undefined) return shot.intensity;
+  return shot.intensity * 0.55 + visual.visualIntensity * 0.45;
+}
+
 /** A cena tem algum dos personagens pedidos? Sem análise da cena = não dá para saber = não. */
 function hasCharacter(ep: EpisodeInput, shot: Shot, wanted: Set<string>): boolean {
   const v = visionOf(ep, shot);
@@ -329,11 +336,11 @@ export function planFootage(eps: EpisodeInput[], o: Pick<GenerateOptions, 'style
   }
   const mode: FootagePlan['mode'] = pool.length ? 'fight' : 'mix';
   const intensities: number[] = [];
-  if (mode === 'fight') for (const e of pool) for (const sh of usableShots(e.ep, e.seq, wanted)) intensities.push(sh.intensity);
+  if (mode === 'fight') for (const e of pool) for (const sh of usableShots(e.ep, e.seq, wanted)) intensities.push(effectiveShotIntensity(e.ep, sh));
   else
     for (const ep of eps) {
       if (exclude.has(ep.assetId)) continue;
-      for (const sh of ep.analysis.shots) if (sh.endS - sh.startS >= MIN_SHOT_S && !sh.tags.includes('escura') && (!wanted || hasCharacter(ep, sh, wanted))) intensities.push(sh.intensity);
+      for (const sh of ep.analysis.shots) if (sh.endS - sh.startS >= MIN_SHOT_S && !sh.tags.includes('escura') && (!wanted || hasCharacter(ep, sh, wanted))) intensities.push(effectiveShotIntensity(ep, sh));
     }
   const boost = [-0.1, 0, 0.05, 0.1][o.intensity]!;
   return { wanted, mode, pool, fit: { intensities, lowI: Math.max(0, style.targetIntensity[0] + boost), highI: Math.min(1, style.targetIntensity[1] + boost) }, warnings };
@@ -733,7 +740,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const shotLen = c.shot.endS - c.shot.startS;
       // dá para usar câmera lenta até 0,6× se a cena for um pouco curta
       if (shotLen < len * 0.6) continue;
-      let score = 1 - Math.abs(target - c.shot.intensity) * 1.6;
+      const sceneIntensity = effectiveShotIntensity(c.ep, c.shot);
+      let score = 1 - Math.abs(target - sceneIntensity) * 1.6;
       if (sl.isDrop && c.shot.tags.includes('impacto')) score += 0.5;
       if (sl.energy > 0.7 && c.shot.tags.includes('ação')) score += 0.15;
       if (sl.energy < 0.35 && c.shot.tags.includes('calma')) score += 0.2;
@@ -741,6 +749,12 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       // visão (se rodou): cena que não é luta não entra nos golpes; serve de respiro nos trechos calmos
       const vis = visionOf(c.ep, c.shot);
       if (vis) score += vis.fight ? (sl.energy > 0.5 ? 0.1 : 0) : sl.energy > 0.5 ? -0.35 : 0.1;
+      if (vis && (vis.confidence ?? 0) >= 0.55) {
+        if (sl.energy >= 0.65 && (vis.action === 'combate' || vis.action === 'perseguição')) score += 0.14;
+        if (sl.energy <= 0.35 && (vis.action === 'diálogo' || vis.action === 'ambiente' || vis.action === 'preparação')) score += 0.12;
+        if (style.id === 'emocional' && (vis.emotion === 'tristeza' || vis.emotion === 'calma')) score += 0.12;
+        if (style.id === 'superacao' && vis.emotion === 'determinação') score += 0.12;
+      }
       if (prev && prev.ep.assetId === c.ep.assetId) {
         score -= 0.12;
         // narrativa: andar para frente no mesmo episódio é bom; voltar é ruim
@@ -775,6 +789,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       best = { c, score: 0, srcIn: c.shot.startS + room * rand() };
     }
     const { c } = best;
+    const sceneIntensity = effectiveShotIntensity(c.ep, c.shot);
     const shotLen = c.shot.endS - c.shot.startS;
     const speed = shotLen >= len ? 1 : Math.max(0.6, shotLen / len);
     const srcLen = len * speed;
@@ -811,8 +826,10 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const transition = style.transition === 'dissolve' && clipsMade > 0 ? { transition: 'dissolve', durationUs: us(Math.min(0.6, len / 3)), params: {} } : null;
     const why = [
       sl.isDrop ? `Drop em ${fmt(sl.startS)}` : `${sl.section || 'trecho'} (energia ${sl.energy.toFixed(2)})`,
-      `cena de ${c.shot.tags.join('/') || 'intensidade'} ${c.shot.intensity.toFixed(2)}`,
+      `cena de ${c.shot.tags.join('/') || 'intensidade'} ${sceneIntensity.toFixed(2)}`,
       `${c.ep.name} ${fmt(c.shot.startS)}`,
+      visionOf(c.ep, c.shot)?.action ? `ação ${visionOf(c.ep, c.shot)!.action}` : null,
+      visionOf(c.ep, c.shot)?.emotion ? `emoção ${visionOf(c.ep, c.shot)!.emotion}` : null,
       fight ? 'luta escolhida' : null,
       visionOf(c.ep, c.shot)?.characters.length ? `com ${visionOf(c.ep, c.shot)!.characters.join(' e ')}` : null,
       hit ? 'golpe na batida' : null,

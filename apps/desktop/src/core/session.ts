@@ -27,7 +27,7 @@ import {
 } from '@amv/project';
 import type { Platform } from '../platform/types';
 import { analyzeEpisodeFile, analyzeMusicFile, EPISODE_ANALYSIS_VERSION, grabFrameJpeg, mergeShotVision, MUSIC_ANALYSIS_VERSION, selectVisionTargets, shotKey, toBase64, VISION_VERSION, type EpisodeAnalysis, type EpisodeVision, type MusicAnalysis, type VisionScope } from '@amv/analysis';
-import { labelScenes, type FetchLike, type ProviderConfig } from '@amv/assistant';
+import { labelScenes, type FetchLike, type ProviderConfig, type SceneAnalysisContext } from '@amv/assistant';
 import { renderSfx, SFX_KINDS, SFX_LABEL, sfxFileName, toWav, type SfxKind } from '@amv/sfx';
 import { rememberRecent, updateRecent } from './recents';
 
@@ -379,7 +379,7 @@ export class ProjectSession {
   /** Analisa cenas visualmente; no modo detalhado usa três quadros por cena e retoma do cache. */
   async runVision(
     assetId: string,
-    o: { provider: ProviderConfig; key: string | null; fetch: FetchLike; scope?: VisionScope; max?: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void },
+    o: { provider: ProviderConfig; key: string | null; fetch: FetchLike; scope?: VisionScope; max?: number; context?: SceneAnalysisContext; signal?: AbortSignal; onProgress?: (done: number, total: number) => void },
   ): Promise<{ labeled: number; failed: number; frameFailures: number; usage: { input: number; output: number } }> {
     const asset = this.project.assets.find((a) => a.id === assetId);
     if (!asset) throw new Error('episódio não encontrado');
@@ -419,7 +419,16 @@ export class ProjectSession {
       }
       const labels: Record<string, (typeof vision.shots)[string]> = {};
       if (frames.length) {
-        const r = await labelScenes(o.provider, o.key, o.fetch, frames, { batchSize: BATCH, known, signal: o.signal });
+        const analysis = this.assetRuntime(assetId).episode;
+        const sceneDialogue = chunk.map((target) => {
+          const lines = [
+            ...(analysis?.subtitles.filter((cue) => cue.endS > target.startS && cue.startS < target.endS).map((cue) => cue.text) ?? []),
+            ...(analysis?.speech.filter((speech) => speech.text && speech.endS > target.startS && speech.startS < target.endS).map((speech) => speech.text!) ?? []),
+          ];
+          return { startS: target.startS, lines: [...new Set(lines)].slice(0, 2).map((line) => line.slice(0, 160)) };
+        }).filter((scene) => scene.lines.length);
+        const context = o.context ? { ...o.context, sceneDialogue } : undefined;
+        const r = await labelScenes(o.provider, o.key, o.fetch, frames, { batchSize: BATCH, known, context, signal: o.signal });
         usage.input += r.usage.input;
         usage.output += r.usage.output;
         const failedIds = new Set(r.failed);

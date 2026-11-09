@@ -144,7 +144,7 @@ export function AiSettingsDialog({ settings, onSave, onClose }: { settings: AiSe
             <label className="mt-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 p-2">
               <input type="checkbox" className="mt-0.5 accent-violet" checked={s.allowExternal} onChange={(e) => setS({ ...s, allowExternal: e.target.checked })} />
               <span>
-                <b>Permitir enviar dados para a internet.</b> O assistente envia texto do projeto (nomes, tempos e falas) a {preset.name}. Se você pedir análise visual, quadros amostrados também serão enviados; o áudio e o vídeo completos nunca são enviados.
+                <b>Permitir enviar dados para a internet.</b> O assistente pode enviar texto do projeto a {preset.name}. Na análise de AMV, também são enviados quadros amostrados, dados de ritmo/seções e letras/legendas que você forneceu. O áudio e o vídeo completos nunca são enviados.
               </span>
             </label>
           )}

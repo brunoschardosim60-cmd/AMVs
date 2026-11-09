@@ -31,17 +31,30 @@ describe('imagens para o modelo', () => {
         ok: true,
         status: 200,
         text: async () => JSON.stringify({
-          candidates: [{ content: { parts: [{ text: '[{"i":1,"characters":["Goku"],"fight":true,"note":"soco"}]' }] } }],
+          candidates: [{ content: { parts: [{ text: '[{"i":1,"characters":["Goku"],"fight":true,"action":"combate","emotion":"determinação","visualIntensity":0.8,"confidence":0.9,"note":"soco"}]' }] } }],
           usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 10 },
         }),
       };
     };
-    const result = await labelScenes(gemini, 'secret', fetch, frames(1));
+    const result = await labelScenes(gemini, 'secret', fetch, frames(1), {
+      context: {
+        style: 'Hype / Luta',
+        targetIntensity: 'Intensa',
+        music: { bpm: 140, bpmConfidence: 0.9, intensity: 80, sections: [{ label: 'drop', energy: 0.9 }], dropsS: [30] },
+        lyrics: ['[0:30] Eu vou vencer'],
+        sceneDialogue: [{ startS: 0, lines: ['Nunca vou desistir'] }],
+      },
+    });
     expect(request?.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent');
     expect(request?.headers['x-goog-api-key']).toBe('secret');
     expect(request?.body.contents[0].parts[0].text).toContain('1 imagem');
+    expect(request?.body.contents[0].parts[0].text).toContain('"bpm":140');
+    expect(request?.body.contents[0].parts[0].text).toContain('Eu vou vencer');
+    expect(request?.body.contents[0].parts[0].text).toContain('Nunca vou desistir');
     expect(request?.body.contents[0].parts[1]).toEqual({ inlineData: { mimeType: 'image/jpeg', data: 'IMG0' } });
-    expect(result.labels[frames(1)[0]!.id]).toEqual({ characters: ['Goku'], fight: true, note: 'soco' });
+    expect(result.labels[frames(1)[0]!.id]).toEqual({
+      characters: ['Goku'], fight: true, note: 'soco', action: 'combate', emotion: 'determinação', visualIntensity: 0.8, confidence: 0.9,
+    });
     expect(result.usage).toEqual({ input: 50, output: 10 });
   });
 
@@ -127,12 +140,17 @@ describe('rotular cenas', () => {
     expect([...p.keys()]).toEqual([1]);
     expect(p.get(1)!.fight).toBe(true);
   });
+
+  it('parse: valida categorias e limita medidas visuais ao intervalo 0..1', () => {
+    const p = parseSceneLabels('[{"i":1,"fight":true,"action":"hack","emotion":"feliz","visualIntensity":2,"confidence":-1}]', 1);
+    expect(p.get(1)).toEqual({ characters: [], fight: true, note: '', visualIntensity: 1, confidence: 0 });
+  });
 });
 
 describe('contagem de personagens', () => {
   it('ordena do mais ao menos presente, juntando grafias', () => {
     const v: EpisodeVision = {
-      version: 'v1',
+      version: 'v2',
       model: 't',
       shots: { t0: { characters: ['Goku', 'Vegeta'], fight: true, note: '' }, t1: { characters: ['goku'], fight: true, note: '' }, t2: { characters: ['Vegeta'], fight: false, note: '' }, t3: { characters: ['Goku'], fight: true, note: '' } },
     };

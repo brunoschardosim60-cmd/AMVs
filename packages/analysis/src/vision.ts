@@ -5,7 +5,13 @@ import type { EpisodeAnalysis, Shot } from './episode.js';
  * É guardada à parte da análise de ritmo: custa chamadas ao modelo, então só roda quando a
  * pessoa pede, e pode ser feita aos poucos (retoma de onde parou).
  */
-export const VISION_VERSION = 'v1';
+export const VISION_VERSION = 'v2';
+
+export const SCENE_EMOTIONS = ['determinação', 'raiva', 'medo', 'tristeza', 'alegria', 'calma', 'surpresa', 'neutro'] as const;
+export const SCENE_ACTIONS = ['combate', 'perseguição', 'preparação', 'reação', 'diálogo', 'ambiente', 'outro'] as const;
+
+export type SceneEmotion = (typeof SCENE_EMOTIONS)[number];
+export type SceneAction = (typeof SCENE_ACTIONS)[number];
 
 export interface ShotVision {
   /** Personagens vistos: nome (se o modelo reconheceu) ou descrição curta e estável. */
@@ -16,6 +22,14 @@ export interface ShotVision {
   note: string;
   /** Quadros combinados nesta classificação; ausente em análises antigas. */
   samples?: number;
+  /** Intensidade visual estimada pelo modelo (0..1), usada só como sinal complementar. */
+  visualIntensity?: number;
+  /** Emoção visual controlada para selecionar cenas que combinem com o trecho. */
+  emotion?: SceneEmotion;
+  /** Ação visual controlada para evitar montar cenas de diálogo como golpes. */
+  action?: SceneAction;
+  /** Confiança do rótulo visual (0..1). */
+  confidence?: number;
 }
 
 export type VisionScope = 'fights' | 'all';
@@ -86,9 +100,17 @@ export function mergeShotVision(samples: ShotVision[]): ShotVision {
   if (!samples.length) throw new Error('é preciso pelo menos uma amostra visual');
   const characters = new Map<string, string>();
   const notes = new Map<string, number>();
+  const emotions = new Map<SceneEmotion, number>();
+  const actions = new Map<SceneAction, number>();
+  const intensities: number[] = [];
+  const confidences: number[] = [];
   let fights = 0;
   for (const sample of samples) {
     if (sample.fight) fights++;
+    if (sample.emotion) emotions.set(sample.emotion, (emotions.get(sample.emotion) ?? 0) + 1);
+    if (sample.action) actions.set(sample.action, (actions.get(sample.action) ?? 0) + 1);
+    if (Number.isFinite(sample.visualIntensity)) intensities.push(Math.max(0, Math.min(1, sample.visualIntensity!)));
+    if (Number.isFinite(sample.confidence)) confidences.push(Math.max(0, Math.min(1, sample.confidence!)));
     for (const character of sample.characters) {
       const key = normLabel(character);
       if (key && !characters.has(key)) characters.set(key, character);
@@ -97,7 +119,18 @@ export function mergeShotVision(samples: ShotVision[]): ShotVision {
     if (note) notes.set(note, (notes.get(note) ?? 0) + 1);
   }
   const note = [...notes].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
-  return { characters: [...characters.values()], fight: fights > samples.length / 2, note, samples: samples.length };
+  const majority = <T>(counts: Map<T, number>) => [...counts].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const average = (values: number[]) => Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 1000) / 1000;
+  return {
+    characters: [...characters.values()],
+    fight: fights > samples.length / 2,
+    note,
+    samples: samples.length,
+    ...(intensities.length ? { visualIntensity: average(intensities) } : {}),
+    ...(emotions.size ? { emotion: majority(emotions) } : {}),
+    ...(actions.size ? { action: majority(actions) } : {}),
+    ...(confidences.length ? { confidence: average(confidences) } : {}),
+  };
 }
 
 /** Personagens, do mais ao menos presente, com quantas cenas cada um aparece. */

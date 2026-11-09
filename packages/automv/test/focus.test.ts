@@ -138,6 +138,29 @@ describe('foco na luta', () => {
     expect(() => run([ep], { focus: 'fight' })).not.toThrow();
   });
 
+  it('usa intensidade visual confiável para casar cenas com trechos musicais energéticos', () => {
+    const ep = twoFights('ep1', 0.6, 0.6);
+    ep.vision = {
+      version: 'v2',
+      model: 'test',
+      shots: Object.fromEntries(ep.analysis.shots.map((shot) => [
+        shotKey(shot.startS),
+        {
+          characters: [],
+          fight: true,
+          note: '',
+          action: 'combate',
+          emotion: 'determinação',
+          visualIntensity: shot.startS >= 150 ? 0.95 : 0.05,
+          confidence: 0.95,
+        },
+      ])),
+    };
+    const selected = run([ep], { focus: 'mix', durationS: 1, musicStartS: 45, useSfx: false }).on('V1')[0];
+    expect(selected).toBeDefined();
+    expect(srcS(selected!)).toBeGreaterThanOrEqual(150);
+  });
+
   it('vídeo sem buraco nem sobreposição', () => {
     const { out, on } = run([twoFights('ep1', 0.6, 0.6)], { focus: 'fight' });
     const v1 = on('V1');
@@ -394,7 +417,7 @@ describe('visão: personagens e cenas de luta', () => {
   function labelled(): EpisodeInput {
     const e = twoFights('ep1', 0.7, 0.7);
     const shotsA = e.analysis.shots.filter((x) => x.startS < 120);
-    const vis: EpisodeInput['vision'] = { version: 'v1', model: 'teste', shots: {} };
+    const vis: NonNullable<EpisodeInput['vision']> = { version: 'v2', model: 'teste', shots: {} };
     shotsA.forEach((sh, i) => {
       vis.shots[shotKey(sh.startS)] = { characters: i % 2 === 0 ? ['Goku'] : ['Vegeta'], fight: i % 5 !== 4, note: '' };
     });
@@ -460,7 +483,7 @@ describe('visão: personagens e cenas de luta', () => {
   it('sem nenhuma análise de visão, o resultado é idêntico ao de antes (mesma semente)', () => {
     const plain = twoFights('ep1', 0.7, 0.7);
     const key = (xs: Clip[]) => xs.map((c) => `${c.timelineStartUs}|${c.sourceInUs}`);
-    expect(key(run([{ ...plain, vision: { version: 'v1', model: 't', shots: {} } }], { seed: 4 }).on('V1'))).toEqual(key(run([plain], { seed: 4 }).on('V1')));
+    expect(key(run([{ ...plain, vision: { version: 'v2', model: 't', shots: {} } }], { seed: 4 }).on('V1'))).toEqual(key(run([plain], { seed: 4 }).on('V1')));
   });
 
   it('o vídeo continua sem buracos nem sobreposição com o filtro de personagem', () => {
