@@ -16,7 +16,7 @@ if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) {
   console.error('uso: node scripts/release.mjs <x.y.z> [--push]');
   process.exit(1);
 }
-const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
+const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8').replace(/\r\n/g, '\n');
 if (!changelog.includes(`\n## ${version}\n`)) {
   console.error(`CHANGELOG.md não tem a seção "## ${version}". Escreva as notas antes.`);
   process.exit(1);

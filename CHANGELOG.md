@@ -9,7 +9,7 @@
 - Usa faster-whisper em CPU/int8, com modelos `tiny`, `base`, `small`, `medium` ou `large-v3`; idioma pode ser automático ou informado.
 - O runtime Windows é empacotado com PyInstaller no instalador; o CI também testa a API empacotada. Os pesos do modelo continuam sendo baixados sob demanda na primeira transcrição. A validação com áudio/modelo reais ainda está pendente.
 
-## 0.6.1 (a publicar)
+## 0.6.1
 
 **Análise visual detalhada**
 - Em "Gerar meu AMV", escolha entre priorizar só cenas de luta ou analisar todas as cenas do episódio.
