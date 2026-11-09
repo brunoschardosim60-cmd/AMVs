@@ -33,7 +33,13 @@ edit('apps/desktop/src-tauri/Cargo.toml', (s) => s.replace(/^version = "[^"]+"/m
 const git = (...a) => execFileSync('git', a, { cwd: root, stdio: 'inherit' });
 git('add', '-A');
 try {
-  git('commit', '-m', `release: v${version}`);
+  git(
+    'commit',
+    '-m',
+    `release: v${version}`,
+    '-m',
+    'Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>',
+  );
 } catch {
   // nada mudou (versão já estava nos arquivos)
 }

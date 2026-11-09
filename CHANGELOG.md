@@ -1,5 +1,12 @@
 # Novidades
 
+## 0.6.6
+
+**Revisar e montar cenas**
+- A aba Cenas permite pré-visualizar cada trecho pelo proxy, marcar vários e ajustar início/fim antes de montar.
+- "Juntar e adicionar" coloca os trechos em sequência no fim da trilha de vídeo; cada cena continua um clipe editável separado e o conjunto pode ser desfeito de uma vez.
+- As configurações de IA agora rolam dentro da janela quando a tela é baixa, mantendo Salvar e Cancelar sempre acessíveis.
+
 ## 0.6.5
 
 **Frases e letras mais integradas ao AMV**

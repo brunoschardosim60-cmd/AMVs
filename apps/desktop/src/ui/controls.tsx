@@ -76,15 +76,15 @@ export function Dialog({
   }, []);
   return (
     <div className="fixed inset-0 z-40 grid place-items-center bg-black/55" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={ref} role="dialog" aria-modal="true" aria-label={title} className={`${width} max-w-[calc(100vw-32px)] rounded-panel border border-line bg-panel shadow-2xl shadow-black/50`}>
-        <div className="flex items-center justify-between border-b border-line-soft px-5 py-3.5">
+      <div ref={ref} role="dialog" aria-modal="true" aria-label={title} className={`${width} flex max-h-[calc(100dvh-32px)] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-panel border border-line bg-panel shadow-2xl shadow-black/50`}>
+        <div className="flex shrink-0 items-center justify-between border-b border-line-soft px-5 py-3.5">
           <h2 className="text-[15px] font-semibold">{title}</h2>
           <IconButton label="Fechar" onClick={onClose}>
             <X size={16} />
           </IconButton>
         </div>
-        <div className="px-5 py-4">{children}</div>
-        {footer && <div className="flex justify-end gap-2 border-t border-line-soft px-5 py-3">{footer}</div>}
+        <div className="min-h-0 overflow-y-auto px-5 py-4">{children}</div>
+        {footer && <div className="flex shrink-0 justify-end gap-2 border-t border-line-soft px-5 py-3">{footer}</div>}
       </div>
     </div>
   );

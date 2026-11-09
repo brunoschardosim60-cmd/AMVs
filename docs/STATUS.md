@@ -44,6 +44,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Arrastar mídia da biblioteca para a timeline (eventos de ponteiro, não HTML5 DnD) | feito | app real; bug de clipe duplicado achado e corrigido |
 | Arrastar clipes (entre trilhas do mesmo tipo), aparar pelas bordas, encaixe com linha guia | feito | app real |
 | Preview: player sincronizado com proxies, composição em canvas (posição, escala, rotação, opacidade, recorte, texto) | feito | Chromium headless com vídeo de tempo gravado: quadro certo em 3 posições, incluindo tocando |
+| Revisão manual de cenas: prévia do trecho, ajuste de entrada/saída e montagem de vários em sequência | feito | painel Cenas usa proxy mudo; cada trecho entra como clipe separado, numa única ação de undo; typecheck/build |
 | Painel de propriedades: tempo, velocidade, deslizar origem, transformar, volume e fades | feito | app real |
 | Atalhos: Espaço, S, Delete (Shift = fechar buraco), Ctrl+C/X/V/D/A, setas (Shift = 10 quadros), Home/End, +/− | feito | app real (parcial) |
 | Preview de vídeo no Windows (WebView2) | pendente | depende do teste do Bruno |
@@ -83,6 +84,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Provedores: Ollama/compatível OpenAI, Anthropic e Gemini oficial; chave no cofre do sistema; teste de conexão | feito | Gemini: chamadas/ferramentas/modelos testados com respostas gravadas; sem chave real |
 | Ferramentas: pontos fracos, cenas, falas, ideias; propostas (trocar cena, efeito, cortes rápidos, fala antes do drop, montagem, remover) | feito | 8 testes |
 | Revisão: itens com dependências, testar (aplica e volta), aplicar parcial num único desfazer, revalidação | feito | testes + app real |
+| Configurações de IA acessíveis em telas baixas | feito | corpo do diálogo rolável com ações Salvar/Cancelar fixas; typecheck/build |
 | Modo local sem modelo | feito | testes + app real |
 | Pendente: prévia fantasma na timeline, A/B lado a lado, memória criativa, "Perguntar à IA" no clique direito | pendente | — |
 
