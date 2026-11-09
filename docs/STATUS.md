@@ -23,7 +23,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Atalhos: Ctrl+N/O/S/Shift+S/I/Z/Shift+Z/Y; bloqueio de atalhos do navegador | feito | código; verificação manual pendente no Windows |
 | Aviso ao fechar com alterações não salvas | feito | código; verificação manual pendente no Windows |
 | Sidecar Python opcional (esqueleto: saúde, módulos, token) | feito | pytest |
-| CI no Windows: testes + instalador NSIS/MSI | feito | Release v0.6.2, run 42542302583 verde: runtime Python, typecheck, suíte completa e instaladores assinados; Release e `latest.json` apontam para 0.6.2. |
+| CI no Windows: testes + instalador NSIS/MSI | feito | Release v0.6.3, run 42546298078 verde: runtime Python, typecheck, suíte completa e instaladores assinados; Release e `latest.json` apontam para 0.6.3. |
 
 ### Pendente de verificação no Windows
 - Reprodução do proxy no painel de detalhes (WebView2). No Linux de desenvolvimento não dá para testar: o WebKitGTK não toca mídia pelo protocolo de arquivos do Tauri.
@@ -32,8 +32,8 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 ## Distribuição
 | Item | Estado | Como foi verificado |
 |---|---|---|
-| Atualização automática (plugin updater, assinatura minisign) | feito | Release v0.6.1 publicada com `latest.json` e assinatura; arquivo consultado pelo app aponta para o MSI v0.6.1 |
-| Publicar versão: `node scripts/release.mjs x.y.z --push` (branch `release`) | feito | v0.6.1 publicada pelo workflow Release run 42538120990 |
+| Atualização automática (plugin updater, assinatura minisign) | feito | Release v0.6.3 publicada com `latest.json` e assinaturas; arquivo consultado pelo app aponta para 0.6.3 |
+| Publicar versão: `node scripts/release.mjs x.y.z --push` (branch `release`) | feito | v0.6.3 publicada pelo workflow Release run 42546298078 |
 
 ## Fase 2 — Editor (em andamento)
 
@@ -102,7 +102,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Importar SRT/ASS/VTT/LRC com detecção de codificação; LRC alinha com a música | feito | testes |
 | Puxar falas do episódio para os clipes (considera velocidade) | feito | testes |
 | Editar texto, ajustar tempo (±), estilos, avisos de leitura, exportar SRT/VTT/LRC | feito | testes + app real |
-| Transcrição local faster-whisper, tradução de legendas | parcial | Transcrição vira clipes editáveis e permite selecionar o stream de áudio; progresso de extração/segmentos e cancelamento cooperativo, com término forçado do sidecar após 5 s. Modelo small carregou offline e decodificou um M4A real de 223,4 s; com VAD, não encontrou falas. Sem VAD, gerou segmentos com confiança de idioma baixa (0,492), então a qualidade de diálogo segue sem validação. PyAV está limitado a <19; smoke test e CI da Release v0.6.1 passaram. Tradução de legendas já funciona. |
+| Transcrição local faster-whisper, tradução de legendas | parcial | Transcrição vira clipes editáveis e permite selecionar o stream de áudio; progresso de extração/segmentos e cancelamento cooperativo, com término forçado do sidecar após 5 s. Modelo small carregou offline e decodificou um M4A real de 223,4 s; com VAD, não encontrou falas. Sem VAD, gerou segmentos com confiança de idioma baixa (0,492), então a qualidade de diálogo segue sem validação. PyAV está limitado a <19; smoke test e CI da Release v0.6.3 passaram. Tradução de legendas já funciona. |
 | Alinhamento automático de letra sem tempo | pendente | — |
 
 ## Pós-0.5.5 (0.6.0, em andamento)
