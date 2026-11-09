@@ -23,7 +23,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Atalhos: Ctrl+N/O/S/Shift+S/I/Z/Shift+Z/Y; bloqueio de atalhos do navegador | feito | código; verificação manual pendente no Windows |
 | Aviso ao fechar com alterações não salvas | feito | código; verificação manual pendente no Windows |
 | Sidecar Python opcional (esqueleto: saúde, módulos, token) | feito | pytest |
-| CI no Windows: testes + instalador NSIS/MSI | feito | Release v0.6.4, run 42548437893 verde: runtime Python, typecheck, suíte completa e instaladores assinados; Release e `latest.json` apontam para 0.6.4. |
+| CI no Windows: testes + instalador NSIS/MSI | feito | Release v0.6.5, run 42551137777 verde: runtime Python, typecheck, suíte completa e instaladores assinados; Release e `latest.json` apontam para 0.6.5. |
 
 ### Pendente de verificação no Windows
 - Reprodução do proxy no painel de detalhes (WebView2). No Linux de desenvolvimento não dá para testar: o WebKitGTK não toca mídia pelo protocolo de arquivos do Tauri.
@@ -32,8 +32,8 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 ## Distribuição
 | Item | Estado | Como foi verificado |
 |---|---|---|
-| Atualização automática (plugin updater, assinatura minisign) | feito | Release v0.6.4 publicada com `latest.json` e assinaturas; o manifesto aponta para 0.6.4 e os instaladores NSIS/MSI respondem HTTP 200. |
-| Publicar versão: `node scripts/release.mjs x.y.z --push` (branch `release`) | feito | v0.6.4 publicada pelo workflow Release run 42548437893 |
+| Atualização automática (plugin updater, assinatura minisign) | feito | Release v0.6.5 publicada com `latest.json` e assinaturas; o manifesto aponta para 0.6.5 e os instaladores NSIS/MSI respondem HTTP 200. |
+| Publicar versão: `node scripts/release.mjs x.y.z --push` (branch `release`) | feito | v0.6.5 publicada pelo workflow Release run 42551137777 |
 
 ## Fase 2 — Editor (em andamento)
 
