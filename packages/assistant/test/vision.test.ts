@@ -129,6 +129,24 @@ describe('rotular cenas', () => {
     expect(Object.values(r.labels)[0]!.characters).toEqual(['a', 'b', 'c', 'd']);
   });
 
+  it('correlaciona letras por sentido somente quando solicitado e aceita IDs fornecidos', async () => {
+    const m = fake(() => '[{"i":1,"characters":["A"],"fight":true,"note":"energia explodindo","lyricMatches":[{"id":"lyric-1","score":0.92,"reason":"a energia interior se manifesta em um ataque"},{"id":"inventado","score":1,"reason":"fora do contexto"}]}]');
+    const frame = frames(1)[0]!;
+    const result = await labelScenes(ollama, null, m.f, [frame], {
+      matchLyrics: true,
+      context: {
+        style: 'Hype / Luta',
+        targetIntensity: 'Intensa',
+        music: { bpm: 140, bpmConfidence: 0.9, intensity: 80, sections: [], dropsS: [] },
+        lyricCues: [{ id: 'lyric-1', text: 'Ninguém sabe o que há dentro de mim', startS: 21, endS: 24 }],
+      },
+    });
+    expect(asked(m.bodies[0])).toContain('Compare o sentido das letras');
+    expect(result.lyricMatches[frame.id]).toEqual([
+      { cueId: 'lyric-1', score: 0.92, reason: 'a energia interior se manifesta em um ataque' },
+    ]);
+  });
+
   it('cancelar interrompe', async () => {
     const ac = new AbortController();
     ac.abort();

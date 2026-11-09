@@ -27,7 +27,7 @@ import {
 } from '@amv/project';
 import type { Platform } from '../platform/types';
 import { analyzeEpisodeFile, analyzeMusicFile, EPISODE_ANALYSIS_VERSION, grabFrameJpeg, mergeShotVision, MUSIC_ANALYSIS_VERSION, selectVisionTargets, shotKey, toBase64, VISION_VERSION, type EpisodeAnalysis, type EpisodeVision, type MusicAnalysis, type VisionScope } from '@amv/analysis';
-import { labelScenes, type FetchLike, type ProviderConfig, type SceneAnalysisContext } from '@amv/assistant';
+import { labelScenes, type FetchLike, type ProviderConfig, type SceneAnalysisContext, type SceneLyricMatch } from '@amv/assistant';
 import { renderSfx, SFX_KINDS, SFX_LABEL, sfxFileName, toWav, type SfxKind } from '@amv/sfx';
 import { rememberRecent, updateRecent } from './recents';
 
@@ -381,30 +381,32 @@ export class ProjectSession {
     this.emit();
   }
 
-  /** Cenas ainda sem rótulo (ou sem análise detalhada), priorizando lutas no modo padrão. */
-  visionTargets(assetId: string, scope: VisionScope = 'fights', max = scope === 'all' ? Infinity : 120): { startS: number; endS: number; midS: number }[] {
+  /** Cenas sem rótulo; `includeLabeled` permite reanalisar explicitamente para cruzar letras. */
+  visionTargets(assetId: string, scope: VisionScope = 'fights', max = scope === 'all' ? Infinity : 120, includeLabeled = false): { startS: number; endS: number; midS: number }[] {
     const ep = this.assetRuntime(assetId).episode;
     if (!ep) return [];
-    return selectVisionTargets(ep, this.assetRuntime(assetId).vision?.shots ?? {}, scope, max);
+    return selectVisionTargets(ep, includeLabeled ? {} : this.assetRuntime(assetId).vision?.shots ?? {}, scope, max);
   }
 
   /** Analisa cenas visualmente; no modo detalhado usa três quadros por cena e retoma do cache. */
   async runVision(
     assetId: string,
-    o: { provider: ProviderConfig; key: string | null; fetch: FetchLike; scope?: VisionScope; max?: number; context?: SceneAnalysisContext; signal?: AbortSignal; onProgress?: (done: number, total: number) => void },
-  ): Promise<{ labeled: number; failed: number; frameFailures: number; usage: { input: number; output: number } }> {
+    o: { provider: ProviderConfig; key: string | null; fetch: FetchLike; scope?: VisionScope; max?: number; context?: SceneAnalysisContext; matchLyrics?: boolean; signal?: AbortSignal; onProgress?: (done: number, total: number) => void },
+  ): Promise<{ labeled: number; failed: number; frameFailures: number; usage: { input: number; output: number }; lyricMatches: Record<string, Record<string, SceneLyricMatch>> }> {
     const asset = this.project.assets.find((a) => a.id === assetId);
     if (!asset) throw new Error('episódio não encontrado');
     const prior = await this.loadVision(assetId);
     const scope = o.scope ?? 'fights';
-    const targets = this.visionTargets(assetId, scope, o.max ?? (scope === 'all' ? Infinity : 120));
+    const targets = this.visionTargets(assetId, scope, o.max ?? (scope === 'all' ? Infinity : 120), o.matchLyrics);
     const env = await this.mediaEnv();
     const src = this.assetRuntime(assetId).artifacts?.proxyPath ?? asset.path;
     const vision: EpisodeVision = { version: VISION_VERSION, model: o.provider.model || o.provider.name, shots: { ...(prior?.shots ?? {}) } };
     const known = [...new Set(Object.values(vision.shots).flatMap((s) => s.characters))];
     const usage = { input: 0, output: 0 };
+    const lyricMatches: Record<string, Record<string, SceneLyricMatch>> = {};
     let failed = 0;
     let frameFailures = 0;
+    let analyzed = 0;
     const BATCH = 6;
     const samples = scope === 'all' ? [0.2, 0.5, 0.8] : [0.5];
     const scenesPerBatch = Math.max(1, Math.floor(BATCH / samples.length));
@@ -440,7 +442,7 @@ export class ProjectSession {
           return { startS: target.startS, lines: [...new Set(lines)].slice(0, 2).map((line) => line.slice(0, 160)) };
         }).filter((scene) => scene.lines.length);
         const context = o.context ? { ...o.context, sceneDialogue } : undefined;
-        const r = await labelScenes(o.provider, o.key, o.fetch, frames, { batchSize: BATCH, known, context, signal: o.signal });
+        const r = await labelScenes(o.provider, o.key, o.fetch, frames, { batchSize: BATCH, known, context, matchLyrics: o.matchLyrics, signal: o.signal });
         usage.input += r.usage.input;
         usage.output += r.usage.output;
         const failedIds = new Set(r.failed);
@@ -449,8 +451,23 @@ export class ProjectSession {
             const label = r.labels[id];
             return !failedIds.has(id) && label ? [label] : [];
           });
-          if (sceneSamples.length) labels[key] = mergeShotVision(sceneSamples);
-          else failed++;
+          if (sceneSamples.length) {
+            labels[key] = mergeShotVision(sceneSamples);
+            analyzed++;
+          } else failed++;
+          if (o.matchLyrics && ids.length) {
+            const values = ids.flatMap((id) => r.lyricMatches[id] ?? []);
+            const byCue = new Map<string, SceneLyricMatch[]>();
+            for (const value of values) byCue.set(value.cueId, [...(byCue.get(value.cueId) ?? []), value]);
+            const target = chunk.find((candidate) => shotKey(candidate.startS) === key);
+            if (target) {
+              const matches = Object.fromEntries([...byCue].map(([cueId, matchesForCue]) => {
+                const best = matchesForCue.reduce((current, value) => value.score > current.score ? value : current);
+                return [cueId, { ...best, score: matchesForCue.reduce((sum, value) => sum + value.score, 0) / matchesForCue.length }];
+              }));
+              if (Object.keys(matches).length) lyricMatches[`${assetId}@${target.startS}`] = matches;
+            }
+          }
         }
         for (const c of r.characters) if (!known.includes(c)) known.push(c);
       } else {
@@ -463,7 +480,7 @@ export class ProjectSession {
       this.emit();
       o.onProgress?.(Math.min(targets.length, i + chunk.length), targets.length);
     }
-    return { labeled: Object.keys(vision.shots).length - Object.keys(prior?.shots ?? {}).length, failed, frameFailures, usage };
+    return { labeled: o.matchLyrics ? analyzed : Object.keys(vision.shots).length - Object.keys(prior?.shots ?? {}).length, failed, frameFailures, usage, lyricMatches };
   }
 
   /** Gera (ou reaproveita do cache) os artefatos de um asset e atualiza seu estado. */

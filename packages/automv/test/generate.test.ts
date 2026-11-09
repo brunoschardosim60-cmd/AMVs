@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EpisodeAnalysis, MusicAnalysis, Shot } from '@amv/analysis';
 import { applyCommand, clipEndUs, createProject, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
-import { chooseMusicRange, generateAmv, makeSlots, recommendStyle, styleDef, type EpisodeInput, type GenerateOptions, type MusicInput } from '../src/index.js';
+import { chooseMusicRange, generateAmv, lyricCueKey, makeSlots, recommendStyle, styleDef, type EpisodeInput, type GenerateOptions, type MusicInput } from '../src/index.js';
 
 const S = 1_000_000;
 
@@ -191,6 +191,13 @@ describe('gerar AMV — hype', () => {
 });
 
 describe('outros estilos', () => {
+  it('aumenta a tipografia de falas mais impactantes', () => {
+    const { on } = run({ style: 'hype', voiceMoments: 3 });
+    const speechCaptions = on('Legendas').filter((clip) => clip.reason === 'Legenda da fala');
+    expect(speechCaptions.length).toBeGreaterThan(0);
+    expect(Math.max(...speechCaptions.map((clip) => clip.text!.size))).toBeGreaterThan(Math.min(...speechCaptions.map((clip) => clip.text!.size)));
+  });
+
   it('emocional: poucos cortes longos com dissolver', () => {
     const { on } = run({ style: 'emocional' });
     const v1 = on('V1');
@@ -221,6 +228,30 @@ describe('outros estilos', () => {
     expect(captions.every((clip) => clip.text?.animationIn === 'pop' && clip.text.animationOut === 'fade')).toBe(true);
     expect(captions.every((clip) => clip.text?.color === '#fff0a6')).toBe(true);
     expect(captions.every((clip) => (clip.text?.text.split(' ').length ?? 0) <= 4)).toBe(true);
+  });
+
+  it('usa correspondências semânticas aprovadas na escolha da cena e preserva o motivo no clipe', () => {
+    const cue = { startS: 2, endS: 4, text: 'Ninguém sabe o que há dentro de mim' };
+    const matches = Object.fromEntries(
+      ['ep1', 'ep2'].flatMap((assetId) =>
+        episode(assetId, 150, 3).analysis.shots.map((shot) => [
+          `${assetId}@${shot.startS}`,
+          {
+            [lyricCueKey(cue)]: {
+              score: assetId === 'ep1' && shot.startS === 120 ? 1 : 0.05,
+              reason: assetId === 'ep1' && shot.startS === 120 ? 'a força interior aparece como uma explosão de energia' : 'sentido distante da letra',
+            },
+          },
+        ]),
+      ),
+    );
+    const { on } = run({ style: 'hype', durationS: 10, musicStartS: 0, lyrics: [cue], lyricSceneMatches: matches, useSpeech: false });
+    const lyricScene = on('V1').find((clip) => clip.timelineStartUs === 2 * S)!;
+    expect(lyricScene.assetId).toBe('ep1');
+    expect(lyricScene.sourceInUs / S).toBeGreaterThanOrEqual(120);
+    expect(lyricScene.sourceInUs / S).toBeLessThan(123.5);
+    expect(lyricScene.reason).toContain('combina com a letra');
+    expect(on('Legendas').some((clip) => clip.reason?.includes('a força interior aparece'))).toBe(true);
   });
 
   it('omite letra sobre o drop e realça a palavra que cai no impacto', () => {

@@ -68,4 +68,15 @@ describe('recomendação por tema', () => {
     const r = recommend(lib, 'luta', { targetDurationS: 60 });
     expect(r.findIndex((x) => x.track.id === 'curta')).not.toBe(0);
   });
+
+  it('classifica pela progressão de energia compatível com as cenas', () => {
+    const flat = track('flat', analysis(120, () => 0.55, 180, [60]));
+    const rising = track('rising', analysis(120, (t) => 0.1 + (0.9 * t) / 180, 180, [60]));
+    const scenes = Array.from({ length: 12 }, (_, i) => 0.1 + (0.9 * i) / 11);
+    const result = recommend({ ...emptyLibrary(), tracks: [flat, rising] }, 'letra', {
+      sceneFit: { intensities: scenes, lowI: 0.1, highI: 1 },
+    });
+    expect(result[0]!.track.id).toBe('rising');
+    expect(result[0]!.reasons).toContain('curva de energia combina com a sequência de cenas');
+  });
 });

@@ -4,7 +4,7 @@
  * cada clipe com `origin: 'ai'` e um `reason` legível.
  */
 import { SFX_ANCHOR_S, SFX_DURATION_S, type SfxKind } from '@amv/sfx';
-import { normLabel, pickAudioStreamByLanguage, shotKey, type EpisodeVision, type ShotVision, type Cue, type EpisodeAnalysis, type MusicAnalysis, type Sequence, type Shot, type SpeechSegment } from '@amv/analysis';
+import { impactScore, normLabel, pickAudioStreamByLanguage, shotKey, type EpisodeVision, type ShotVision, type Cue, type EpisodeAnalysis, type MusicAnalysis, type Sequence, type Shot, type SpeechSegment } from '@amv/analysis';
 import { defaultScale, newId, type Clip, type Command, type EffectInstance, type Project, type Track } from '@amv/project';
 import { styleDef, type StyleDef, type StyleId } from './styles.js';
 
@@ -35,6 +35,8 @@ export interface GenerateOptions {
   musicStartS: number | null;
   /** Letra com tempo (para o estilo "letra" e legendas da música). */
   lyrics?: Cue[];
+  /** Correspondências semânticas de letra/cena aprovadas na análise visual opcional. */
+  lyricSceneMatches?: Record<string, Record<string, { score: number; reason: string }>>;
   useSpeech: boolean;
   useEffects: boolean;
   showText: boolean;
@@ -81,6 +83,7 @@ interface Slot {
   isDrop: boolean;
   /** Palavra da letra que entra neste corte (estilo letra). */
   word?: string;
+  lyricCueKey?: string;
 }
 
 const S = 1_000_000;
@@ -98,6 +101,13 @@ function rng(seed: number) {
 
 function fmt(s: number) {
   return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+}
+
+export function lyricCueKey(cue: Cue): string {
+  const text = cue.text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
+  return `${Math.round(cue.startS * 100)}:${Math.round(cue.endS * 100)}:${(hash >>> 0).toString(36)}`;
 }
 
 function energyAt(m: MusicAnalysis, t: number): number {
@@ -128,12 +138,12 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
   const drop = m.drops.map((d) => d + beatOffsetS).find((d) => d > a + 1 && d < b - 1) ?? null;
   // estilo letra com letra: um corte por palavra (palavras distribuídas na duração da linha)
   if (style.id === 'letra' && lyrics?.length) {
-    const words: { t: number; w: string }[] = [];
+    const words: { t: number; w: string; cueKey: string }[] = [];
     for (const c of lyrics) {
       if (!Number.isFinite(c.startS) || c.endS <= a || c.startS >= b) continue;
       const ws = c.text.replace(/\n/g, ' ').split(/\s+/).filter(Boolean);
       const step = (c.endS - c.startS) / Math.max(1, ws.length);
-      ws.forEach((w, i) => words.push({ t: c.startS + i * step, w }));
+      ws.forEach((w, i) => words.push({ t: c.startS + i * step, w, cueKey: lyricCueKey(c) }));
     }
     if (words.length >= 2) {
       const slots: Slot[] = [];
@@ -143,7 +153,7 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
         // palavra fica no máximo ~1,5 s; depois da última, volta a cortar na batida
         const end = Math.min(b, words[i + 1]?.t ?? w.t + 1.5, w.t + 1.5);
         if (end - w.t < 0.12) return;
-        slots.push({ startS: w.t - a, endS: end - a, energy: energyAt(m, w.t), section: sectionAt(m, w.t)?.label ?? '', isDrop: drop !== null && Math.abs(w.t - drop) < 0.15, word: w.w });
+        slots.push({ startS: w.t - a, endS: end - a, energy: energyAt(m, w.t), section: sectionAt(m, w.t)?.label ?? '', isDrop: drop !== null && Math.abs(w.t - drop) < 0.15, word: w.w, lyricCueKey: w.cueKey });
         lastEnd = end;
       });
       if (lastEnd < b - 0.3) {
@@ -187,7 +197,11 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
     if (next <= cur + 0.05 || i + n >= grid.length - 1) next = b;
     const sectionEdge = sectionEdges.find((edge) => edge > cur + 0.05 && edge < next - 0.05);
     if (sectionEdge !== undefined) next = sectionEdge;
-    slots.push({ startS: cur - a, endS: Math.min(b, next) - a, energy: e, section: sectionAt(m, cur)?.label ?? '', isDrop: drop !== null && Math.abs(cur - drop) < 0.06 });
+    const startS = cur - a;
+    const endS = Math.min(b, next) - a;
+    const cue = lyrics?.filter((item) => Number.isFinite(item.startS) && item.endS > a + startS && item.startS < a + endS)
+      .sort((left, right) => Math.min(right.endS, a + endS) - Math.max(right.startS, a + startS) - (Math.min(left.endS, a + endS) - Math.max(left.startS, a + startS)))[0];
+    slots.push({ startS, endS, energy: e, section: sectionAt(m, cur)?.label ?? '', isDrop: drop !== null && Math.abs(cur - drop) < 0.06, ...(cue ? { lyricCueKey: lyricCueKey(cue) } : {}) });
     i = grid.findIndex((g) => g >= next - 0.01);
     if (i < 0) break;
     cur = next;
@@ -462,14 +476,14 @@ function gradeFx(grade: StyleDef['grade']): EffectInstance[] {
   return [];
 }
 
-function textClip(trackId: string, startS: number, durS: number, text: string, H: number, kind: 'word' | 'line', reason: string, highlight = false): Clip {
+function textClip(trackId: string, startS: number, durS: number, text: string, H: number, kind: 'word' | 'line', reason: string, highlight = false, impact = 0): Clip {
   const word = kind === 'word';
   return baseClip(trackId, null, startS, durS, 0, reason, {
     transform: { x: 0, y: word ? 0 : Math.round(H * 0.36), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
     text: {
       text: word ? text.toUpperCase() : text,
       font: 'Manrope Variable',
-      size: Math.round(H * (word ? 0.105 : 0.043)),
+      size: Math.round(H * (word ? 0.105 : 0.043 * (1 + 0.35 * Math.max(0, Math.min(1, impact))))),
       color: highlight ? '#fff0a6' : '#ffffff',
       outlineColor: '#000000',
       outlineWidth: word ? 4 : 3,
@@ -491,12 +505,12 @@ function captionPhrases(text: string, durationS: number, maxWords = 3): string[]
   return groups;
 }
 
-function addCaptionPhrases(commands: Command[], trackId: string, startS: number, durationS: number, text: string, height: number, reason: string): void {
+function addCaptionPhrases(commands: Command[], trackId: string, startS: number, durationS: number, text: string, height: number, reason: string, impact = 0): void {
   const phrases = captionPhrases(text, durationS);
   if (!phrases.length) return;
   const step = durationS / phrases.length;
   phrases.forEach((phrase, index) => {
-    commands.push({ type: 'clip.add', clip: textClip(trackId, startS + index * step, step, phrase, height, 'line', reason) });
+    commands.push({ type: 'clip.add', clip: textClip(trackId, startS + index * step, step, phrase, height, 'line', reason, false, impact) });
   });
 }
 
@@ -665,7 +679,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const reason = `Fala ${s.text ? `"${s.text.replace(/\n/g, ' ')}" ` : ''}de ${ep.name} ${fmt(s.startS)} (impacto ${s.impact.toFixed(2)})`;
       cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, t, len + 0.35, s.startS, reason, { effects: [...gradeFx(style.grade)] }) });
       cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: 2, fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, streamIndex: streamFor(ep) } }) });
-      if (opts.showText && text && s.text) addCaptionPhrases(cmds, text.id, t, len, s.text, H, 'Legenda da fala');
+      if (opts.showText && text && s.text) addCaptionPhrases(cmds, text.id, t, len, s.text, H, 'Legenda da fala', Math.max(s.impact, impactScore(s.text)));
       used.add(`${ep.assetId}@${s.startS}`);
       clipsMade++;
       t += len + 0.35;
@@ -752,7 +766,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   let syncedHits = 0;
   let hitSlots = 0;
   /** Para os efeitos sonoros: onde cada corte/golpe aconteceu na timeline. */
-  const cutsLog: { startS: number; len: number; energy: number; intensity: number; isDrop: boolean; hitAtS: number | null }[] = [];
+  const cutsLog: { startS: number; len: number; energy: number; intensity: number; isDrop: boolean; hitAtS: number | null; lyricCueKey?: string; lyricMatchScore?: number; lyricMatchReason?: string }[] = [];
 
   for (const sl of fitSlots) {
     const len = sl.endS - sl.startS;
@@ -787,6 +801,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         if (style.id === 'emocional' && (vis.emotion === 'tristeza' || vis.emotion === 'calma')) score += 0.12;
         if (style.id === 'superacao' && vis.emotion === 'determinação') score += 0.12;
       }
+      const lyricMatch = sl.lyricCueKey ? opts.lyricSceneMatches?.[c.id]?.[sl.lyricCueKey] : undefined;
+      if (lyricMatch) score += (Math.max(0, Math.min(1, lyricMatch.score)) - 0.5) * 0.8;
       if (prev && prev.ep.assetId === c.ep.assetId) {
         score -= 0.12;
         // narrativa: andar para frente no mesmo episódio é bom; voltar é ruim
@@ -821,6 +837,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       best = { c, score: 0, srcIn: c.shot.startS + room * rand() };
     }
     const { c } = best;
+    const lyricMatch = sl.lyricCueKey ? opts.lyricSceneMatches?.[c.id]?.[sl.lyricCueKey] : undefined;
     const sceneIntensity = effectiveShotIntensity(c.ep, c.shot);
     const shotLen = c.shot.endS - c.shot.startS;
     const speed = shotLen >= len ? 1 : Math.max(0.6, shotLen / len);
@@ -864,6 +881,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       visionOf(c.ep, c.shot)?.emotion ? `emoção ${visionOf(c.ep, c.shot)!.emotion}` : null,
       fight ? 'luta escolhida' : null,
       visionOf(c.ep, c.shot)?.characters.length ? `com ${visionOf(c.ep, c.shot)!.characters.join(' e ')}` : null,
+      lyricMatch && lyricMatch.score >= 0.6 ? `combina com a letra "${opts.lyrics?.find((cue) => lyricCueKey(cue) === sl.lyricCueKey)?.text ?? ''}": ${lyricMatch.reason}` : null,
       hit ? 'golpe na batida' : null,
       speed < 1 ? `câmera lenta ${speed.toFixed(2)}×` : null,
     ]
@@ -874,7 +892,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     cmds.push({ type: 'clip.add', clip });
     if (opts.showText && text && sl.word) cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra', sl.isDrop) });
     used.add(c.id);
-    cutsLog.push({ startS: sl.startS, len, energy: sl.energy, intensity: c.shot.intensity, isDrop: sl.isDrop, hitAtS: hit ? sl.startS + (c.shot.peakS - srcIn) / speed : null });
+    cutsLog.push({ startS: sl.startS, len, energy: sl.energy, intensity: c.shot.intensity, isDrop: sl.isDrop, hitAtS: hit ? sl.startS + (c.shot.peakS - srcIn) / speed : null, ...(sl.lyricCueKey ? { lyricCueKey: sl.lyricCueKey } : {}), ...(lyricMatch ? { lyricMatchScore: lyricMatch.score, lyricMatchReason: lyricMatch.reason } : {}) });
     prev = c;
     prevSrcEnd = srcIn + srcLen;
     clipsMade++;
@@ -948,7 +966,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const lead = b.atS - b.from;
     cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, b.from, b.to - b.from, Math.max(0, s.startS - lead), reason, { effects: gradeFx(style.grade) }) });
     cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: b.preDrop ? 3 : 2, fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, streamIndex: streamFor(ep) } }) });
-    if (opts.showText && text && s.text && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, s.text, H, 'Legenda da fala');
+    if (opts.showText && text && s.text && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, s.text, H, 'Legenda da fala', Math.max(s.impact, impactScore(s.text)));
     clipsMade++;
   }
 
@@ -978,15 +996,21 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         return distance < (best?.distance ?? Infinity) ? { time: beat, distance } : best;
       }, null);
       if (nearestBeat && nearestBeat.distance <= 0.1 && nearestBeat.time >= 0 && nearestBeat.time < b) a = nearestBeat.time;
-      if (impactWindows.some((window) => a < window.endS && b > window.startS)) {
+      const lyricKey = lyricCueKey(c);
+      const lyricSceneMatch = cutsLog.find((cut) => cut.lyricCueKey === lyricKey && (cut.lyricMatchScore ?? 0) >= 0.65 && cut.startS < b && cut.startS + cut.len > a);
+      if (!lyricSceneMatch && impactWindows.some((window) => a < window.endS && b > window.startS)) {
         skippedLyrics++;
         continue;
       }
       const phrases = captionPhrases(c.text, b - a, 4);
       if (phrases.length) {
         const step = (b - a) / phrases.length;
+        const reason = lyricSceneMatch ? `Letra da música · ${lyricSceneMatch.lyricMatchReason}` : 'Letra da música';
         phrases.forEach((phrase, index) => {
-          cmds.push({ type: 'clip.add', clip: textClip(text.id, a + index * step, step, phrase, H, 'line', 'Letra da música', true) });
+          cmds.push({
+            type: 'clip.add',
+            clip: textClip(text.id, a + index * step, step, phrase, H, 'line', reason, true, Math.max(impactScore(c.text), lyricSceneMatch?.lyricMatchScore ?? 0)),
+          });
         });
       }
     }

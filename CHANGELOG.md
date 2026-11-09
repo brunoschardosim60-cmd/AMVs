@@ -1,5 +1,13 @@
 # Novidades
 
+## Em desenvolvimento
+
+**Música, letra e cena mais conectadas**
+- A biblioteca ranqueia faixas pela análise real e pela compatibilidade da energia com as cenas escolhidas, e explica os motivos.
+- A análise semântica opcional relaciona até seis versos sincronizados com cenas e diálogos amostrados; correspondências fortes influenciam a montagem e podem manter a legenda sobre um impacto. Exige ação explícita e pode consumir cota do modelo.
+- Falas com maior pontuação de impacto aparecem em fonte maior.
+- Tradução automática de letras ainda não está ligada à geração: para exibir uma letra traduzida, importe um arquivo temporizado já traduzido.
+
 ## 0.6.7
 
 **Estilo aberto e montagem com mais ritmo**

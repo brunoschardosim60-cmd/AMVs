@@ -225,6 +225,12 @@ export interface Recommendation {
   reasons: string[];
 }
 
+export interface SceneFitProfile {
+  intensities: number[];
+  lowI: number;
+  highI: number;
+}
+
 const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 function rangeFit(v: number, [lo, hi]: [number, number], soft: number): number {
@@ -234,7 +240,7 @@ function rangeFit(v: number, [lo, hi]: [number, number], soft: number): number {
 }
 
 /** Pontua uma faixa para um tema. Só usa dados medidos e etiquetas do usuário. */
-export function scoreTrack(t: LibraryTrack, theme: Theme, targetDurationS?: number): Recommendation | null {
+export function scoreTrack(t: LibraryTrack, theme: Theme, targetDurationS?: number, sceneFit?: SceneFitProfile | null): Recommendation | null {
   const s = t.summary;
   if (!s) return null;
   const reasons: string[] = [];
@@ -244,7 +250,7 @@ export function scoreTrack(t: LibraryTrack, theme: Theme, targetDurationS?: numb
   if (bpmFit > 0.8) reasons.push(`${Math.round(s.bpm)} BPM combina`);
   const intFit = rangeFit(s.intensity, theme.intensity, 25);
   if (intFit > 0.8) reasons.push(`intensidade ${Math.round(s.intensity)}`);
-  let score = 0.35 * bpmFit + 0.35 * intFit;
+  let score = 0.35 * bpmFit + (sceneFit?.intensities.length ? 0.1 : 0.35) * intFit;
 
   const drop = s.drops[0];
   if (theme.wantsDrop) {
@@ -256,6 +262,20 @@ export function scoreTrack(t: LibraryTrack, theme: Theme, targetDurationS?: numb
   if (theme.wantsBuild) {
     score += 0.1 * s.buildUp;
     if (s.buildUp > 0.35) reasons.push(`energia cresce ${Math.round(s.buildUp * 100)}% até o pico`);
+  }
+  if (sceneFit?.intensities.length && s.energy.length) {
+    const samples = 12;
+    let distance = 0;
+    for (let i = 0; i < samples; i++) {
+      const progress = (i + 0.5) / samples;
+      const musicIndex = Math.min(s.energy.length - 1, Math.floor(progress * s.energy.length));
+      const sceneIndex = Math.min(sceneFit.intensities.length - 1, Math.floor(progress * sceneFit.intensities.length));
+      const target = sceneFit.lowI + (sceneFit.highI - sceneFit.lowI) * s.energy[musicIndex]!;
+      distance += Math.abs(target - sceneFit.intensities[sceneIndex]!);
+    }
+    const fit = Math.max(0, 1 - distance / samples);
+    score += 0.35 * fit;
+    if (fit >= 0.72) reasons.push('curva de energia combina com a sequência de cenas');
   }
   if (theme.id === 'letra' && s.bpmConfidence > 0.5) {
     score += 0.08;
@@ -274,11 +294,11 @@ export function scoreTrack(t: LibraryTrack, theme: Theme, targetDurationS?: numb
   return { track: t, score: Math.max(0, Math.min(1, score)), reasons };
 }
 
-export function recommend(lib: Library, themeId: ThemeId, opts: { limit?: number; targetDurationS?: number } = {}): Recommendation[] {
+export function recommend(lib: Library, themeId: ThemeId, opts: { limit?: number; targetDurationS?: number; sceneFit?: SceneFitProfile | null } = {}): Recommendation[] {
   const theme = THEMES.find((x) => x.id === themeId)!;
   return lib.tracks
     .filter((t) => t.status === 'ok')
-    .map((t) => scoreTrack(t, theme, opts.targetDurationS))
+    .map((t) => scoreTrack(t, theme, opts.targetDurationS, opts.sceneFit))
     .filter((r): r is Recommendation => r !== null && r.score > 0.35)
     .sort((a, b) => b.score - a.score)
     .slice(0, opts.limit ?? 12);

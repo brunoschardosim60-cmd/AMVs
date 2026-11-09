@@ -1,5 +1,5 @@
 import { impactScore, parseSubtitles, decodeSubtitleBytes, type Cue } from '@amv/analysis';
-import { chooseMusicRange, generateAmv, planFootage, recommendStyle, STYLES, suggestMusicRanges, type EpisodeInput, type GenerateOptions, type StyleId } from '@amv/automv';
+import { chooseMusicRange, generateAmv, lyricCueKey, planFootage, recommendStyle, STYLES, suggestMusicRanges, type EpisodeInput, type GenerateOptions, type StyleId } from '@amv/automv';
 import { characterCounts, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2, Zap } from 'lucide-react';
@@ -42,6 +42,8 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
   const [useEffects, setUseEffects] = useState(true);
   const [showText, setShowText] = useState(true);
   const [lyrics, setLyrics] = useState<{ name: string; cues: Cue[] } | null>(null);
+  const [matchLyrics, setMatchLyrics] = useState(false);
+  const [lyricSceneMatches, setLyricSceneMatches] = useState<NonNullable<GenerateOptions['lyricSceneMatches']>>({});
   const [seed, setSeed] = useState(1);
   const [result, setResult] = useState<{ warnings: string[]; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -103,7 +105,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
     return [...all.values()].sort((a, b) => b.shots - a.shots).slice(0, 12);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visionVersion]);
-  const visionTodo = ready.reduce((n, e) => n + session.visionTargets(e.id, visionScope).length, 0);
+  const visionTodo = ready.reduce((n, e) => n + session.visionTargets(e.id, visionScope, undefined, matchLyrics).length, 0);
 
   const runVision = async () => {
     if (!platform || vision) return;
@@ -119,6 +121,12 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
       }
       const key = settings.provider.needsKey ? await platform.secrets.get(secretName(settings.presetId)) : null;
       const musicRange = music ? chooseMusicRange(music, duration, chosenStart) : null;
+      const lyricCues = lyrics?.cues
+        .filter((cue) => !musicRange || (cue.endS > musicRange[0] && cue.startS < musicRange[1]))
+        .sort((a, b) => impactScore(b.text) - impactScore(a.text))
+        .slice(0, 6)
+        .sort((a, b) => a.startS - b.startS)
+        .map((cue) => ({ id: lyricCueKey(cue), text: cue.text, startS: cue.startS, endS: cue.endS }));
       const context = music
         ? {
             style: STYLES.find((item) => item.id === selectedStyle)!.label,
@@ -130,28 +138,33 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
               sections: music.sections.map(({ label, energy }) => ({ label, energy })),
               dropsS: music.drops.filter((drop) => !musicRange || (drop >= musicRange[0] && drop <= musicRange[1])),
             },
-            lyrics: lyrics?.cues
-              .filter((cue) => !musicRange || (cue.endS > musicRange[0] && cue.startS < musicRange[1]))
-              .sort((a, b) => impactScore(b.text) - impactScore(a.text))
-              .slice(0, 6)
-              .sort((a, b) => a.startS - b.startS)
-              .map((cue) => `[${mmss(cue.startS)}] ${cue.text}`),
+            lyrics: lyricCues?.map((cue) => cue.text),
+            lyricCues,
           }
         : undefined;
+      if (matchLyrics && !lyricCues?.length) {
+        toast({ tone: 'warn', title: 'Carregue uma letra sincronizada', body: 'O encaixe semântico precisa de versos com tempo (.LRC ou .SRT).' });
+        return;
+      }
+      if (matchLyrics) setLyricSceneMatches({});
       visionAbort.current = new AbortController();
       let labeled = 0;
       let failed = 0;
       let frameFailures = 0;
+      let matchCount = 0;
       for (const e of ready) {
-        if (!session.visionTargets(e.id, visionScope).length) continue;
-        setVision({ done: 0, total: session.visionTargets(e.id, visionScope).length, ep: e.name });
-        const r = await session.runVision(e.id, { provider: settings.provider, key, fetch: platform.http, scope: visionScope, context, signal: visionAbort.current.signal, onProgress: (done, total) => setVision({ done, total, ep: e.name }) });
+        const targets = session.visionTargets(e.id, visionScope, undefined, matchLyrics);
+        if (!targets.length) continue;
+        setVision({ done: 0, total: targets.length, ep: e.name });
+        const r = await session.runVision(e.id, { provider: settings.provider, key, fetch: platform.http, scope: visionScope, context, matchLyrics, signal: visionAbort.current.signal, onProgress: (done, total) => setVision({ done, total, ep: e.name }) });
+        if (matchLyrics) setLyricSceneMatches((current) => ({ ...current, ...r.lyricMatches }));
+        matchCount += Object.values(r.lyricMatches).reduce((count, matches) => count + Object.keys(matches).length, 0);
         labeled += r.labeled;
         failed += r.failed;
         frameFailures += r.frameFailures;
         if (visionAbort.current.signal.aborted) break;
       }
-      toast(failed || frameFailures ? { tone: 'warn', title: `${labeled} cenas analisadas`, body: `${failed} cenas sem resposta do modelo; ${frameFailures} quadros não puderam ser extraídos. Rode de novo para tentar as cenas incompletas.` } : { tone: 'ok', title: `${labeled} cenas analisadas`, body: 'Escolha os personagens ao lado.' });
+      toast(failed || frameFailures ? { tone: 'warn', title: `${labeled} cenas analisadas`, body: `${failed} cenas sem resposta do modelo; ${frameFailures} quadros não puderam ser extraídos. Rode de novo para tentar as cenas incompletas.` } : { tone: 'ok', title: `${labeled} cenas analisadas`, body: matchLyrics ? `${matchCount} combinações de letra/cena retornadas; as demais cenas usam a seleção local.` : 'Escolha os personagens ao lado.' });
     } catch (err) {
       if ((err as Error).name !== 'AbortError') toast({ tone: 'error', title: 'Não deu para analisar as cenas', body: (err as Error).message });
     } finally {
@@ -175,6 +188,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
       return;
     }
     setLyrics({ name: path.split(/[\\/]/).pop()!, cues: timed });
+    setLyricSceneMatches({});
   };
 
   const generate = async (nextSeed = seed) => {
@@ -191,7 +205,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
           sfxError = (e as Error).message;
         }
       }
-      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, beatOffsetMs, characters };
+      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, beatOffsetMs, characters };
       const m = musics.find((a) => a.id === musicId)!;
       const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
       if (sfxError) r.warnings.push(`Não consegui preparar os efeitos sonoros (${sfxError}): o vídeo saiu sem eles.`);
@@ -212,14 +226,18 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
     }
   };
 
-  const recs = library ? recommend(library.lib, STYLE_THEME[selectedStyle] ?? 'motivacao', { limit: 3, targetDurationS: duration }).filter((r) => !project.assets.some((a) => a.hash === r.track.hash)) : [];
+  const recs = library ? recommend(library.lib, STYLE_THEME[selectedStyle] ?? 'motivacao', { limit: 3, targetDurationS: duration, sceneFit: plan?.fit }) : [];
   const addFromLibrary = async (trackId: string) => {
-    const t = library!.track(trackId)!;
-    await session.importFiles([t.path]);
-    const a = session.project.assets.find((x) => x.hash === t.hash);
-    if (a) {
+    try {
+      const t = library?.track(trackId);
+      if (!t) throw new Error('A faixa não está mais disponível na biblioteca.');
+      await session.importFiles([t.path]);
+      const a = session.project.assets.find((x) => x.hash === t.hash);
+      if (!a) throw new Error('A faixa foi importada, mas não apareceu no projeto.');
       setMusicId(a.id);
-      library!.markUsed(t.id, project.name);
+      library?.markUsed(t.id, project.name);
+    } catch (error) {
+      toast({ tone: 'error', title: 'Não foi possível adicionar a música', body: (error as Error).message });
     }
   };
 
@@ -443,10 +461,17 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
                       Todas as cenas, em detalhe
                     </label>
                   </div>
+                  <label className="mt-2 flex items-start gap-1.5 text-2xs text-ink-soft">
+                    <input type="checkbox" className="mt-0.5 accent-violet" checked={matchLyrics} disabled={!lyrics?.cues.length} onChange={(e) => setMatchLyrics(e.target.checked)} />
+                    <span>Relacionar o sentido da letra com as cenas (IA; opcional)</span>
+                  </label>
+                  <p className="mt-1 text-2xs text-faint">
+                    Usa até 6 versos e reanalisa os quadros amostrados para sugerir combinações; pode consumir cota do modelo. Sem essa opção, a montagem continua local, pela batida, energia, ação e emoção.
+                  </p>
                   {visionTodo > 0 ? (
                     <>
-                      <Button size="sm" className="mt-2" onClick={runVision} title="Analisa cenas com o contexto da música selecionada; o áudio não é enviado.">
-                        Analisar cenas com IA
+                      <Button size="sm" className="mt-2" onClick={runVision} title="Analisa quadros amostrados; o áudio não é enviado.">
+                        {matchLyrics ? 'Analisar cenas e sentido da letra' : 'Analisar cenas com IA'}
                       </Button>
                       <p className="mt-1 text-2xs text-faint">
                         ≈ {visionTodo * (visionScope === 'all' ? 3 : 1)} quadros, até {Math.ceil((visionTodo * (visionScope === 'all' ? 3 : 1)) / 6)} chamadas.{' '}
@@ -512,13 +537,21 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
 
             {recs.length > 0 && (
               <div>
-                <p className="mb-1 text-xs font-medium text-ink-soft">Combinam com o estilo (sua biblioteca)</p>
+                <p className="mb-1 text-xs font-medium text-ink-soft">Melhor música para estas cenas (sua biblioteca)</p>
+                <p className="mb-2 text-2xs text-muted">Ranqueadas por BPM, intensidade, duração e compatibilidade da curva de energia com as cenas selecionadas.</p>
+                <Button size="sm" className="mb-2 w-full" onClick={() => void addFromLibrary(recs[0]!.track.id)}>
+                  Usar melhor: {displayTitle(recs[0]!.track)}
+                </Button>
+                <p className="mb-2 text-2xs text-faint">{recs[0]!.reasons.join(' · ') || 'Compatibilidade baseada na análise local da faixa.'}</p>
                 <ul className="space-y-1">
                   {recs.map((r) => (
                     <li key={r.track.id}>
                       <button type="button" title={r.reasons.join(' · ')} onClick={() => void addFromLibrary(r.track.id)} className="flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-left text-2xs hover:bg-raised">
                         <Music2 size={11} className="shrink-0 text-violet-strong" />
-                        <span className="min-w-0 flex-1 truncate">{displayTitle(r.track)}</span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate">{displayTitle(r.track)}</span>
+                          {r.reasons[0] && <span className="block truncate text-faint">{r.reasons[0]}</span>}
+                        </span>
                         <span className="tnum text-faint">{Math.round(r.score * 100)}%</span>
                       </button>
                     </li>
@@ -604,7 +637,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
               <Button size="sm" onClick={pickLyrics}>
                 {lyrics ? lyrics.name : 'Escolher .lrc / .srt'}
               </Button>
-              <p className="mt-1 text-2xs text-muted">Necessária para o estilo "Letra na tela".</p>
+              <p className="mt-1 text-2xs text-muted">Use letra sincronizada; para exibir em português, selecione um arquivo já traduzido. O app não busca nem traduz letras automaticamente.</p>
             </div>
           </div>
         </div>

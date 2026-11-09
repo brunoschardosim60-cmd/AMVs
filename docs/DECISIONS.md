@@ -132,3 +132,9 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - O modo Aberto recomenda estilo com uma pontuação local, reproduzível e explicável, usando análises já existentes de música, cenas, falas, letra e visão. Não faz uma chamada de IA nem afirma reconhecer conteúdo que não foi analisado.
 - Impacto rápido divide o intervalo entre batidas em meia batida para favorecer cortes curtos sincronizados; a seleção de cenas dá prioridade explícita a tags de ação/impacto. O mínimo de 0,2 s protege legibilidade e estabilidade.
 - A geração continua restrita aos episódios selecionados. A UI expõe Todos/Nenhum e contagens de cenas/lutas para deixar claro o conjunto analisado.
+
+## 2026-11-09 · Encaixe contextual de música, letra e cenas
+- Recomendações locais consideram BPM, intensidade, duração e a compatibilidade entre a curva de energia da faixa e as intensidades das cenas selecionadas; cada sugestão expõe os sinais usados.
+- A correspondência semântica entre até seis versos temporizados e quadros de cena é opcional, desligada por padrão e só roda por ação explícita. Reanalisa quadros do escopo escolhido, respeita o opt-in de envio externo e acrescenta justificativa aos clipes escolhidos; sem isso, a montagem permanece local e heurística.
+- Motivo: aproximar música e imagem sem esconder custo nem transformar análise de IA em requisito. As correspondências semânticas são temporárias na janela de geração e precisam ser refeitas se ela for fechada.
+- Falas com maior pontuação de impacto recebem fonte maior; a tradução da letra não é automática, então só se exibe o texto sincronizado fornecido pelo usuário.
