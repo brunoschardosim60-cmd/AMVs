@@ -23,7 +23,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Atalhos: Ctrl+N/O/S/Shift+S/I/Z/Shift+Z/Y; bloqueio de atalhos do navegador | feito | código; verificação manual pendente no Windows |
 | Aviso ao fechar com alterações não salvas | feito | código; verificação manual pendente no Windows |
 | Sidecar Python opcional (esqueleto: saúde, módulos, token) | feito | pytest |
-| CI no Windows: testes + instalador NSIS/MSI | feito | run 42535094450 verde no commit ed6b20c, com PyAV compatível, smoke test que decodifica WAV, typecheck, testes com FFmpeg real e geração de NSIS/MSI. O artefato desse run foi gerado, mas não instalado. O run 42532183362 também passou antes de detectar, no teste de áudio real, incompatibilidade entre faster-whisper 1.2.1 e PyAV 19. |
+| CI no Windows: testes + instalador NSIS/MSI | feito | Release run 42538120990 verde no commit c988bac: smoke test do runtime, typecheck, testes com FFmpeg real e geração dos instaladores assinados. |
 
 ### Pendente de verificação no Windows
 - Reprodução do proxy no painel de detalhes (WebView2). No Linux de desenvolvimento não dá para testar: o WebKitGTK não toca mídia pelo protocolo de arquivos do Tauri.
@@ -32,8 +32,8 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 ## Distribuição
 | Item | Estado | Como foi verificado |
 |---|---|---|
-| Atualização automática (plugin updater, assinatura minisign) | feito | Release v0.1.1 publicada com `latest.json` e `.sig` |
-| Publicar versão: `node scripts/release.mjs x.y.z --push` (branch `release`) | feito | workflow Release verde |
+| Atualização automática (plugin updater, assinatura minisign) | feito | Release v0.6.1 publicada com `latest.json` e assinatura; arquivo consultado pelo app aponta para o MSI v0.6.1 |
+| Publicar versão: `node scripts/release.mjs x.y.z --push` (branch `release`) | feito | v0.6.1 publicada pelo workflow Release run 42538120990 |
 
 ## Fase 2 — Editor (em andamento)
 
