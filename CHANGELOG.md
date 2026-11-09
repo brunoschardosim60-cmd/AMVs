@@ -1,6 +1,6 @@
 # Novidades
 
-## Em desenvolvimento
+## 0.6.8
 
 **Música, letra e cena mais conectadas**
 - A biblioteca ranqueia faixas pela análise real e pela compatibilidade da energia com as cenas escolhidas, e explica os motivos.
