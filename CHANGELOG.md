@@ -1,5 +1,13 @@
 # Novidades
 
+## 0.6.4
+
+**Sincronizar letras sem tempo**
+- Importe um arquivo `.txt` com uma linha por verso e selecione o clipe da música na trilha Música.
+- O faster-whisper transcreve a faixa de áudio localmente; o app compara as palavras reconhecidas com os versos em ordem, respeitando o ponto de entrada e a velocidade do clipe.
+- Os versos encontrados viram clipes de texto editáveis na timeline. O app informa as linhas incertas ou não encontradas; revise a sincronização antes de exportar.
+- O áudio original não é modificado nem enviado. O modelo pode precisar ser baixado na primeira execução; canto e pronúncia ainda podem afetar a precisão.
+
 ## 0.6.3
 
 **Conferir e corrigir as batidas**

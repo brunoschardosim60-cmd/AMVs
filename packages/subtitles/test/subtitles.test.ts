@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyCommand, clipEndUs, createProject, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
-import { applyTranslation, langLabel, originalText, restoreOriginals, SUBTITLE_LANGS, cuesForClip, normalizeCues, placeCues, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, toLrc, toVtt, trackCues } from '../src/index.js';
+import { alignUntimedLyrics, applyTranslation, langLabel, originalText, restoreOriginals, SUBTITLE_LANGS, cuesForClip, normalizeCues, placeCues, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, toLrc, toVtt, trackCues } from '../src/index.js';
 
 const S = 1_000_000;
 function project(): Project {
@@ -13,6 +13,46 @@ const apply = (p: Project, commands: Parameters<typeof applyCommand>[1][]) => ap
 const textTrack = (p: Project) => p.tracks.find((t) => t.kind === 'text')!.id;
 
 describe('legendas na timeline', () => {
+  it('alinha linhas de letra com palavras transcritas, reportando linhas incertas e ausentes', () => {
+    const result = alignUntimedLyrics('Quando eu cair\nvou me levantar\nlinha que não existe', [
+      { start: 1, end: 1.2, text: 'Quando' },
+      { start: 1.2, end: 1.4, text: 'eu' },
+      { start: 1.4, end: 1.6, text: 'caí' },
+      { start: 2, end: 2.2, text: 'vou' },
+      { start: 2.2, end: 2.4, text: 'me' },
+      { start: 2.4, end: 2.8, text: 'levantar' },
+    ]);
+    expect(result).toEqual({
+      cues: [
+        { startS: 1, endS: 1.6, text: 'Quando eu cair' },
+        { startS: 2, endS: 2.8, text: 'vou me levantar' },
+      ],
+      matched: 2,
+      uncertain: 1,
+      unmatched: 1,
+    });
+  });
+
+  it('alinha letra japonesa caractere a caractere sem confundir linhas repetidas fora de ordem', () => {
+    const result = alignUntimedLyrics('夢を\nつかめ\n夢を', [
+      { start: 1, end: 1.8, text: '夢 を' },
+      { start: 3, end: 3.8, text: 'つかめ' },
+      { start: 5, end: 5.8, text: '夢 を' },
+    ]);
+    expect(result.cues.map((cue) => [cue.startS, cue.endS, cue.text])).toEqual([
+      [1, 1.8, '夢を'],
+      [3, 3.8, 'つかめ'],
+      [5, 5.8, '夢を'],
+    ]);
+    expect(result.unmatched).toBe(0);
+  });
+
+  it('não força alinhar uma letra que não se parece com a transcrição', () => {
+    const result = alignUntimedLyrics('Essa letra é diferente', [{ start: 4, end: 5, text: 'palavras aleatórias' }]);
+    expect(result.cues).toEqual([]);
+    expect(result.unmatched).toBe(1);
+  });
+
   it('normaliza: ordena, tira vazias e corta sobreposição', () => {
     const n = normalizeCues([
       { startS: 5, endS: 7, text: 'b' },

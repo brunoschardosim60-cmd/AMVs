@@ -19,6 +19,83 @@ export const LOOKS: { id: SubtitleLook; label: string; description: string }[] =
   { id: 'karaoke', label: 'Letra', description: 'Embaixo, maior, amarelo claro. Para letra da música.' },
 ];
 
+export interface UntimedLyricAlignment {
+  cues: Cue[];
+  matched: number;
+  uncertain: number;
+  unmatched: number;
+}
+
+function lyricTokens(text: string, characters: boolean): string[] {
+  const normalized = text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+  if (characters) return Array.from(normalized).filter((part) => /[\p{L}\p{N}]/u.test(part));
+  return normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+function editDistance(a: string[], b: string[]): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = Math.min(
+        previous[j]! + 1,
+        current[j - 1]! + 1,
+        previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    previous = current;
+  }
+  return previous[b.length]!;
+}
+
+/** Alinha linhas de letra a palavras transcritas localmente, em ordem e com score explícito. */
+export function alignUntimedLyrics(
+  lyrics: string,
+  transcriptWords: { start: number; end: number; text: string }[],
+): UntimedLyricAlignment {
+  const lines = lyrics.replace(/\r/g, '').split('\n').map((line) => line.trim()).filter(Boolean);
+  const script = `${lyrics} ${transcriptWords.map((word) => word.text).join(' ')}`;
+  const characters = /[\u3040-\u30ff\u3400-\u9fff]/u.test(script);
+  const spoken = transcriptWords.flatMap((word, wordIndex) =>
+    lyricTokens(word.text, characters).map((token) => ({ token, wordIndex })),
+  );
+  let cursor = 0;
+  let matched = 0;
+  let uncertain = 0;
+  const cues: Cue[] = [];
+
+  for (const line of lines) {
+    const target = lyricTokens(line, characters);
+    if (!target.length || cursor >= spoken.length) continue;
+    const lengthSlack = characters ? Math.max(2, Math.ceil(target.length * 0.12)) : Math.max(2, Math.ceil(target.length * 0.3));
+    const minLength = Math.max(1, target.length - lengthSlack);
+    const maxLength = target.length + lengthSlack;
+    let best: { start: number; end: number; score: number } | null = null;
+    for (let start = cursor; start < spoken.length; start++) {
+      for (let length = minLength; length <= maxLength && start + length <= spoken.length; length++) {
+        const candidate = spoken.slice(start, start + length).map((word) => word.token);
+        const score = 1 - editDistance(target, candidate) / Math.max(target.length, candidate.length);
+        const bestLength = best ? best.end - best.start : 0;
+        const closerLength = Math.abs(length - target.length) < Math.abs(bestLength - target.length);
+        const tiedLonger = Math.abs(length - target.length) === Math.abs(bestLength - target.length) && length > bestLength;
+        if (!best || score > best.score || (score === best.score && (closerLength || tiedLonger))) {
+          best = { start, end: start + length, score };
+        }
+      }
+    }
+    if (!best || best.score < 0.55) continue;
+    const first = transcriptWords[spoken[best.start]!.wordIndex]!;
+    const last = transcriptWords[spoken[best.end - 1]!.wordIndex]!;
+    if (!Number.isFinite(first.start) || !Number.isFinite(last.end) || last.end <= first.start) continue;
+    cues.push({ startS: Math.max(0, first.start), endS: Math.max(first.start, last.end), text: line });
+    matched++;
+    if (best.score < 0.78) uncertain++;
+    cursor = best.end;
+  }
+
+  return { cues, matched, uncertain, unmatched: lines.length - matched };
+}
+
 export function lookText(look: SubtitleLook, H: number, text: string): { transform: Clip['transform']; text: NonNullable<Clip['text']> } {
   const t = (y: number) => ({ x: 0, y: Math.round(H * y), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } });
   switch (look) {

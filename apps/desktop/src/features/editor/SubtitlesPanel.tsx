@@ -2,7 +2,7 @@ import { decodeSubtitleBytes, parseSubtitles, pickAudioStreamByLanguage, toSrt }
 import { joinPath } from '@amv/media';
 import { clipEndUs, type Clip } from '@amv/project';
 import { translateLines } from '@amv/assistant';
-import { applyTranslation, langLabel, LOOKS, originalText, placeCues, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
+import { alignUntimedLyrics, applyTranslation, cuesForClip, langLabel, LOOKS, originalText, placeCues, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
 import { AlertTriangle, Download, FileText, Film, Languages, Mic, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
@@ -35,6 +35,16 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   });
   const [speechProgress, setSpeechProgress] = useState<{ stage: 'extracting' | 'preparing' | 'transcribing'; progress: number; duration: number } | null>(null);
   const [cancellingSpeech, setCancellingSpeech] = useState(false);
+  const musicTrack = project.tracks.find((track) => track.role === 'music');
+  const musicClips = musicTrack
+    ? project.clips.filter((clip) => clip.trackId === musicTrack.id && !!clip.assetId).sort((a, b) => a.timelineStartUs - b.timelineStartUs)
+    : [];
+  const [lyricsClipId, setLyricsClipId] = useState(musicClips[0]?.id ?? '');
+  const [untimedLyrics, setUntimedLyrics] = useState<{ name: string; text: string } | null>(null);
+  const lyricsClip = musicClips.find((clip) => clip.id === lyricsClipId) ?? musicClips[0];
+  const lyricsAsset = project.assets.find((asset) => asset.id === lyricsClip?.assetId);
+  const lyricsAudioStreams = lyricsAsset?.probe?.audio ?? [];
+  const [lyricsAudioIndex, setLyricsAudioIndex] = useState<number | null>(null);
   const abort = useRef<AbortController | null>(null);
   const speechAbort = useRef<AbortController | null>(null);
   const selection = useEditor((s) => s.selection);
@@ -73,9 +83,16 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
       const text = decodeSubtitleBytes(await platform!.fs.readFile(path));
       const cues = parseSubtitles(path, text).filter((c) => Number.isFinite(c.startS));
       if (!cues.length) {
-        toast({ tone: 'warn', title: 'Esse arquivo não tem tempos', body: 'Para letra sem tempo, use o Texto (T) e posicione à mão — sincronização automática vem depois.' });
+        const plainText = text.replace(/^\uFEFF/, '').trim();
+        if (/\.txt$/i.test(path) && plainText) {
+          setUntimedLyrics({ name: path.split(/[\\/]/).pop() ?? 'Letra', text: plainText });
+          toast({ tone: 'ok', title: 'Letra carregada', body: 'Agora escolha o clipe da música e sincronize com a transcrição local.' });
+          return;
+        }
+        toast({ tone: 'warn', title: 'Esse arquivo não tem tempos', body: 'Importe um .txt com uma linha por verso ou sincronize as linhas manualmente.' });
         return;
       }
+      setUntimedLyrics(null);
       // letra (.lrc) acompanha a música: alinha com o começo do clipe de música
       const isLyrics = /\.lrc$/i.test(path);
       const musicTrack = project.tracks.find((t) => t.role === 'music');
@@ -146,19 +163,49 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     const controller = new AbortController();
     speechAbort.current = controller;
     const duration = (asset.probe?.durationUs ?? 0) / 1e6;
-    let partialPath: string | null = null;
     setCancellingSpeech(false);
     setSpeechProgress({ stage: 'extracting', progress: 0, duration });
     try {
-      const cacheDir = joinPath(await platform.cacheDir(), 'transcription');
-      await platform.fs.mkdir(cacheDir);
-      const cacheKey = (asset.hash || asset.id).replace(/[^a-zA-Z0-9_-]/g, '_');
-      const audioPath = joinPath(cacheDir, `${cacheKey}-stream-${audioIndex}.wav`);
-      if (!(await platform.fs.exists(audioPath)) || (await platform.fs.size(audioPath)) <= 44) {
+      const transcript = await transcribeAsset(asset, audioIndex, controller);
+      const cues = transcript.segments.map((segment) => ({ startS: segment.start, endS: segment.end, text: segment.text }));
+      if (!cues.length) {
+        toast({ tone: 'warn', title: 'Nenhuma fala reconhecida', body: 'Tente outra faixa de áudio ou um modelo maior. O arquivo original não foi alterado.' });
+        return;
+      }
+      const r = pullClipSubtitles(project, targetVideoClips, new Map([[transcriptAssetId, cues]]), trackId, look);
+      if (!r.commands.length) {
+        toast({ tone: 'warn', title: 'As falas não caíram nos clipes', body: 'Confira se o trecho de origem dos clipes coincide com o episódio transcrito.' });
+        return;
+      }
+      session.history.transaction(`Transcrever falas (${r.count} linhas)`, r.commands);
+      const language = transcript.language ? ` Idioma detectado: ${transcript.language}${Math.round(transcript.language_probability * 100)}%.` : '';
+      toast({ tone: 'ok', title: `${r.count} falas adicionadas`, body: `Reveja e edite as legendas na trilha. A transcrição roda localmente.${language}` });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        toast({ tone: 'info', title: 'Transcrição cancelada', body: 'O áudio original não foi alterado.' });
+      } else {
+        toast({ tone: 'error', title: 'Não deu para transcrever', body: error instanceof Error ? error.message : String(error) });
+      }
+    } finally {
+      speechAbort.current = null;
+      setCancellingSpeech(false);
+      setSpeechProgress(null);
+    }
+  };
+
+  const transcribeAsset = async (asset: (typeof project.assets)[number], audioIndex: number, controller: AbortController) => {
+    const duration = (asset.probe?.durationUs ?? 0) / 1e6;
+    const cacheDir = joinPath(await platform!.cacheDir(), 'transcription');
+    await platform!.fs.mkdir(cacheDir);
+    const cacheKey = (asset.hash || asset.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const audioPath = joinPath(cacheDir, `${cacheKey}-stream-${audioIndex}.wav`);
+    let partialPath: string | null = null;
+    try {
+      if (!(await platform!.fs.exists(audioPath)) || (await platform!.fs.size(audioPath)) <= 44) {
         partialPath = `${audioPath}.partial`;
-        if (await platform.fs.exists(partialPath)) await platform.fs.remove(partialPath);
+        if (await platform!.fs.exists(partialPath)) await platform!.fs.remove(partialPath);
         let progressOutput = '';
-        const extracted = await platform.runner.run(
+        const extracted = await platform!.runner.run(
           'ffmpeg',
           [
             '-y', '-hide_banner', '-v', 'error', '-i', asset.path, '-map', `0:${audioIndex}`,
@@ -179,14 +226,15 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
         if (extracted.code !== 0) {
           throw new Error(`FFmpeg não conseguiu extrair a faixa ${audioIndex}: ${extracted.stderr.trim() || `código ${extracted.code}`}`);
         }
-        if (!(await platform.fs.exists(partialPath)) || (await platform.fs.size(partialPath)) <= 44) {
+        if (!(await platform!.fs.exists(partialPath)) || (await platform!.fs.size(partialPath)) <= 44) {
           throw new Error('FFmpeg não gerou um WAV válido para transcrição.');
         }
-        await platform.fs.rename(partialPath, audioPath);
+        await platform!.fs.rename(partialPath, audioPath);
+        partialPath = null;
       }
-      const connection = await platform.analyzer.start();
+      const connection = await platform!.analyzer.start();
       if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
-      const transcript = await platform.analyzer.transcribe(
+      return await platform!.analyzer.transcribe(
         connection,
         { path: audioPath, model: speechModel, ...(speechLanguage ? { language: speechLanguage } : {}) },
         {
@@ -200,31 +248,68 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
           },
         },
       );
-      const cues = transcript.segments.map((segment) => ({ startS: segment.start, endS: segment.end, text: segment.text }));
-      if (!cues.length) {
-        toast({ tone: 'warn', title: 'Nenhuma fala reconhecida', body: 'Tente outra faixa de áudio ou um modelo maior. O arquivo original não foi alterado.' });
-        return;
-      }
-      const r = pullClipSubtitles(project, targetVideoClips, new Map([[transcriptAssetId, cues]]), trackId, look);
-      if (!r.commands.length) {
-        toast({ tone: 'warn', title: 'As falas não caíram nos clipes', body: 'Confira se o trecho de origem dos clipes coincide com o episódio transcrito.' });
-        return;
-      }
-      session.history.transaction(`Transcrever falas (${r.count} linhas)`, r.commands);
-      const language = transcript.language ? ` Idioma detectado: ${transcript.language}${Math.round(transcript.language_probability * 100)}%.` : '';
-      toast({ tone: 'ok', title: `${r.count} falas adicionadas`, body: `Reveja e edite as legendas na trilha. A transcrição roda localmente.${language}` });
-    } catch (error) {
-      if (partialPath && (await platform.fs.exists(partialPath))) {
+    } finally {
+      if (partialPath && (await platform!.fs.exists(partialPath))) {
         try {
-          await platform.fs.remove(partialPath);
+          await platform!.fs.remove(partialPath);
         } catch (cleanupError) {
           console.warn('Não foi possível remover o áudio temporário da transcrição:', cleanupError);
         }
       }
+    }
+  };
+
+  const alignLyrics = async () => {
+    if (!platform || !untimedLyrics || !lyricsClip || !lyricsAsset || !musicTrack || transcribing) return;
+    if (lyricsAsset.kind !== 'audio' || lyricsAsset.status === 'missing') {
+      toast({ tone: 'error', title: 'Arquivo de música indisponível', body: 'Escolha um clipe ligado a um arquivo local de áudio presente no computador.' });
+      return;
+    }
+    const audioIndex = lyricsAudioIndex ?? lyricsAudioStreams[0]?.index;
+    if (audioIndex === undefined) {
+      toast({ tone: 'error', title: 'A música não tem faixa de áudio', body: 'Confira o arquivo selecionado ou escolha outro clipe de música.' });
+      return;
+    }
+    const controller = new AbortController();
+    speechAbort.current = controller;
+    setCancellingSpeech(false);
+    setSpeechProgress({ stage: 'extracting', progress: 0, duration: (lyricsAsset.probe?.durationUs ?? 0) / 1e6 });
+    try {
+      const transcript = await transcribeAsset(lyricsAsset, audioIndex, controller);
+      const words = transcript.segments.flatMap((segment) => segment.words ?? []);
+      const aligned = alignUntimedLyrics(untimedLyrics.text, words);
+      if (!aligned.cues.length) {
+        toast({ tone: 'warn', title: 'Nenhum verso alinhado', body: 'A transcrição não encontrou palavras suficientemente parecidas. Tente escolher outro idioma ou um modelo maior.' });
+        return;
+      }
+      const timelineCues = cuesForClip(lyricsClip, aligned.cues);
+      const outsideClip = aligned.cues.length - timelineCues.length;
+      const windowUs: [number, number] = [lyricsClip.timelineStartUs, clipEndUs(lyricsClip)];
+      const overlaps = clips.some((subtitle) => subtitle.timelineStartUs < windowUs[1] && clipEndUs(subtitle) > windowUs[0]);
+      if (overlaps && !(await platform.dialogs.confirm('Os versos alinhados substituem legendas existentes sobre este trecho da música. Continuar?', 'Substituir legendas no trecho?'))) return;
+      const commands = placeCues(project, timelineCues, {
+        trackId,
+        offsetUs: 0,
+        look: look === 'legenda' ? 'karaoke' : look,
+        windowUs,
+        label: untimedLyrics.name,
+      });
+      if (!commands.length) {
+        toast({ tone: 'warn', title: 'Nenhum verso caiu no clipe', body: 'Confira se o trecho de origem do clipe coincide com a parte da música que contém a letra.' });
+        return;
+      }
+      session.history.transaction(`Sincronizar letra (${aligned.matched} linhas)`, commands);
+      setUntimedLyrics(null);
+      toast({
+        tone: aligned.unmatched || aligned.uncertain ? 'warn' : 'ok',
+        title: `${commands.filter((command) => command.type === 'clip.add').length} versos sincronizados`,
+        body: `${aligned.uncertain} correspondências incertas, ${aligned.unmatched} versos não encontrados e ${outsideClip} fora do trecho do clipe. Revise os clipes de texto na timeline. A transcrição foi local.`,
+      });
+    } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        toast({ tone: 'info', title: 'Transcrição cancelada', body: 'O áudio original não foi alterado.' });
+        toast({ tone: 'info', title: 'Sincronização cancelada', body: 'A letra e o projeto não foram alterados.' });
       } else {
-        toast({ tone: 'error', title: 'Não deu para transcrever', body: error instanceof Error ? error.message : String(error) });
+        toast({ tone: 'error', title: 'Não deu para sincronizar a letra', body: error instanceof Error ? error.message : String(error) });
       }
     } finally {
       speechAbort.current = null;
@@ -304,13 +389,106 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
           </select>
         )}
         <div className="grid grid-cols-2 gap-1">
-          <Button size="sm" icon={<FileText size={13} />} onClick={importFile} title="SRT, ASS, VTT, LRC (letra) — entra no playhead; .lrc alinha com a música">
+          <Button size="sm" icon={<FileText size={13} />} onClick={importFile} title="SRT, ASS, VTT, LRC ou TXT sem tempos">
             Importar
           </Button>
           <Button size="sm" icon={<Film size={13} />} onClick={pull} title="Coloca as falas certas embaixo dos clipes de episódio (selecionados, ou todos)">
             Do episódio
           </Button>
         </div>
+        {untimedLyrics && (
+          <div className="space-y-1.5 rounded-control border border-violet/40 bg-violet/5 p-2">
+            <div className="flex items-center gap-1.5 text-2xs font-medium text-ink-soft">
+              <FileText size={13} />
+              Letra sem tempos: {untimedLyrics.name}
+            </div>
+            {musicClips.length > 0 ? (
+              <>
+                <select
+                  className="h-7 w-full rounded-control border border-line bg-base px-1 text-2xs"
+                  value={lyricsClip?.id ?? ''}
+                  onChange={(event) => {
+                    setLyricsClipId(event.target.value);
+                    setLyricsAudioIndex(null);
+                  }}
+                  aria-label="Clipe da música para sincronizar a letra"
+                  disabled={transcribing}
+                >
+                  {musicClips.map((clip) => {
+                    const asset = project.assets.find((item) => item.id === clip.assetId);
+                    return <option key={clip.id} value={clip.id}>{asset?.name ?? 'Música'} · {fmt(clip.timelineStartUs)}</option>;
+                  })}
+                </select>
+                <div className="flex gap-1">
+                  <select className="h-7 min-w-0 flex-1 rounded-control border border-line bg-base px-1 text-2xs" value={speechModel} onChange={(event) => setSpeechModel(event.target.value)} aria-label="Modelo de transcrição da letra" disabled={transcribing}>
+                    {['tiny', 'base', 'small', 'medium', 'large-v3'].map((model) => <option key={model} value={model}>{model}</option>)}
+                  </select>
+                  <select className="h-7 min-w-0 flex-1 rounded-control border border-line bg-base px-1 text-2xs" value={speechLanguage} onChange={(event) => setSpeechLanguage(event.target.value)} aria-label="Idioma cantado na música" disabled={transcribing}>
+                    <option value="">Detectar idioma</option>
+                    <option value="ja">Japonês</option>
+                    <option value="pt">Português</option>
+                    <option value="en">Inglês</option>
+                    <option value="es">Espanhol</option>
+                    <option value="fr">Francês</option>
+                  </select>
+                </div>
+                <div className="flex gap-1">
+                  {lyricsAudioStreams.length > 1 && (
+                    <select
+                      className="h-7 min-w-0 flex-1 rounded-control border border-line bg-base px-1 text-2xs"
+                      value={lyricsAudioIndex ?? lyricsAudioStreams[0]?.index ?? ''}
+                      onChange={(event) => setLyricsAudioIndex(event.target.value ? Number(event.target.value) : null)}
+                      aria-label="Faixa de áudio da música"
+                      disabled={transcribing}
+                    >
+                      {lyricsAudioStreams.map((stream) => (
+                        <option key={stream.index} value={stream.index}>{stream.title || stream.language || `Faixa ${stream.index + 1}`}</option>
+                      ))}
+                    </select>
+                  )}
+                  {transcribing ? (
+                    <Button size="sm" variant="ghost" onClick={cancelTranscription} disabled={cancellingSpeech} icon={<X size={13} />}>
+                      {cancellingSpeech ? 'Cancelando…' : 'Cancelar'}
+                    </Button>
+                  ) : (
+                    <Button size="sm" onClick={alignLyrics} disabled={!lyricsClip || !lyricsAsset || lyricsAudioStreams.length === 0} icon={<Mic size={13} />}>
+                      Sincronizar letra
+                    </Button>
+                  )}
+                </div>
+                <p className="text-2xs text-faint">
+                  O app transcreve a música localmente e compara a letra em ordem. Os versos incertos ou não encontrados são informados; revise os tempos antes de exportar.
+                </p>
+              </>
+            ) : (
+              <p className="text-2xs text-faint">Adicione um arquivo de música local à trilha Música para sincronizar esta letra.</p>
+            )}
+          </div>
+        )}
+        {speechProgress && (
+          <div className="space-y-0.5">
+            <div className="flex justify-between text-2xs text-muted">
+              <span>
+                {cancellingSpeech
+                  ? 'Cancelando transcrição…'
+                  : speechProgress.stage === 'extracting'
+                    ? 'Preparando áudio…'
+                    : speechProgress.stage === 'preparing'
+                      ? 'Carregando o modelo ou aguardando o primeiro segmento…'
+                      : 'Transcrevendo…'}
+              </span>
+              {speechProgress.duration > 0 && (
+                <span className="tnum">{Math.min(100, Math.round((speechProgress.progress / speechProgress.duration) * 100))}%</span>
+              )}
+            </div>
+            <progress
+              className="h-1 w-full accent-violet"
+              max={speechProgress.duration || 1}
+              value={Math.min(speechProgress.progress, speechProgress.duration || 0)}
+              aria-label={speechProgress.stage === 'extracting' ? 'Progresso da preparação do áudio' : 'Progresso da transcrição'}
+            />
+          </div>
+        )}
         {videoAssets.length > 0 && (
           <div className="space-y-1.5 rounded-control border border-line-soft p-2">
             <div className="flex items-center gap-1.5 text-2xs font-medium text-ink-soft">
@@ -363,30 +541,6 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
                 </Button>
               )}
             </div>
-            {speechProgress && (
-              <div className="space-y-0.5">
-                <div className="flex justify-between text-2xs text-muted">
-                  <span>
-                    {cancellingSpeech
-                      ? 'Cancelando transcrição…'
-                      : speechProgress.stage === 'extracting'
-                      ? 'Preparando áudio…'
-                      : speechProgress.stage === 'preparing'
-                        ? 'Carregando o modelo ou aguardando o primeiro segmento…'
-                        : 'Transcrevendo…'}
-                  </span>
-                  {speechProgress.duration > 0 && (
-                    <span className="tnum">{Math.min(100, Math.round((speechProgress.progress / speechProgress.duration) * 100))}%</span>
-                  )}
-                </div>
-                <progress
-                  className="h-1 w-full accent-violet"
-                  max={speechProgress.duration || 1}
-                  value={Math.min(speechProgress.progress, speechProgress.duration || 0)}
-                  aria-label={speechProgress.stage === 'extracting' ? 'Progresso da preparação do áudio' : 'Progresso da transcrição'}
-                />
-              </div>
-            )}
             <p className="text-2xs text-faint">
               Local, sem enviar áudio. A faixa escolhida é extraída para cache sem alterar o original; o progresso acompanha extração e segmentos. Cancelar tenta parar no limite do segmento e encerra o analisador após 5 s se necessário. Usa os clipes selecionados ou todos os clipes desse episódio.
             </p>

@@ -9,13 +9,14 @@
 - **Transcrição faster-whisper**: CPU/int8; o áudio original não é modificado nem enviado. O modelo escolhido pode ser baixado do Hugging Face na primeira execução (centenas de MB ou mais); esse download não tem progresso detalhado. A UI acompanha o áudio extraído e os segmentos reconhecidos; cancelar é cooperativo e, se o carregamento/inferência não parar em 5 s, encerra o processo do analisador para garantir o cancelamento. A faixa de áudio pode ser escolhida e é convertida em WAV mono no cache. O modelo small foi carregado offline e decodificou um M4A real de 223,4 s, mas o modo com VAD não encontrou falas; sem VAD, a confiança de idioma foi 0,492 e os segmentos não foram considerados confiáveis. Falta validar qualidade com uma amostra de diálogo do episódio. O ambiente Python normal de desenvolvimento não tem faster-whisper; o teste de compatibilidade foi isolado.
 - **Tamanho do instalador**: o build GPL completo do FFmpeg tem ~166 MB por executável (ffmpeg + ffprobe). Dá para reduzir com um build enxuto (só os codecs usados) numa fase de polimento.
 - **Correção de batidas (0.6.3)**: BPM ×2/÷2 e tap tempo corrigem um andamento constante e a fase da grade. Ainda não há mapa de tempo variável nem clique de metrônomo sincronizado; conferir/calibrar com músicas reais continua necessário.
+- **Alinhamento de letra (0.6.4)**: TXT sem tempo pode ser comparado à transcrição local da música e convertido em clipes de texto. O alinhador mantém a ordem e mostra quantas linhas foram incertas ou não encontradas, mas depende da precisão do reconhecimento de voz; canto, instrumental, backing vocals, versos repetidos e pronúncia podem gerar tempos incorretos. Não há avaliação humana com música real ainda: revise cada linha antes de exportar. O áudio fica local; o modelo Whisper pode precisar ser baixado na primeira utilização.
 
 ## Assistente, músicas e legendas (0.5.0)
 - O assistente não mostra a prévia "fantasma" na timeline nem o A/B lado a lado; o "Testar" aplica de verdade e "Voltar ao original" desfaz.
 - Sem modelo de IA, o chat só entende pedidos diretos (palavras-chave).
 - Semelhança entre personagens precisa de um modelo de visão e ainda não existe.
 - Músicas: YouTube/Spotify ainda não; pastas monitoradas ainda não. Emoção é só a que você marca.
-- Legendas: sem transcrição automática (Whisper) e sem tradução por enquanto; letra sem tempo (.txt) precisa ser posicionada à mão.
+- Legendas: transcrição local e tradução de clipes já existem; letra .txt pode ser sincronizada por aproximação com o Whisper local. A precisão com fala e canto reais ainda precisa de avaliação humana.
 
 ## 0.6.0
 - **Ajuste fino da sincronia**: a geração permite antecipar/atrasar batidas e drop em até 500 ms sem mover a música. Resolve deslocamento constante percebido pelo usuário, mas não corrige deriva causada por andamento variável; a calibração com músicas reais continua pendente.

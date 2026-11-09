@@ -117,3 +117,8 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - A biblioteca permite dobrar/dividir o BPM e reconstruir a grade por tap tempo; a correção é gravada atomicamente no cache da análise compartilhado pelo hash da faixa.
 - O BPM corrigido alimenta os filtros/resumos da biblioteca, as marcações da timeline e as próximas montagens sem editar o arquivo original nem duplicar dados por projeto.
 - O tap tempo usa os toques para estimar andamento e fase, com confiança manual máxima; continua sendo uma grade constante, não um mapa de andamento variável. Letras só vêm de arquivo fornecido pelo usuário.
+
+## 2026-11-09 · Alinhamento de letra sem timestamps
+- TXT fornecido pelo usuário é alinhado à transcrição local do arquivo de música com correspondência aproximada de tokens em ordem; para texto japonês, a comparação usa caracteres para não depender de segmentação por espaços.
+- Correspondências abaixo do limiar são omitidas; correspondências parciais são mantidas como incertas e reportadas para revisão. Os tempos passam pelo helper comum de mapeamento de cues, respeitando aparo e velocidade do clipe selecionado.
+- Motivo: dar sincronização revisável sem enviar áudio para serviços externos nem adicionar dependências. A transcrição de música cantada é inerentemente incerta e não é apresentada como sincronização garantida.
