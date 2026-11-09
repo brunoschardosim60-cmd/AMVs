@@ -16,7 +16,7 @@
 - A correção atualiza a grade completa, os compassos, o BPM exibido e o cache compartilhado da faixa, valendo também para montagens futuras. O áudio original não é alterado.
 - A correção manual é de andamento constante; músicas com mudanças de tempo ainda precisam de detecção por trechos.
 
-## Próxima camada — transcrição local com progresso e seleção de áudio (em andamento)
+## Transcrição local com progresso e seleção de áudio (0.6.3)
 
 - O painel de legendas permite escolher episódio, stream de áudio, modelo e idioma, e inserir as falas como clipes de texto editáveis nos trechos correspondentes do episódio. O stream escolhido é extraído para WAV mono no cache; o original nunca é alterado.
 - Se já houver legendas no mesmo trecho, o app pede confirmação antes de substituí-las.
