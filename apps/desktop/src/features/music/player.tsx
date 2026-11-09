@@ -10,6 +10,7 @@ interface PlayerState {
   queue: string[];
   playing: boolean;
   positionS: number;
+  positionTickAtMs: number;
   durationS: number;
   volume: number;
   /** Pedido de pulo (o elemento <audio> aplica). */
@@ -33,13 +34,14 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   queue: [],
   playing: false,
   positionS: 0,
+  positionTickAtMs: 0,
   durationS: 0,
   volume: 0.9,
   seekTo: null,
   loop: null,
   play(id, queue, atS) {
     useEditor.getState().setPlaying(false); // um áudio por vez
-    set({ trackId: id, queue: queue ?? get().queue, playing: true, seekTo: atS ?? 0, positionS: atS ?? 0, loop: null });
+    set({ trackId: id, queue: queue ?? get().queue, playing: true, seekTo: atS ?? 0, positionS: atS ?? 0, positionTickAtMs: performance.now(), loop: null });
     useApp.getState().library?.played(id);
   },
   toggle() {
@@ -66,7 +68,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     else get().seek(0);
   },
   seek(s) {
-    set({ seekTo: Math.max(0, s), positionS: Math.max(0, s) });
+    set({ seekTo: Math.max(0, s), positionS: Math.max(0, s), positionTickAtMs: performance.now() });
   },
   setLoop(l) {
     set({ loop: l });
@@ -79,7 +81,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     set({ trackId: null, playing: false, loop: null });
   },
   _tick(positionS, durationS) {
-    set({ positionS, durationS });
+    set({ positionS, durationS, positionTickAtMs: performance.now() });
   },
 }));
 

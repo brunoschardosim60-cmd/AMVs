@@ -37,6 +37,39 @@ export interface MusicAnalysis {
   loudnessDb: number;
 }
 
+/** Ajusta a grade detectada sem alterar a análise de energia e seções. */
+export function correctTempoOctave(analysis: MusicAnalysis, direction: 'double' | 'half'): MusicAnalysis {
+  const factor = direction === 'double' ? 2 : 0.5;
+  const bpm = analysis.bpm * factor;
+  if (bpm < 30 || bpm > 300) throw new RangeError('O BPM corrigido precisa ficar entre 30 e 300.');
+  const beats = direction === 'double'
+    ? analysis.beats.flatMap((beat, i, all) => i + 1 < all.length ? [beat, (beat + all[i + 1]!) / 2] : [beat])
+    : analysis.beats.filter((_, i) => i % 2 === 0);
+  const downbeats = direction === 'double'
+    ? analysis.downbeats
+    : analysis.downbeats.filter((_, i) => i % 2 === 0);
+  return { ...analysis, bpm, beats, downbeats, bpmConfidence: 1 };
+}
+
+/** Recria a grade de batidas com BPM e fase definidos pelo usuário. */
+export function setManualTempo(analysis: MusicAnalysis, bpm: number, anchorS: number): MusicAnalysis {
+  if (!Number.isFinite(bpm) || bpm < 30 || bpm > 300) throw new RangeError('O BPM precisa ficar entre 30 e 300.');
+  if (!Number.isFinite(anchorS) || anchorS < 0 || anchorS >= analysis.durationS) throw new RangeError('O ponto inicial da batida não é válido.');
+  const period = 60 / bpm;
+  const firstIndex = Math.ceil(-anchorS / period);
+  const beats: number[] = [];
+  const downbeats: number[] = [];
+  for (let i = firstIndex; ; i++) {
+    const time = anchorS + i * period;
+    if (time >= analysis.durationS) break;
+    if (time < 0) continue;
+    beats.push(time);
+    if (i % 4 === 0) downbeats.push(time);
+  }
+  if (!beats.length) throw new RangeError('Não foi possível gerar batidas para esse trecho.');
+  return { ...analysis, bpm, bpmConfidence: 1, beats, downbeats };
+}
+
 export interface OnsetEnvelope {
   env: Float32Array;
   /** Quadros por segundo do envelope. */

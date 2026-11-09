@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeMusic, fft } from '../src/index.js';
+import { analyzeMusic, correctTempoOctave, fft, setManualTempo } from '../src/index.js';
 import { synthForDebug } from './synth.js';
 
 const SR = 22050;
@@ -19,6 +19,31 @@ describe('fft', () => {
 });
 
 describe('análise de música', () => {
+  it('corrige BPM em dobro/metade mantendo coerentes as batidas e compassos', () => {
+    const analysis = analyzeMusic(synth(80, 20, 1000), SR);
+    const doubled = correctTempoOctave(analysis, 'double');
+    expect(doubled.bpm).toBe(analysis.bpm * 2);
+    expect(doubled.beats.length).toBeGreaterThan(analysis.beats.length * 1.8);
+    expect(doubled.downbeats).toEqual(analysis.downbeats);
+    const halved = correctTempoOctave(analysis, 'half');
+    expect(halved.bpm).toBe(analysis.bpm / 2);
+    expect(halved.beats.length).toBe(Math.ceil(analysis.beats.length / 2));
+    expect(halved.downbeats.length).toBe(Math.ceil(analysis.downbeats.length / 2));
+    expect(() => correctTempoOctave({ ...analysis, bpm: 200 }, 'double')).toThrow(RangeError);
+  });
+
+  it('reconstrói batidas e compassos pelo BPM e pela fase informados manualmente', () => {
+    const analysis = analyzeMusic(synth(80, 10, 1000), SR);
+    const corrected = setManualTempo(analysis, 120, 0.25);
+    expect(corrected.bpm).toBe(120);
+    expect(corrected.beats[0]).toBeCloseTo(0.25);
+    expect(corrected.beats[1]! - corrected.beats[0]!).toBeCloseTo(0.5);
+    expect(corrected.downbeats[1]! - corrected.downbeats[0]!).toBeCloseTo(2);
+    expect(corrected.bpmConfidence).toBe(1);
+    expect(() => setManualTempo(analysis, 0, 0)).toThrow(RangeError);
+    expect(() => setManualTempo(analysis, 120, analysis.durationS)).toThrow(RangeError);
+  });
+
   for (const bpm of [90, 128, 150, 174]) {
     it(`BPM ${bpm}`, () => {
       const a = analyzeMusic(synth(bpm, 40, 1000), SR);

@@ -1,4 +1,4 @@
-import { analyzeMusicFile, MUSIC_ANALYSIS_VERSION, type MusicAnalysis } from '@amv/analysis';
+import { analyzeMusicFile, correctTempoOctave, MUSIC_ANALYSIS_VERSION, setManualTempo, type MusicAnalysis } from '@amv/analysis';
 import { cachePaths, hashFile, JobQueue, joinPath, probeFile } from '@amv/media';
 import { AUDIO_EXTENSIONS, emptyLibrary, newTrack, parseLibrary, summarize, type Library, type LibraryTrack, type Playlist } from '@amv/music';
 import { newId } from '@amv/project';
@@ -158,6 +158,34 @@ export class MusicLibrary {
       }
     }
     return null;
+  }
+
+  async correctTempo(id: string, direction: 'double' | 'half'): Promise<void> {
+    const t = this.track(id);
+    if (!t) throw new Error('música não encontrada na biblioteca');
+    const current = await this.analysis(id);
+    if (!current) throw new Error('a análise da música ainda não está disponível');
+    await this.saveCorrectedAnalysis(t.hash, correctTempoOctave(current, direction));
+  }
+
+  async setManualTempo(id: string, bpm: number, anchorS: number): Promise<void> {
+    const t = this.track(id);
+    if (!t) throw new Error('música não encontrada na biblioteca');
+    const current = await this.analysis(id);
+    if (!current) throw new Error('a análise da música ainda não está disponível');
+    await this.saveCorrectedAnalysis(t.hash, setManualTempo(current, bpm, anchorS));
+  }
+
+  private async saveCorrectedAnalysis(hash: string, analysis: MusicAnalysis): Promise<void> {
+    const file = await this.cacheFile(hash);
+    const dir = file.slice(0, Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\')));
+    await this.platform.fs.mkdir(dir);
+    const tmp = `${file}.tmp`;
+    await this.platform.fs.writeFile(tmp, new TextEncoder().encode(JSON.stringify(analysis)));
+    await this.platform.fs.rename(tmp, file);
+    this.full.set(hash, analysis);
+    for (const t of this.lib.tracks) if (t.hash === hash) t.summary = summarize(analysis);
+    this.changed();
   }
 
   analyze(id: string): void {

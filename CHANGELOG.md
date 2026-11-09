@@ -1,5 +1,13 @@
 # Novidades
 
+## 0.6.3
+
+**Conferir e corrigir as batidas**
+- A biblioteca mostra as batidas sobre a curva de energia da música; a timeline do editor continua mostrando batidas, compassos e drops.
+- Corrija BPM detectado pela metade ou pelo dobro com ×2 / ÷2, ou toque quatro vezes junto com a música para definir BPM e fase.
+- A correção atualiza a grade completa, os compassos, o BPM exibido e o cache compartilhado da faixa, valendo também para montagens futuras. O áudio original não é alterado.
+- A correção manual é de andamento constante; músicas com mudanças de tempo ainda precisam de detecção por trechos.
+
 ## Próxima camada — transcrição local com progresso e seleção de áudio (em andamento)
 
 - O painel de legendas permite escolher episódio, stream de áudio, modelo e idioma, e inserir as falas como clipes de texto editáveis nos trechos correspondentes do episódio. O stream escolhido é extraído para WAV mono no cache; o original nunca é alterado.

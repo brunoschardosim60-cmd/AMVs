@@ -32,6 +32,11 @@ describe('biblioteca de músicas', () => {
     const click = lib.lib.tracks.find((t) => t.name === 'click.wav')!;
     expect(click.status).toBe('ok');
     expect(Math.abs(click.summary!.bpm - 120)).toBeLessThan(2);
+    await lib.correctTempo(click.id, 'double');
+    expect(Math.abs(click.summary!.bpm - 240)).toBeLessThan(4);
+    await lib.setManualTempo(click.id, 100, 0.2);
+    expect(Math.abs(click.summary!.bpm - 100)).toBeLessThan(0.01);
+    expect((await lib.analysis(click.id))!.beats[0]).toBeCloseTo(0.2);
     expect((await lib.add([join(root, 'musicas', 'click.wav')])).duplicates).toBe(1);
 
     const pl = lib.createPlaylist('Luta', [click.id]);
@@ -50,7 +55,10 @@ describe('biblioteca de músicas', () => {
     expect(lib2.track(click.id)!.status).toBe('ok');
     expect(lib2.track(click.id)!.path).toBe(join(root, 'click-movido.wav'));
     // análise completa vem do cache, sem rodar de novo
-    expect((await lib2.analysis(click.id))!.beats.length).toBeGreaterThan(5);
+    const restored = (await lib2.analysis(click.id))!;
+    expect(restored.beats.length).toBeGreaterThan(5);
+    expect(Math.abs(restored.bpm - 100)).toBeLessThan(0.01);
+    expect(restored.beats[0]).toBeCloseTo(0.2);
     expect(recommend(lib2.lib, 'luta').map((x) => x.track.id)).toContain(click.id);
   });
 });

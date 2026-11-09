@@ -369,6 +369,18 @@ export class ProjectSession {
     return v;
   }
 
+  /** Recarrega do cache uma correção de BPM feita na biblioteca global de músicas. */
+  async refreshMusicAnalysis(assetId: string): Promise<void> {
+    const asset = this.project.assets.find((a) => a.id === assetId && a.kind === 'audio');
+    if (!asset) throw new Error('faixa de música não encontrada no projeto');
+    const env = await this.mediaEnv();
+    const file = joinPath(cachePaths(env.cacheRoot, asset.hash, joinPath).dir, `analysis-${MUSIC_ANALYSIS_VERSION}.json`);
+    if (!(await this.platform.fs.exists(file))) throw new Error('análise da música não encontrada no cache');
+    const music = JSON.parse(new TextDecoder().decode(await this.platform.fs.readFile(file))) as MusicAnalysis;
+    this.runtime.set(assetId, { ...this.assetRuntime(assetId), music, analysis: 'done' });
+    this.emit();
+  }
+
   /** Cenas ainda sem rótulo (ou sem análise detalhada), priorizando lutas no modo padrão. */
   visionTargets(assetId: string, scope: VisionScope = 'fights', max = scope === 'all' ? Infinity : 120): { startS: number; endS: number; midS: number }[] {
     const ep = this.assetRuntime(assetId).episode;

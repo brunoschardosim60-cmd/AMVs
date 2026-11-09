@@ -23,7 +23,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Atalhos: Ctrl+N/O/S/Shift+S/I/Z/Shift+Z/Y; bloqueio de atalhos do navegador | feito | código; verificação manual pendente no Windows |
 | Aviso ao fechar com alterações não salvas | feito | código; verificação manual pendente no Windows |
 | Sidecar Python opcional (esqueleto: saúde, módulos, token) | feito | pytest |
-| CI no Windows: testes + instalador NSIS/MSI | feito | Release run 42538120990 verde no commit c988bac: smoke test do runtime, typecheck, testes com FFmpeg real e geração dos instaladores assinados. |
+| CI no Windows: testes + instalador NSIS/MSI | feito | Release v0.6.2, run 42542302583 verde: runtime Python, typecheck, suíte completa e instaladores assinados; Release e `latest.json` apontam para 0.6.2. |
 
 ### Pendente de verificação no Windows
 - Reprodução do proxy no painel de detalhes (WebView2). No Linux de desenvolvimento não dá para testar: o WebKitGTK não toca mídia pelo protocolo de arquivos do Tauri.
@@ -93,6 +93,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Filtros (BPM, intensidade, emoção, drop, não usadas), ordenação, favoritas, notas, tags, playlists | feito | testes + app real |
 | Detalhe com curva de energia e partes; comparar até 4; player no rodapé | feito | app real (no Linux o áudio não toca pelo protocolo de arquivos; testar no Windows) |
 | Recomendação por tema com justificativa; sugestão no Gerar meu AMV | feito | testes + app real |
+| Visualizar batidas e corrigir BPM (×2/÷2 ou tap tempo), salvando grade corrigida no cache compartilhado | feito | testes determinísticos de grade e persistência da biblioteca com FFmpeg empacotado; falta calibração manual com música real |
 | Pendente: YouTube/Spotify (spike), pastas monitoradas | pendente | — |
 
 ## Fase 8 — Legendas (primeira versão)
@@ -133,3 +134,4 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | 5. Assistente e interface | parcial; validar | Assistente flutuante, minimizável e propostas já existem; Gemini usa API oficial, chave no cofre, host fixo e opt-in de envio textual/quadros amostrados. A análise contextual usa BPM/seções/drop, letra fornecida e legendas/falas locais; o áudio/vídeo completos não saem do PC. Faltam teste de interação no WebView2 e validação com chave real. |
 | 6. YouTube/Spotify oficiais | avaliação técnica feita; spike pendente | YouTube Data API v3 + IFrame Player; Spotify Web API + Embed oficial. CSP atual bloqueia embeds e requer spike/allowlist mínima; OAuth Spotify em desktop requer PKCE. Sem extração/análise de áudio de streaming. |
 | 7. Aceitação ponta a ponta no Windows | pendente | Testar mídia real autorizada pelo usuário, modelos reais com opt-in, render, áudio, legendas, botões e atualização do instalador. |
+| 8. Revisão/correção de batidas | primeira entrega feita | A curva da biblioteca mostra batidas; ×2/÷2 e tap tempo persistem no cache por hash e atualizam montagens futuras. Mapa de andamento variável e metrônomo sincronizado ainda pendentes; calibração com música real pendente. |

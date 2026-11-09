@@ -11,8 +11,9 @@ import {
   type ThemeId,
   type TrackFilter,
 } from '@amv/music';
+import type { MusicAnalysis } from '@amv/analysis';
 import { AlertTriangle, FolderPlus, Heart, ListMusic, Loader2, Music2, Pause, Play, Plus, Search, Sparkles, Star, Trash2, Wand2 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApp, useLibraryVersion } from '../../store';
 import { Button } from '../../ui/controls';
 import { usePlayer } from './player';
@@ -295,7 +296,21 @@ export function MusicScreen() {
       {/* detalhe / comparação */}
       {(detail || compare.length >= 2) && (
         <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-l border-line bg-panel p-4">
-          {detail ? <TrackDetail t={detail} onUse={() => void useInProject(detail)} hasProject={!!session} /> : <Compare tracks={compare} />}
+          {detail ? <TrackDetail
+            t={detail}
+            onUse={() => void useInProject(detail)}
+            hasProject={!!session}
+            onCorrectTempo={async (direction) => {
+              await library.correctTempo(detail.id, direction);
+              const asset = session?.project.assets.find((item) => item.hash === detail.hash && item.kind === 'audio');
+              if (session && asset) await session.refreshMusicAnalysis(asset.id);
+            }}
+            onSetTempo={async (bpm, anchorS) => {
+              await library.setManualTempo(detail.id, bpm, anchorS);
+              const asset = session?.project.assets.find((item) => item.hash === detail.hash && item.kind === 'audio');
+              if (session && asset) await session.refreshMusicAnalysis(asset.id);
+            }}
+          /> : <Compare tracks={compare} />}
           {selected.length > 0 && lib.playlists.length > 0 && (
             <div className="mt-4 border-t border-line pt-3">
               <p className="mb-1 text-2xs font-semibold text-muted uppercase">Adicionar {selected.length > 1 ? `${selected.length} músicas` : ''} à playlist</p>
@@ -373,7 +388,7 @@ function RangeFilter({ label, min, max, value, onChange }: { label: string; min:
 }
 
 /** Curva de energia com seções e drop; clicar toca a partir dali. */
-function EnergyCurve({ t, height = 90, color = '#8b6cff' }: { t: LibraryTrack; height?: number; color?: string }) {
+function EnergyCurve({ t, height = 90, color = '#8b6cff', analysis }: { t: LibraryTrack; height?: number; color?: string; analysis?: MusicAnalysis | null }) {
   const player = usePlayer();
   const s = t.summary!;
   const W = 280;
@@ -393,6 +408,12 @@ function EnergyCurve({ t, height = 90, color = '#8b6cff' }: { t: LibraryTrack; h
       {s.sections.map((sec, i) => (
         <rect key={i} x={x(sec.startS)} y={0} width={Math.max(0, x(sec.endS) - x(sec.startS))} height={height} fill={i % 2 ? '#ffffff08' : 'transparent'} />
       ))}
+      {analysis && (() => {
+        const stride = Math.max(1, Math.ceil(analysis.beats.length / (W / 3)));
+        return analysis.beats.filter((_, i) => i % stride === 0).map((beat, i) => (
+          <line key={`beat-${i}`} x1={x(beat)} x2={x(beat)} y1={0} y2={height} stroke="#4fc3f7" strokeOpacity={0.22} />
+        ));
+      })()}
       <polyline points={`0,${height} ${pts} ${W},${height}`} fill={`${color}33`} stroke={color} strokeWidth={1.2} />
       {s.drops.map((d) => (
         <g key={d}>
@@ -407,11 +428,61 @@ function EnergyCurve({ t, height = 90, color = '#8b6cff' }: { t: LibraryTrack; h
   );
 }
 
-function TrackDetail({ t, onUse, hasProject }: { t: LibraryTrack; onUse: () => void; hasProject: boolean }) {
+function TrackDetail({ t, onUse, hasProject, onCorrectTempo, onSetTempo }: { t: LibraryTrack; onUse: () => void; hasProject: boolean; onCorrectTempo: (direction: 'double' | 'half') => Promise<void>; onSetTempo: (bpm: number, anchorS: number) => Promise<void> }) {
   const { library } = useApp();
+  const toast = useApp((s) => s.toast);
   const player = usePlayer();
   const [tag, setTag] = useState('');
+  const [analysis, setAnalysis] = useState<MusicAnalysis | null>(null);
+  const [tempoBusy, setTempoBusy] = useState(false);
+  const [taps, setTaps] = useState<{ atMs: number; positionS: number }[]>([]);
   const s = t.summary;
+  useEffect(() => {
+    let active = true;
+    setAnalysis(null);
+    setTaps([]);
+    void library?.analysis(t.id).then((value) => {
+      if (active) setAnalysis(value);
+    }).catch((error: unknown) => {
+      if (active) toast({ tone: 'error', title: 'Não foi possível carregar as batidas', body: (error as Error).message });
+    });
+    return () => { active = false; };
+  }, [library, t.id, library?.changes, toast]);
+
+  const tapTempo = async () => {
+    const now = performance.now();
+    const fresh = taps.filter((tap) => now - tap.atMs <= 2500);
+    const positionS = player.positionS + (player.trackId === t.id && player.playing ? Math.max(0, Math.min(0.35, (now - player.positionTickAtMs) / 1000)) : 0);
+    const next = [...fresh, { atMs: now, positionS }].slice(-5);
+    setTaps(next);
+    if (next.length < 4) return;
+    const intervals = next.slice(1).map((tap, i) => tap.atMs - next[i]!.atMs);
+    const bpm = 60_000 / (intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length);
+    setTempoBusy(true);
+    try {
+      await onSetTempo(bpm, next[0]!.positionS);
+      setTaps([]);
+      toast({ tone: 'ok', title: `Batidas ajustadas para ${Math.round(bpm)} BPM`, body: 'Correção salva e usada na timeline e nas próximas montagens.' });
+    } catch (error) {
+      toast({ tone: 'error', title: 'Não foi possível ajustar o BPM', body: (error as Error).message });
+    } finally {
+      setTempoBusy(false);
+    }
+  };
+
+  const correctOctave = async (direction: 'double' | 'half') => {
+    setTempoBusy(true);
+    try {
+      await onCorrectTempo(direction);
+      setTaps([]);
+      toast({ tone: 'ok', title: direction === 'double' ? 'BPM dobrado' : 'BPM dividido por 2', body: 'Grade de batidas atualizada e salva.' });
+    } catch (error) {
+      toast({ tone: 'error', title: 'Não foi possível corrigir o BPM', body: (error as Error).message });
+    } finally {
+      setTempoBusy(false);
+    }
+  };
+
   return (
     <div>
       <p className="text-[15px] font-semibold text-ink">{displayTitle(t)}</p>
@@ -419,12 +490,24 @@ function TrackDetail({ t, onUse, hasProject }: { t: LibraryTrack; onUse: () => v
       {s ? (
         <>
           <div className="mt-3">
-            <EnergyCurve t={t} />
+            <EnergyCurve t={t} analysis={analysis} />
           </div>
           <div className="mt-2 grid grid-cols-3 gap-2 text-center">
             <Stat label="BPM" value={`${Math.round(s.bpm)}`} hint={s.bpmConfidence < 0.4 ? 'incerto' : undefined} />
             <Stat label="Intensidade" value={`${Math.round(s.intensity)}`} />
             <Stat label="Drop" value={s.drops[0] !== undefined ? mmss(s.drops[0]) : '—'} />
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-1">
+            <button type="button" disabled={tempoBusy} className="rounded border border-line px-2 py-1 text-2xs hover:bg-raised disabled:opacity-50" onClick={() => void correctOctave('double')} aria-label="Dobrar BPM">
+              BPM ×2
+            </button>
+            <button type="button" disabled={tempoBusy} className="rounded border border-line px-2 py-1 text-2xs hover:bg-raised disabled:opacity-50" onClick={() => void correctOctave('half')} aria-label="Dividir BPM por 2">
+              BPM ÷2
+            </button>
+            <button type="button" disabled={tempoBusy || !analysis || analysis.beats.length === 0 || player.trackId !== t.id || !player.playing} className="rounded border border-line px-2 py-1 text-2xs hover:bg-raised disabled:opacity-50" onClick={() => void tapTempo()} title="Toque quatro vezes no ritmo da música enquanto ela toca">
+              {tempoBusy ? 'Salvando…' : `Tap tempo${taps.length ? ` ${taps.length}/4` : ''}`}
+            </button>
+            <span className="text-2xs text-faint">Linhas azuis = batidas · toque 4 vezes com a música tocando</span>
           </div>
           <p className="mt-3 mb-1 text-2xs font-semibold text-muted uppercase">Partes (clique para repetir)</p>
           <div className="flex flex-wrap gap-1">

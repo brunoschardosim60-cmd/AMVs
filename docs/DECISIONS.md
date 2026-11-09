@@ -112,3 +112,8 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - A visão v2 retorna categorias controladas de ação/emoção, intensidade visual e confiança. A geração usa a intensidade do modelo apenas com confiança ≥ 0,55, sempre combinada com a análise local; ação/emoção ajustam levemente a seleção conforme seção/estilo. Sem rótulo v2 confiável, o comportamento local anterior permanece.
 - Motivo: aproximar a seleção do significado e do arco visual sem entregar o projeto ao modelo, manter os cortes na grade determinística e limitar texto repetido/custo. O cache visual muda de v1 para v2 para forçar nova análise.
 - Segurança: letras e falas são tratadas como dados, não instruções ao modelo; chamadas externas seguem desligadas até consentimento explícito. Letras só vêm de arquivo fornecido pelo usuário.
+
+## 2026-11-08 · Correção manual da grade de batidas
+- A biblioteca permite dobrar/dividir o BPM e reconstruir a grade por tap tempo; a correção é gravada atomicamente no cache da análise compartilhado pelo hash da faixa.
+- O BPM corrigido alimenta os filtros/resumos da biblioteca, as marcações da timeline e as próximas montagens sem editar o arquivo original nem duplicar dados por projeto.
+- O tap tempo usa os toques para estimar andamento e fase, com confiança manual máxima; continua sendo uma grade constante, não um mapa de andamento variável. Letras só vêm de arquivo fornecido pelo usuário.
