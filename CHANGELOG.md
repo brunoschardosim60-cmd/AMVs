@@ -1,5 +1,13 @@
 # Novidades
 
+## 0.6.5
+
+**Frases e letras mais integradas ao AMV**
+- Falas longas entram em grupos curtos de palavras, com animação pop e saída em fade no mesmo ritmo da fala.
+- Letras aparecem em frases curtas, com destaque dourado e entrada pop; se o começo do verso estiver muito perto, o texto encaixa na batida mais próxima.
+- Trechos de letra são omitidos durante falas e impactos importantes, incluindo o drop, para não competir com o momento visual. O app informa quando isso acontecer.
+- Animações em textos curtos agora ajustam a duração ao tempo do clipe para aparecerem por completo.
+
 ## 0.6.4
 
 **Sincronizar letras sem tempo**

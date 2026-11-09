@@ -10,6 +10,7 @@
 - **Tamanho do instalador**: o build GPL completo do FFmpeg tem ~166 MB por executável (ffmpeg + ffprobe). Dá para reduzir com um build enxuto (só os codecs usados) numa fase de polimento.
 - **Correção de batidas (0.6.3)**: BPM ×2/÷2 e tap tempo corrigem um andamento constante e a fase da grade. Ainda não há mapa de tempo variável nem clique de metrônomo sincronizado; conferir/calibrar com músicas reais continua necessário.
 - **Alinhamento de letra (0.6.4)**: TXT sem tempo pode ser comparado à transcrição local da música e convertido em clipes de texto. O alinhador mantém a ordem e mostra quantas linhas foram incertas ou não encontradas, mas depende da precisão do reconhecimento de voz; canto, instrumental, backing vocals, versos repetidos e pronúncia podem gerar tempos incorretos. Não há avaliação humana com música real ainda: revise cada linha antes de exportar. O áudio fica local; o modelo Whisper pode precisar ser baixado na primeira utilização.
+- **Texto animado no AMV (0.6.5)**: falas/letras geradas usam pop/fade e evitam janelas de fala e impacto. O ritmo das palavras numa fala é estimado distribuindo grupos ao longo do segmento (não há timestamp por palavra do Whisper); letras só encaixam no beat se já estiverem próximas dele. A heurística pode omitir versos perto de impactos; confira o aviso e a timeline.
 
 ## Assistente, músicas e legendas (0.5.0)
 - O assistente não mostra a prévia "fantasma" na timeline nem o A/B lado a lado; o "Testar" aplica de verdade e "Voltar ao original" desfaz.

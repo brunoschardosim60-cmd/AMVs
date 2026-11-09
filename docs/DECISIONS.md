@@ -122,3 +122,8 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - TXT fornecido pelo usuário é alinhado à transcrição local do arquivo de música com correspondência aproximada de tokens em ordem; para texto japonês, a comparação usa caracteres para não depender de segmentação por espaços.
 - Correspondências abaixo do limiar são omitidas; correspondências parciais são mantidas como incertas e reportadas para revisão. Os tempos passam pelo helper comum de mapeamento de cues, respeitando aparo e velocidade do clipe selecionado.
 - Motivo: dar sincronização revisável sem enviar áudio para serviços externos nem adicionar dependências. A transcrição de música cantada é inerentemente incerta e não é apresentada como sincronização garantida.
+
+## 2026-11-09 · Tipografia animada consciente de impactos
+- Falas e letras geradas são exibidas em frases curtas com animação pop/fade, usando o mesmo renderizador de texto do preview e da exportação. Clipes curtos usam animações proporcionais à duração para a frase não ficar invisível.
+- Legendas de música podem aproximar o início à batida vizinha (até 100 ms), mas são omitidas quando cruzam falas ou janelas de impacto/drop; cada omissão aparece em `warnings`. A palavra da letra no drop recebe destaque dourado.
+- Motivo: integrar tipografia ao ritmo e preservar os instantes visuais importantes. Como não há timestamps por palavra da fala, a divisão de frases é proporcional à duração do segmento e continua aproximada.

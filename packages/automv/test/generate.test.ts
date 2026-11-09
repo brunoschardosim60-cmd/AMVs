@@ -142,7 +142,7 @@ describe('gerar AMV — hype', () => {
     expect(pic.assetId).toBe(voice[0]!.assetId);
     const m = on('Música')[0]!;
     expect(m.keyframes['audio.gainDb']!.map((k) => k.value)).toEqual([0, -16, -16, 0]);
-    expect(on('Legendas').map((c) => c.text?.text)).toContain('Eu não vou desistir!');
+    expect(on('Legendas').map((c) => c.text?.text).join(' ')).toContain('Eu não vou desistir!');
     expect(r.summary.speech).toBe('Eu não vou desistir!');
   });
 
@@ -191,6 +191,35 @@ describe('outros estilos', () => {
     // cada palavra começa exatamente num corte de vídeo
     const cuts = new Set(on('V1').map((c) => c.timelineStartUs));
     expect(wordClips.every((w) => cuts.has(w.timelineStartUs))).toBe(true);
+  });
+
+  it('legendas de música entram na batida próxima, são animadas e quebradas em frases curtas', () => {
+    const lyrics = [{ startS: 30.04, endS: 33.04, text: 'Here we are beneath the moonlight tonight' }];
+    const { on } = run({ style: 'hype', lyrics, useSpeech: false });
+    const captions = on('Legendas').filter((clip) => clip.reason === 'Letra da música');
+    expect(captions.length).toBeGreaterThan(1);
+    expect(captions[0]!.timelineStartUs).toBe(14 * S);
+    expect(captions.every((clip) => clip.text?.animationIn === 'pop' && clip.text.animationOut === 'fade')).toBe(true);
+    expect(captions.every((clip) => clip.text?.color === '#fff0a6')).toBe(true);
+    expect(captions.every((clip) => (clip.text?.text.split(' ').length ?? 0) <= 4)).toBe(true);
+  });
+
+  it('omite letra sobre o drop e realça a palavra que cai no impacto', () => {
+    const hype = run({
+      style: 'hype',
+      useSpeech: false,
+      lyrics: [{ startS: 39.5, endS: 40.5, text: 'lyrics over drop' }],
+    });
+    expect(hype.r.warnings.some((warning) => warning.includes('omitido'))).toBe(true);
+    expect(hype.on('Legendas').some((clip) => clip.reason === 'Letra da música')).toBe(false);
+
+    const lyrics = [{ startS: 40, endS: 42, text: 'rise above' }];
+    const letter = run({ style: 'letra', lyrics, useSpeech: false });
+    const dropWord = letter.on('Legendas').find((clip) => clip.timelineStartUs === 24 * S)!;
+    expect(dropWord.text?.text).toBe('RISE');
+    expect(dropWord.text?.color).toBe('#fff0a6');
+    expect(dropWord.text?.animationIn).toBe('pop');
+    expect(dropWord.text?.animationOut).toBe('fade');
   });
 
   it('discurso: as falas viram a espinha, com legenda em pedaços e preto e branco', () => {

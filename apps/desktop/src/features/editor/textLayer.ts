@@ -36,14 +36,16 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   const t = c.text;
   if (!t || !t.text.trim()) return;
   const dur = c.durationUs / 1e6;
+  const inDuration = Math.min(IN_S, dur * 0.4);
+  const outDuration = Math.min(OUT_S, dur * 0.25);
   let alpha = look.alpha;
   let scale = c.transform.scale;
   let dy = 0;
   let visibleChars = Infinity;
 
   const a = t.animationIn;
-  if (a && localS < IN_S) {
-    const x = Math.max(0, localS / IN_S);
+  if (a && localS < inDuration) {
+    const x = Math.max(0, localS / inDuration);
     if (a === 'fade') alpha *= x;
     if (a === 'pop') {
       scale *= 0.6 + 0.4 * backOut(x);
@@ -59,8 +61,8 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
     visibleChars = Math.floor((localS / span) * t.text.length);
   }
   const b = t.animationOut;
-  if (b && dur - localS < OUT_S) {
-    const x = Math.max(0, (dur - localS) / OUT_S);
+  if (b && dur - localS < outDuration) {
+    const x = Math.max(0, (dur - localS) / outDuration);
     if (b === 'fade') alpha *= x;
     if (b === 'slide') {
       dy += 30 * (1 - x);
