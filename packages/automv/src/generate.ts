@@ -154,7 +154,17 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
   }
   const beats = m.beats.map((t) => t + beatOffsetS).filter((t) => t >= a - 0.01 && t <= b + 0.01);
   const sectionEdges = m.sections.flatMap((section) => [section.startS, section.endS]).map((t) => t + beatOffsetS);
-  const grid = beats.length >= 4 ? beats : Array.from({ length: Math.ceil((b - a) / 0.5) + 1 }, (_, i) => a + beatOffsetS + i * 0.5);
+  const subdivision = Math.min(1, ...style.beatsPerCut);
+  const beatGrid = beats.length >= 4 ? beats : Array.from({ length: Math.ceil((b - a) / 0.5) + 1 }, (_, i) => a + beatOffsetS + i * 0.5);
+  const grid: number[] = [];
+  for (let i = 0; i < beatGrid.length; i++) {
+    const current = beatGrid[i]!;
+    const next = beatGrid[i + 1];
+    grid.push(current);
+    if (next !== undefined && subdivision < 1) {
+      for (let part = 1; part < Math.round(1 / subdivision); part++) grid.push(current + ((next - current) * part) / Math.round(1 / subdivision));
+    }
+  }
   const speedUp = [1.6, 1.25, 1, 0.75][intensity]!;
   const slots: Slot[] = [];
   let i = 0;
@@ -162,7 +172,7 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
   while (cur < b - 0.05) {
     const e = energyAt(m, cur);
     const lvl = e < 0.35 ? 0 : e < 0.7 ? 1 : 2;
-    let n = Math.max(1, Math.round(style.beatsPerCut[lvl]! * speedUp));
+    let n = Math.max(1, Math.round((style.beatsPerCut[lvl]! * speedUp) / subdivision));
     // não atravessa o drop: o drop sempre abre um corte novo
     let next = grid[Math.min(grid.length - 1, i + n)] ?? b;
     if (drop !== null && cur < drop - 0.05 && next > drop + 0.05) {
@@ -755,6 +765,15 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       if (shotLen < len * 0.6) continue;
       const sceneIntensity = effectiveShotIntensity(c.ep, c.shot);
       let score = 1 - Math.abs(target - sceneIntensity) * 1.6;
+      if (style.sceneBias === 'impact') {
+        if (c.shot.tags.includes('impacto')) score += 0.32;
+        if (c.shot.tags.includes('ação')) score += 0.12;
+        if (c.shot.tags.includes('calma')) score -= 0.22;
+      } else if (style.sceneBias === 'emotion') {
+        if (c.shot.tags.includes('calma')) score += 0.24;
+        const emotion = visionOf(c.ep, c.shot)?.emotion;
+        if (emotion === 'tristeza' || emotion === 'calma') score += 0.32;
+      }
       if (sl.isDrop && c.shot.tags.includes('impacto')) score += 0.5;
       if (sl.energy > 0.7 && c.shot.tags.includes('ação')) score += 0.15;
       if (sl.energy < 0.35 && c.shot.tags.includes('calma')) score += 0.2;

@@ -127,3 +127,8 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - Falas e letras geradas são exibidas em frases curtas com animação pop/fade, usando o mesmo renderizador de texto do preview e da exportação. Clipes curtos usam animações proporcionais à duração para a frase não ficar invisível.
 - Legendas de música podem aproximar o início à batida vizinha (até 100 ms), mas são omitidas quando cruzam falas ou janelas de impacto/drop; cada omissão aparece em `warnings`. A palavra da letra no drop recebe destaque dourado.
 - Motivo: integrar tipografia ao ritmo e preservar os instantes visuais importantes. Como não há timestamps por palavra da fala, a divisão de frases é proporcional à duração do segmento e continua aproximada.
+
+## 2026-11-09 · Modo Aberto e estilo de cortes rápidos
+- O modo Aberto recomenda estilo com uma pontuação local, reproduzível e explicável, usando análises já existentes de música, cenas, falas, letra e visão. Não faz uma chamada de IA nem afirma reconhecer conteúdo que não foi analisado.
+- Impacto rápido divide o intervalo entre batidas em meia batida para favorecer cortes curtos sincronizados; a seleção de cenas dá prioridade explícita a tags de ação/impacto. O mínimo de 0,2 s protege legibilidade e estabilidade.
+- A geração continua restrita aos episódios selecionados. A UI expõe Todos/Nenhum e contagens de cenas/lutas para deixar claro o conjunto analisado.

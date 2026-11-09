@@ -148,6 +148,7 @@ describe('sessão do projeto', () => {
     expect(await s.relocate(id, join(media, 'musica_capa.mp3'), true)).toBe('ok');
     expect(s.project.assets[0]!.name).toBe('musica_capa.mp3');
     await waitProcessed(s);
+    s.dispose();
   });
 
   it('erro de leitura de projeto é claro', async () => {

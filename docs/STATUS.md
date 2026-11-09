@@ -73,10 +73,11 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 ## Fase 5 — Gerar meu AMV (feita)
 | Item | Estado | Como foi verificado |
 |---|---|---|
-| 5 estilos das referências (Hype, Superação, Letra, Discurso, Emocional), intensidade, duração | feito | 13 testes em `packages/automv` |
+| Estilos Hype, Impacto rápido, Superação, Letra, Discurso e Emocional; modo Aberto com recomendação local | feito | testes determinísticos de recomendação e subdivisão da batida em `packages/automv` |
 | Cortes na batida, cena forte no drop, fala terminando no drop com ducking, legendas, efeitos, motivo em cada clipe | feito | testes + app real |
 | Poucas cenas: divide slots na batida, sem buraco | feito | teste + bug real achado no app |
 | Gerar outra versão, versões guardadas e voltar | feito | teste de sessão + app real |
+| Selecionar vários episódios e identificar cenas/lutas por episódio para a montagem | feito | geração usa os episódios marcados; seleção Todos/Nenhum e contagem de cenas/lutas visíveis |
 
 ## Fase 6 — Assistente (primeira versão)
 | Item | Estado | Como foi verificado |

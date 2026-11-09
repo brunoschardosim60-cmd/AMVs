@@ -1,5 +1,13 @@
 # Novidades
 
+## 0.6.7
+
+**Estilo aberto e montagem com mais ritmo**
+- O modo **Aberto · o app escolhe** recomenda um estilo a partir do BPM, energia, cenas, falas, letra sincronizada e rótulos visuais já analisados; mostra o motivo e não usa chamadas extras de IA.
+- Novo estilo **Impacto rápido**: cortes podem acontecer a cada meia batida e favorecem cenas marcadas como ação/impacto; em músicas lentas, o limite mínimo evita cortes quase invisíveis.
+- Seleção de episódios na geração ganhou ações Todos/Nenhum e mostra quantas cenas e lutas foram analisadas por episódio. A geração considera só os episódios marcados e procura as melhores lutas disponíveis.
+- O estilo Emocional dá mais peso a cenas calmas e, quando a análise visual opcional existe, a cenas rotuladas como tristeza/calma.
+
 ## 0.6.6
 
 **Revisar e montar cenas**

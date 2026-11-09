@@ -217,7 +217,7 @@ export const THEMES: Theme[] = [
 ];
 
 /** Estilo do Gerar meu AMV → tema de música. */
-export const STYLE_THEME: Record<string, ThemeId> = { hype: 'luta', superacao: 'motivacao', letra: 'letra', discurso: 'motivacao', emocional: 'emocional' };
+export const STYLE_THEME: Record<string, ThemeId> = { hype: 'luta', rapido: 'luta', superacao: 'motivacao', letra: 'letra', discurso: 'motivacao', emocional: 'emocional' };
 
 export interface Recommendation {
   track: LibraryTrack;

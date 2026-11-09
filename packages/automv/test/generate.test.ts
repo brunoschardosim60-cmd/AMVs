@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EpisodeAnalysis, MusicAnalysis, Shot } from '@amv/analysis';
 import { applyCommand, clipEndUs, createProject, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
-import { chooseMusicRange, generateAmv, makeSlots, styleDef, type EpisodeInput, type GenerateOptions, type MusicInput } from '../src/index.js';
+import { chooseMusicRange, generateAmv, makeSlots, recommendStyle, styleDef, type EpisodeInput, type GenerateOptions, type MusicInput } from '../src/index.js';
 
 const S = 1_000_000;
 
@@ -79,6 +79,25 @@ describe('trecho da música', () => {
     expect(avg(before)).toBeGreaterThan(avg(after) * 2);
     expect(slots.some((s) => s.isDrop && Math.abs(s.startS - 24) < 0.01)).toBe(true);
     expect(slots.every((s) => !(s.startS < 23.95 && s.endS > 24.05))).toBe(true);
+  });
+
+  it('estilo Impacto rápido corta em meia batida na parte mais intensa', () => {
+    const slots = makeSlots(music().analysis, [40, 50], styleDef('rapido'), 2);
+    expect(slots.length).toBeGreaterThan(18);
+    for (const slot of slots) if (slot.startS >= 2) expect(slot.endS - slot.startS).toBeCloseTo(0.25);
+  });
+
+  it('recomenda letra quando uma letra sincronizada foi carregada', () => {
+    expect(recommendStyle([episode('ep1', 60, 3)], music().analysis, true).style).toBe('letra');
+  });
+
+  it('recomenda cortes rápidos quando música e cenas têm energia de ação', () => {
+    const energetic = music().analysis;
+    energetic.bpm = 160;
+    energetic.intensity = 92;
+    const action = episode('ep1', 60, 31);
+    action.analysis.shots = action.analysis.shots.map((shot) => ({ ...shot, tags: ['ação', 'impacto'] }));
+    expect(recommendStyle([action], energetic, false).style).toBe('rapido');
   });
 
   it('ajuste fino desloca batidas e drop sem mover o áudio', () => {

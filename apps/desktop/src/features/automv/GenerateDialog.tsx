@@ -1,15 +1,15 @@
 import { impactScore, parseSubtitles, decodeSubtitleBytes, type Cue } from '@amv/analysis';
-import { chooseMusicRange, generateAmv, planFootage, STYLES, suggestMusicRanges, type EpisodeInput, type GenerateOptions, type StyleId } from '@amv/automv';
+import { chooseMusicRange, generateAmv, planFootage, recommendStyle, STYLES, suggestMusicRanges, type EpisodeInput, type GenerateOptions, type StyleId } from '@amv/automv';
 import { characterCounts, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
-import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2 } from 'lucide-react';
+import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2, Zap } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp, useLibraryVersion, useSessionVersion } from '../../store';
 import { displayTitle, recommend, STYLE_THEME } from '@amv/music';
 import { Button, Dialog } from '../../ui/controls';
 
-const ICONS: Record<StyleId, typeof Flame> = { hype: Flame, superacao: Sparkles, letra: Type, discurso: Mic, emocional: Heart };
+const ICONS: Record<StyleId, typeof Flame> = { hype: Flame, rapido: Zap, superacao: Sparkles, letra: Type, discurso: Mic, emocional: Heart };
 const INTENSITY = ['Suave', 'Moderada', 'Intensa', 'Extrema'] as const;
 const DURATIONS = [15, 30, 45, 60, 90];
 const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
@@ -24,6 +24,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
   const [musicId, setMusicId] = useState(musics[0]?.id ?? '');
   const [epIds, setEpIds] = useState<string[]>(episodes.map((e) => e.id));
   const [style, setStyle] = useState<StyleId>('hype');
+  const [styleMode, setStyleMode] = useState<'auto' | 'manual'>('auto');
   const [intensity, setIntensity] = useState<0 | 1 | 2 | 3>(2);
   const [duration, setDuration] = useState(30);
   const [voiceMoments, setVoiceMoments] = useState(1);
@@ -63,6 +64,11 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [ready.map((e) => e.id).join(','), session, visionVersion],
   );
+  const recommendation = useMemo(
+    () => (music && inputs.length ? recommendStyle(inputs.map((input) => ({ analysis: input.analysis, visual: input.vision })), music, !!lyrics?.cues.length) : null),
+    [inputs, music, lyrics],
+  );
+  const selectedStyle = styleMode === 'auto' ? recommendation?.style ?? style : style;
   const excluded = useMemo(() => episodes.filter((e) => !epIds.includes(e.id)).map((e) => e.id), [episodes, epIds]);
   const fights = useMemo(
     () =>
@@ -73,9 +79,9 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
     [inputs],
   );
   const plan = useMemo(
-    () => (music && inputs.length ? planFootage(inputs, { style, intensity, durationS: duration, focus, sequenceIds: seqIds, exclude: excluded, seed, characters }, music) : null),
+    () => (music && inputs.length ? planFootage(inputs, { style: selectedStyle, intensity, durationS: duration, focus, sequenceIds: seqIds, exclude: excluded, seed, characters }, music) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [music, inputs, style, intensity, duration, focus, seqIds.join(','), excluded.join(','), seed, characters.join(',')],
+    [music, inputs, selectedStyle, intensity, duration, focus, seqIds.join(','), excluded.join(','), seed, characters.join(',')],
   );
   const ranges = useMemo(() => (music && plan ? suggestMusicRanges(music, duration, plan.fit, 3) : []), [music, plan, duration]);
   // o trecho escolhido só vale enquanto ainda é uma das sugestões (mudou duração/estilo/luta: volta ao automático)
@@ -115,7 +121,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
       const musicRange = music ? chooseMusicRange(music, duration, chosenStart) : null;
       const context = music
         ? {
-            style: STYLES.find((item) => item.id === style)!.label,
+            style: STYLES.find((item) => item.id === selectedStyle)!.label,
             targetIntensity: INTENSITY[intensity],
             music: {
               bpm: music.bpm,
@@ -185,13 +191,13 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
           sfxError = (e as Error).message;
         }
       }
-      const opts: GenerateOptions = { useSfx, sfxAssets, style, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, beatOffsetMs, characters };
+      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, beatOffsetMs, characters };
       const m = musics.find((a) => a.id === musicId)!;
       const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
       if (sfxError) r.warnings.push(`Não consegui preparar os efeitos sonoros (${sfxError}): o vídeo saiu sem eles.`);
       // guarda o que estava antes: nada se perde
       await session.saveVersion(`Antes de gerar (${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})`);
-      const label = STYLES.find((s) => s.id === style)!.label;
+      const label = `${styleMode === 'auto' ? 'Aberto · ' : ''}${STYLES.find((s) => s.id === selectedStyle)!.label}`;
       session.history.transaction(`Gerar meu AMV — ${label}`, r.commands);
       setSeed(nextSeed);
       const s = r.summary;
@@ -206,7 +212,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
     }
   };
 
-  const recs = library ? recommend(library.lib, STYLE_THEME[style] ?? 'motivacao', { limit: 3, targetDurationS: duration }).filter((r) => !project.assets.some((a) => a.hash === r.track.hash)) : [];
+  const recs = library ? recommend(library.lib, STYLE_THEME[selectedStyle] ?? 'motivacao', { limit: 3, targetDurationS: duration }).filter((r) => !project.assets.some((a) => a.hash === r.track.hash)) : [];
   const addFromLibrary = async (trackId: string) => {
     const t = library!.track(trackId)!;
     await session.importFiles([t.path]);
@@ -259,7 +265,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
       width="w-[1020px]"
       footer={
         <>
-          <span className="mr-auto self-center text-xs text-muted">{waiting > 0 ? `Esperando a análise de ${waiting} arquivo(s)…` : `${sceneCount} cenas de ${ready.length} episódio(s)`}</span>
+          <span className="mr-auto self-center text-xs text-muted">{waiting > 0 ? `Esperando a análise de ${waiting} arquivo(s)…` : `${sceneCount} cenas analisadas · ${ready.length} episódio(s) selecionado(s)`}</span>
           <Button variant="ghost" onClick={onClose}>
             Cancelar
           </Button>
@@ -275,6 +281,27 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
         <div className="grid max-h-[calc(100vh-210px)] grid-cols-[1.05fr_1fr_0.8fr] gap-5 overflow-y-auto pr-1">
           <div>
             <p className="mb-2 text-xs font-medium text-ink-soft">Estilo</p>
+            <div className="mb-2 flex gap-1 rounded-control bg-base p-1">
+              <button type="button" aria-pressed={styleMode === 'auto'} onClick={() => setStyleMode('auto')} className={`flex-1 rounded-[4px] px-2 py-1.5 text-xs ${styleMode === 'auto' ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
+                Aberto · o app escolhe
+              </button>
+              <button type="button" aria-pressed={styleMode === 'manual'} onClick={() => setStyleMode('manual')} className={`flex-1 rounded-[4px] px-2 py-1.5 text-xs ${styleMode === 'manual' ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
+                Escolher estilo
+              </button>
+            </div>
+            {styleMode === 'auto' ? (
+              <div className="rounded-md border border-violet/40 bg-violet/10 p-3">
+                <div className="flex items-center gap-2">
+                  {(() => {
+                    const Icon = ICONS[selectedStyle];
+                    return <Icon size={17} className="shrink-0 text-violet-strong" />;
+                  })()}
+                  <span className="text-sm font-semibold text-ink">{STYLES.find((item) => item.id === selectedStyle)!.label}</span>
+                </div>
+                <p className="mt-1 text-xs text-ink-soft">{recommendation ? `Recomendado por: ${recommendation.reason}.` : 'Aguardando a análise da música e dos episódios selecionados.'}</p>
+                <p className="mt-1 text-2xs text-muted">A escolha usa BPM, energia, cenas, falas e letra carregada. É automática e local; você ainda pode mudar para um estilo manual.</p>
+              </div>
+            ) : (
             <div className="grid grid-cols-1 gap-1.5">
               {STYLES.map((s) => {
                 const Icon = ICONS[s.id];
@@ -295,6 +322,7 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
                 );
               })}
             </div>
+            )}
 
             <p className="mt-4 mb-2 text-xs font-medium text-ink-soft">Intensidade</p>
             <div className="flex gap-1 rounded-control bg-base p-1">
@@ -511,16 +539,24 @@ export function GenerateDialog({ session, onClose }: { session: ProjectSession; 
             </div>
 
             <div>
-              <p className="mb-1.5 text-xs font-medium text-ink-soft">Episódios</p>
+              <div className="mb-1 flex items-center justify-between">
+                <p className="text-xs font-medium text-ink-soft">Episódios</p>
+                <span className="flex gap-2">
+                  <button type="button" className="text-2xs text-muted underline hover:text-ink" onClick={() => setEpIds(episodes.map((episode) => episode.id))}>Todos</button>
+                  <button type="button" className="text-2xs text-muted underline hover:text-ink" onClick={() => setEpIds([])}>Nenhum</button>
+                </span>
+              </div>
+              <p className="mb-1.5 text-2xs text-muted">O app analisa os momentos dos episódios marcados e prioriza as melhores lutas; desmarque o que não quer misturar.</p>
               <ul className="max-h-32 space-y-1 overflow-y-auto">
                 {episodes.map((e) => {
                   const a = session.assetRuntime(e.id);
+                  const fightsInEpisode = a.episode?.sequences.filter((sequence) => sequence.kind === 'luta').length ?? 0;
                   return (
                     <li key={e.id}>
                       <label className="flex items-center gap-2 text-xs">
                         <input type="checkbox" className="accent-violet" checked={epIds.includes(e.id)} onChange={() => toggleEp(e.id)} />
                         <span className="min-w-0 flex-1 truncate">{e.name}</span>
-                        <span className="text-2xs text-faint">{a.episode ? `${a.episode.shots.length} cenas` : a.analysis === 'error' ? 'erro' : '…'}</span>
+                        <span className="shrink-0 text-2xs text-faint">{a.episode ? `${a.episode.shots.length} cenas · ${fightsInEpisode} lutas` : a.analysis === 'error' ? 'erro' : 'analisando'}</span>
                       </label>
                     </li>
                   );
