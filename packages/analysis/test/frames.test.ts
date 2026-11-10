@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NodeRunner } from '@amv/media/src/node';
-import { grabFrameJpeg, toBase64 } from '../src/index.js';
+import { grabFrameJpeg, grabFrameRgb, toBase64 } from '../src/index.js';
 
 let dir = '';
 let video = '';
@@ -48,6 +48,15 @@ describe('quadro do vídeo para a visão', () => {
     const [, , b3] = avgColor(await grabFrameJpeg(runner, video, 5));
     expect(b3).toBeGreaterThan(200);
     expect(b1).toBeLessThan(60);
+  });
+
+  it('extrai pixels RGB locais do vídeo codificado sem codificar em base64', async () => {
+    const rgb = await grabFrameRgb(runner, video, 3, 160);
+    expect(rgb).toMatchObject({ width: 160, height: 90 });
+    expect(rgb.data.length).toBe(160 * 90 * 3);
+    const center = (45 * 160 + 80) * 3;
+    expect(rgb.data[center + 1]).toBeGreaterThan(180);
+    expect(rgb.data[center]).toBeLessThan(80);
   });
 
   it('instante depois do fim: erro claro (não JPEG vazio)', async () => {

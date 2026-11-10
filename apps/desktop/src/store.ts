@@ -6,8 +6,9 @@ import type { Platform } from './platform/types';
 import { reportError } from './core/errors';
 import type { ProjectSettings } from '@amv/project';
 import { MusicLibrary } from './core/library';
+import { SoundLibraryStore } from './core/soundLibrary';
 
-export type Screen = 'home' | 'project' | 'music';
+export type Screen = 'home' | 'project' | 'scenes' | 'music' | 'sounds';
 
 export interface Toast {
   id: number;
@@ -19,6 +20,7 @@ export interface Toast {
 interface AppState {
   platform: Platform | null;
   library: MusicLibrary | null;
+  soundLibrary: SoundLibraryStore | null;
   screen: Screen;
   session: ProjectSession | null;
   recents: RecentProject[];
@@ -50,6 +52,7 @@ let toastSeq = 0;
 export const useApp = create<AppState>((set, get) => ({
   platform: null,
   library: null,
+  soundLibrary: null,
   screen: 'home',
   session: null,
   recents: [],
@@ -60,8 +63,10 @@ export const useApp = create<AppState>((set, get) => ({
 
   async init(platform) {
     const library = new MusicLibrary(platform);
-    set({ platform, library });
+    const soundLibrary = new SoundLibraryStore(platform);
+    set({ platform, library, soundLibrary });
     library.load().catch((e) => reportError('biblioteca', e));
+    soundLibrary.load().catch((e) => reportError('biblioteca de sons', e));
     await get().refreshRecents();
   },
 
@@ -83,7 +88,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   go(screen) {
-    if (screen === 'project' && !get().session) return;
+    if ((screen === 'project' || screen === 'scenes') && !get().session) return;
     set({ screen });
   },
 
@@ -140,7 +145,12 @@ export const useApp = create<AppState>((set, get) => ({
         'Fechar projeto',
       );
       if (!discard) return false;
-      await session.autosave().catch(() => undefined);
+      try {
+        await session.autosave();
+      } catch (error) {
+        get().toast({ tone: 'error', title: 'Não foi possível preservar as alterações', body: (error as Error).message });
+        return false;
+      }
     }
     session.dispose();
     set({ session: null, screen: 'home', selectedAssetId: null });
@@ -223,6 +233,13 @@ export function useSessionVersion(session: ProjectSession | null): number {
 
 /** Re-renderiza quando a biblioteca de músicas muda. */
 export function useLibraryVersion(library: MusicLibrary | null): number {
+  return useSyncExternalStore(
+    (cb) => (library ? library.subscribe(cb) : () => undefined),
+    () => (library ? library.changes : 0),
+  );
+}
+
+export function useSoundLibraryVersion(library: SoundLibraryStore | null): number {
   return useSyncExternalStore(
     (cb) => (library ? library.subscribe(cb) : () => undefined),
     () => (library ? library.changes : 0),

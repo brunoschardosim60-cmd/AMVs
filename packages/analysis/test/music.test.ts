@@ -103,6 +103,44 @@ describe('análise de música', () => {
     expect(a.intensity).toBeGreaterThan(0);
   });
 
+  it('produz eventos temporais com suporte explícito e bandas espectrais', () => {
+    const a = analyzeMusic(synth(120, 45, 24), SR);
+    const onsets = a.events!.filter((event) => event.type === 'onset');
+    const impacts = a.events!.filter((event) => event.type === 'impact');
+    const drop = a.events!.find((event) => event.type === 'drop');
+    expect(onsets.length).toBeGreaterThan(20);
+    expect(onsets.every((event) => event.confidence >= 0 && event.confidence <= 1 && event.band)).toBe(true);
+    expect(impacts.length).toBeGreaterThan(0);
+    expect(drop?.atS).toBeCloseTo(a.drops[0]!, 1);
+    expect(a.events!.some((event) => event.type === 'section-change')).toBe(true);
+  });
+
+  it('marca pausas longas, sem confundir uma subida abrupta com crescimento gradual', () => {
+    const silence = analyzeMusic(new Float32Array(SR * 6), SR);
+    expect(silence.events!.some((event) => event.type === 'pause' && (event.durationS ?? 0) >= 5)).toBe(true);
+    const abruptDrop = analyzeMusic(synth(120, 45, 24), SR);
+    expect(abruptDrop.events!.some((event) => event.type === 'growth' && event.atS > 18 && event.atS < 24)).toBe(false);
+
+    const ramp = new Float32Array(SR * 16);
+    for (let i = 0; i < ramp.length; i++) {
+      const time = i / SR;
+      const amplitude = time < 8 ? 0.02 + time * 0.07 : 0.58;
+      ramp[i] = amplitude * (Math.sin(2 * Math.PI * 220 * time) + 0.2 * Math.sin(2 * Math.PI * 330 * time));
+    }
+    const gradualBuild = analyzeMusic(ramp, SR);
+    expect(gradualBuild.events!.some((event) => event.type === 'growth' && event.atS < 8 && (event.durationS ?? 0) >= 3)).toBe(true);
+  });
+
+  it('detecta mudança de densidade entre pulsos lentos e rápidos', () => {
+    const slow = synth(80, 8, 99);
+    const fast = synth(160, 8, 99);
+    const combined = new Float32Array(slow.length + fast.length);
+    combined.set(slow);
+    combined.set(fast, slow.length);
+    const analysis = analyzeMusic(combined, SR);
+    expect(analysis.events!.some((event) => event.type === 'rhythm-change' && event.direction === 'faster' && event.atS >= 6 && event.atS <= 10)).toBe(true);
+  });
+
   it('silêncio não quebra', () => {
     const a = analyzeMusic(new Float32Array(SR * 5), SR);
     expect(a.durationS).toBeCloseTo(5);

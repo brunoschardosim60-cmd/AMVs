@@ -43,6 +43,84 @@ function migrateTextTypographyV1(raw: Record<string, unknown>): Record<string, u
 
 export const MIGRATIONS: Record<number, Migration> = {
   1: migrateTextTypographyV1,
+  2: (raw) => ({ ...raw, characterLibrary: Array.isArray(raw.characterLibrary) ? raw.characterLibrary : [] }),
+  3: (raw) => ({ ...raw, sceneAnnotations: Array.isArray(raw.sceneAnnotations) ? raw.sceneAnnotations : [] }),
+  4: (raw) => ({ ...raw, audioMix: raw.audioMix && typeof raw.audioMix === 'object' ? raw.audioMix : {} }),
+  5: (raw) => ({
+    ...raw,
+    assets: Array.isArray(raw.assets) ? raw.assets.map((asset) =>
+      asset && typeof asset === 'object' && !Array.isArray(asset)
+        ? { ...(asset as Record<string, unknown>), rights: (asset as Record<string, unknown>).rights ?? { origin: '', license: '', attribution: '' } }
+        : asset,
+    ) : [],
+  }),
+  6: (raw) => ({
+    ...raw,
+    clips: Array.isArray(raw.clips) ? raw.clips.map((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+      const clip = value as Record<string, unknown>;
+      if (!clip.text || typeof clip.text !== 'object' || Array.isArray(clip.text)) return clip;
+      const text = clip.text as Record<string, unknown>;
+      const textSource = text.textSource ?? (typeof text.original === 'string' && typeof text.lang === 'string' ? 'translation' : 'manual');
+      const translations = text.translations ?? (
+        textSource === 'translation' && typeof text.lang === 'string' && typeof text.text === 'string'
+          ? { [text.lang]: text.text }
+          : {}
+      );
+      const wordTimings = Array.isArray(text.wordTimings)
+        ? text.wordTimings.map((word) => word && typeof word === 'object' && !Array.isArray(word)
+          ? { ...(word as Record<string, unknown>), syllables: Array.isArray((word as Record<string, unknown>).syllables) ? (word as Record<string, unknown>).syllables : [] }
+          : word)
+        : [];
+      return {
+        ...clip,
+        text: {
+          fillStyle: 'solid',
+          gradientStartColor: '#ffde59',
+          gradientEndColor: '#ff4d9d',
+          glowColor: '#ffde59',
+          glowIntensity: 0,
+          wordAnimation: 'highlight',
+          syllableAnimation: false,
+          section: 'verse',
+          animationInUs: 300_000,
+          animationOutUs: 250_000,
+          textSource,
+          manualText: textSource === 'manual' && typeof text.text === 'string' ? text.text : null,
+          translations,
+          ...text,
+          wordTimings,
+        },
+      };
+    }) : [],
+  }),
+  7: (raw) => ({
+    ...raw,
+    clips: Array.isArray(raw.clips) ? raw.clips.map((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+      const clip = value as Record<string, unknown>;
+      return {
+        ...clip,
+        reverse: clip.reverse ?? false,
+        audio: clip.audio && typeof clip.audio === 'object' && !Array.isArray(clip.audio)
+          ? { pitchMode: 'preserve', ...(clip.audio as Record<string, unknown>) }
+          : { pitchMode: 'preserve' },
+      };
+    }) : [],
+  }),
+  8: (raw) => ({
+    ...raw,
+    clips: Array.isArray(raw.clips) ? raw.clips.map((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+      const clip = value as Record<string, unknown>;
+      return {
+        ...clip,
+        blendMode: clip.blendMode ?? 'normal',
+        mask: clip.mask ?? 'none',
+        groupId: clip.groupId ?? null,
+      };
+    }) : [],
+  }),
 };
 
 export type ParseResult =
@@ -87,13 +165,23 @@ export function checkIntegrity(project: Project): string[] {
   dup('trilha', project.tracks.map((t) => t.id));
   dup('clipe', project.clips.map((c) => c.id));
   dup('marcador', project.markers.map((m) => m.id));
+  dup('personagem', project.characterLibrary.map((character) => character.id));
+  dup('anotação de cena', project.sceneAnnotations.map((annotation) => `${annotation.assetId}@${annotation.sceneKey}`));
 
   const trackIds = new Set(project.tracks.map((t) => t.id));
   const assetIds = new Set(project.assets.map((a) => a.id));
+  for (const annotation of project.sceneAnnotations) {
+    if (!assetIds.has(annotation.assetId)) problems.push(`anotação de cena aponta para mídia inexistente ${annotation.assetId}`);
+  }
   for (const c of project.clips) {
     if (!trackIds.has(c.trackId)) problems.push(`clipe ${c.id} aponta para trilha inexistente ${c.trackId}`);
     if (c.assetId && !assetIds.has(c.assetId)) {
       problems.push(`clipe ${c.id} aponta para mídia inexistente ${c.assetId}`);
+    }
+    for (const character of project.characterLibrary) {
+      for (const evidence of character.evidence) {
+        if (!assetIds.has(evidence.assetId)) problems.push(`personagem ${character.id} aponta para mídia inexistente ${evidence.assetId}`);
+      }
     }
   }
   return problems;

@@ -67,6 +67,7 @@ describe('episódio', () => {
     expect(a.shots[1]!.motion).toBeGreaterThan(a.shots[0]!.motion + 0.3);
     expect(a.shots[1]!.tags).toContain('ação');
     expect(a.subtitles.map((c) => c.text)).toEqual(['Eu não vou desistir!', 'AAAAH!']);
+    expect(a.speech[0]!.language).toBe('por');
     expect(a.speech).toHaveLength(2);
     expect(a.speech[1]!.kind).toBe('grito');
     expect(a.speech[0]!.impact).toBeGreaterThan(0.5);
@@ -110,11 +111,18 @@ describe('legendas', () => {
       endS: 4.5,
       text: 'Eu vou vencer!',
       words: [
-        { text: 'Eu', startS: 2, endS: 2.3, source: 'ass', confidence: 1 },
-        { text: 'vou', startS: 2.3, endS: 2.5, source: 'ass', confidence: 1 },
-        { text: 'vencer', startS: 2.5, endS: 2.9, source: 'ass', confidence: 1 },
+        { text: 'Eu', startS: 2, endS: 2.3, source: 'ass', confidence: 1, syllables: [{ text: 'Eu', startS: 2, endS: 2.3, source: 'ass', confidence: 1 }] },
+        { text: 'vou', startS: 2.3, endS: 2.5, source: 'ass', confidence: 1, syllables: [{ text: 'vou', startS: 2.3, endS: 2.5, source: 'ass', confidence: 1 }] },
+        { text: 'vencer!', startS: 2.5, endS: 2.9, source: 'ass', confidence: 1, syllables: [{ text: 'vencer!', startS: 2.5, endS: 2.9, source: 'ass', confidence: 1 }] },
       ],
     }]);
+    const syllabicKaraoke = '[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:02.00,0:00:04.50,Karaoke,,0,0,0,,{\\k20}ven{\\k30}cer!\n';
+    expect(parseAss(syllabicKaraoke)[0]?.words).toEqual([
+      { text: 'vencer!', startS: 2, endS: 2.5, source: 'ass', confidence: 1, syllables: [
+        { text: 'ven', startS: 2, endS: 2.2, source: 'ass', confidence: 1 },
+        { text: 'cer!', startS: 2.2, endS: 2.5, source: 'ass', confidence: 1 },
+      ] },
+    ]);
     expect(parseLrc('[00:12.00]Primeira\n[00:15.50]Segunda', 20)).toEqual([
       { startS: 12, endS: 15.5, text: 'Primeira' },
       { startS: 15.5, endS: 20, text: 'Segunda' },

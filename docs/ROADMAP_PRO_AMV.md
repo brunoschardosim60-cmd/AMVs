@@ -57,6 +57,32 @@ Próximas lacunas do mesmo eixo, a tratar incrementalmente: seleção por faixa/
 - Cenas escuras não são descartadas apenas por terem a tag de baixa luminosidade; o brilho sozinho não é evidência de baixa relevância narrativa.
 - Cobertura automatizada inclui cortes de seção, drop, faixa parcial, deslocamento de batida, fase aplicada à seleção/justificativa e análise sem seções. A qualidade em anime real continua pendente de revisão humana.
 
+### Etapa inicial: pontuação contextual e continuidade
+
+- A pontuação do gerador foi separada em sinais musicais, ação, emoção, direção narrativa, transição, diversidade por episódio e correspondência opcional de letra. `scoring.ts` retorna a decomposição e evidências legíveis; o motivo do clipe selecionado guarda os sinais usados.
+- Os pesos iniciais preservam as regras existentes: encaixe musical `1 − 1,6 × diferença de intensidade`; bônus de contexto/tags e continuidade foram extraídos do seletor anterior, em vez de recalibrados por impressão. O resultado é ordenação heurística, não nota de qualidade.
+- Continuidade mantém as regras existentes de avanço dentro do episódio/luta e passa a acrescentar personagem em comum e relações preparação→combate / combate→reação somente quando ambas as etiquetas visuais têm confiança suficiente.
+- Emoção e ação visual granular sem confiança mínima (0,55) não alteram a escolha; rótulos antigos `fight` sem campo de confiança são aceitos para compatibilidade, e a justificativa não os apresenta como confiáveis.
+- Não existe dimensão de nitidez, enquadramento, direção de câmera ou paleta na análise local atual; a pontuação não finge medir qualidade técnica ou essas relações. Isso requer evolução separada do analisador e evidência validada.
+- O campo `Clip.confidence` deixa de receber o score de ordenação: score de ranking não é probabilidade nem confiança artística.
+- Esta etapa não implementa os perfis de três versões, geração em lote, eventização de preparação/impacto, crítico automático ou regeneração localizada. Permanecem etapas posteriores; não há controles falsos na interface.
+- O episódio e a música fornecidos foram analisados localmente pelo pipeline atual. Metadados e resultados reproduzíveis estão em [AMV_ENGINE_REFERENCE_VALIDATION.md](./AMV_ENGINE_REFERENCE_VALIDATION.md); a inspeção confirma sinais disponíveis, mas não equivale a uma comparação visual de montagens.
+
+### Incremento: visão local por cena e biblioteca de personagens
+
+- O botão de análise local extrai 1–3 quadros RGB reduzidos por plano, escolhidos conforme duração; cada plano é persistido individualmente no cache do hash do asset e não é reextraído quando já tem a versão local atual.
+- Os descritores registram luminância espacial, bordas por região, histogramas RGB, brilho, saturação, entropia, centro de massa visual, movimento entre quadros e deslocamento global estimado. Uma classificação heurística rotula ação, diálogo, contemplação, tensão, reação ou ambiente com confiança explícita.
+- Similaridade combina estrutura espacial, bordas, movimento e cor; apenas cor/intensidade não basta. Cenas visualmente repetitivas adjacentes recebem penalidade no ranking. As relações persistidas ficam limitadas às 300 cenas de maior intensidade analisadas por asset.
+- O modelo de visão pode complementar com nomes, enquadramento, rostos e expressões; o parser valida confiança e mantém a evidência local. A biblioteca canônica (nome, aliases, confiança e cenas-fonte) é armazenada no projeto v3 e seus aliases são usados pelo filtro do Auto AMV.
+- Limite deliberado: os descritores locais não identificam personagens, não detectam expressões/rostos e não compreendem a narrativa; rótulos de cena são heurísticas. Não havia FFmpeg no PATH para executar o teste de decodificação nesta máquina nem mídia real autorizada disponível nesta etapa, então a aceitação visual com anime e consistência de personagem continua pendente.
+
+### Incremento: planejamento global e direção editorial
+
+- A seleção agora compara caminhos completos com busca beam determinística e limitada (largura 32, até 16 ramificações por estado), considerando score musical/narrativo, continuidade e repetição.
+- Organização temporal oferece Cronológico, Narrativo e Livre. O modo Cronológico não retrocede; Narrativo avança dentro de cada episódio e limita saltos quando há slots suficientes; Livre admite saltos não lineares e os penaliza quando não há sinal visual/musical que os justifique.
+- Cinema, Balanceado e Hype alteram os parâmetros do estilo (duração mínima, batidas por corte, transição, prioridade de ação/emoção e intensidade de efeitos). Não são três montagens independentes nem adicionam efeitos.
+- Testes cobrem busca de caminho, regras temporais, esgotamento/repetição, match de letra e diferenças paramétricas das direções. Ainda falta revisão audiovisual humana em mídia autorizada; análise atual não identifica de forma confiável a identidade ou a história dos personagens.
+
 ## Auditoria funcional resumida
 
 | Capacidade | Situação observada no código | Próxima lacuna relevante |
@@ -65,7 +91,7 @@ Próximas lacunas do mesmo eixo, a tratar incrementalmente: seleção por faixa/
 | Composição e keyframes | Composição de trilhas e animação de posição X/Y com easing chegam ao preview e ao FFmpeg; texto usa o renderer compartilhado. | Keyframes para escala/rotação/opacidade e avaliação visual automatizada do preview no Windows. |
 | Efeitos | Efeitos existentes e preset de glitch reutilizam specs/instâncias do editor. | Motion blur, LUTs e speed ramp não estão implementados. |
 | Áudio e sincronia | BPM, batidas, seções, energia, drops, diálogo, ducking e SFX já integram a montagem; offset constante pode ser ajustado. | Validar músicas reais e andamento variável; seleção da faixa de áudio no preview ainda difere da exportação. |
-| Direção musical | Esta entrega acrescenta papéis narrativos derivados de rótulos existentes e usa-os no score/justificativas. | Avaliar resultado em conteúdo autorizado; planejamento não substitui análise semântica nem revisão do usuário. |
+| Direção musical | Mapa local m4 de energia/eventos com suporte heurístico; perfis por estilo modulam densidade, crescimento, pausas, preparação do drop e encerramento. UI mostra o trecho e mantém ajuste manual. | Validar em músicas reais autorizadas, andamento variável, métrica diferente de 4/4 e escuta humana; não identifica instrumentos nem separa vocal. |
 | Isolamento de personagens | SAM2 permanece protótipo reprovado como recortador confiável e não é empacotado no runtime de produção. | Não retomar integração como recurso principal sem nova evidência de qualidade; interface e timeline não oferecem recorte. |
 
 ## Spike de recorte temporal: SAM 2.1 selecionado para teste, não para produção

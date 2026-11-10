@@ -6,3 +6,4 @@ export * from './extract.js';
 export * from './audio-lang.js';
 export * from './frames.js';
 export * from './vision.js';
+export * from './local-vision.js';

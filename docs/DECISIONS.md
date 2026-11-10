@@ -36,6 +36,14 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - Motivo: os mesmos testes rodam com FFmpeg real em Node; a interface só assina mudanças.
 - Mudanças do sistema (mídia ficou pronta, arquivo não encontrado) usam `applySystem`: não entram no undo e não marcam o projeto como modificado.
 
+## Gerenciamento local de projetos e salvamento transacional
+- O `.amvproj` continua sendo a fonte completa do projeto; versões e backups armazenam snapshots validados pelo mesmo schema/migrações. Backups locais rotativos (10 mais recentes) são criados antes de sobrescrever um projeto salvo.
+- Escritas usam temporário e troca por rename no mesmo diretório, com arquivo de rollback recuperável no próximo open. Se o processo cair antes da promoção, o arquivo salvo é restaurado; se cair depois da promoção, a versão completa permanece. ENOSPC/falha antes da promoção não altera o arquivo anterior.
+- Salvar/autosalvar é serializado por sessão e associa o estado salvo à revisão capturada, para uma edição concorrente não ser marcada incorretamente como salva. Falha de autosave impede fechar o projeto e é mostrada ao usuário.
+- Restauração de versão/backup substitui o snapshot completo por um único comando inversível, sem descartar a pilha undo/redo; checks de dependência relacionam mídias, clipes, trilhas e snapshots.
+- Duplicação cria novo id e remapeia caminhos dos snapshots/backups, preservando timeline e configurações; arquivamento copia e valida o conjunto local antes de remover a localização ativa. Assets originais nunca são copiados ou movidos.
+- Motivo: recuperar projetos após encerramento/falha de disco sem depender de serviço externo e sem fazer operações destrutivas antes de haver uma cópia consistente no destino.
+
 ## 2026-11-06 · FFmpeg GPL empacotado — ATENÇÃO para distribuição
 - O build do BtbN usado no Windows é **GPL** (inclui libx264/libx265, necessários para proxies e exportação H.264/H.265).
 - Distribuir o instalador com esse FFmpeg exige cumprir a GPL (oferecer o código-fonte do FFmpeg e respeitar a licença na distribuição). Para uso pessoal não há problema.
@@ -83,6 +91,11 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - O código SAM2 e o extra Python `segmentation` continuam disponíveis para desenvolvimento, mas o empacotador de produção exclui SAM2, PyTorch, TorchVision, ONNX Runtime e checkpoints.
 - Motivo: o candidato foi reprovado visualmente como recortador confiável; carregar o runtime e pesos no instalador não entrega valor de usuário e aumenta muito o pacote. Nenhum ambiente, checkpoint ou arquivo existente foi apagado.
 - Reavaliar somente se um recortador passar validação visual e temporal; medir o bundle atualizado antes de quantificar a economia.
+
+## 2026-11-09 · Score de seleção não é confiança
+- A montagem mantém sinais de ranking separados (música, ação, emoção, narrativa, transição, diversidade e letra) e não grava sua soma como `Clip.confidence`.
+- A visão opcional usa limiar de confiança 0,55 para emoção, ação fina, personagens em continuidade e sequência preparação/combate/reação. O booleano legado `fight` sem confidence continua válido, mas a justificativa explicita que a confiança não foi registrada.
+- Motivo: preservar os dados disponíveis sem transformar uma soma heurística de preferências em probabilidade. A análise não pontua atributos técnicos que ainda não calcula.
 
 ## 2026-11-08 · Escopo da análise visual
 - A visão oferece o modo rápido (prioriza lutas, 1 quadro por cena, até 120 cenas) e o detalhado (todas as cenas úteis, 3 quadros por cena, sem limite fixo).
@@ -195,3 +208,103 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - A 640, o primeiro quadro teve uma máscara visível mas com vazamentos; o segundo foi fraco, quadros de ação 02/03 ficaram praticamente vazios e o 04 não gerou região opaca (`max alpha 0.402`). Decisão: **recorte automático SkyTNT em espera; insuficiente para uso confiável neste material.** Não executar tracking, benchmark de 72 quadros nem instalar CUTIE.
 - Inferência média PyTorch: `0.748 s/quadro` a 640 e `1.878 s/quadro` a 1024, seis threads. Sem ground truth, a avaliação de qualidade é visual e limitada aos cinco quadros.
 - Resultados/PNG/JSON e checkpoint permanecem fora do Git. Nenhuma alteração na interface, timeline, instalador ou dependências do produto.
+
+## 2026-11-09 · Resiliência de idioma, cronologia e Gemini
+- Títulos legíveis de streams prevalecem sobre tags de idioma genéricas ou conflitantes; o cache de análise do episódio foi versionado para e3 para invalidar resultados sem metadado de idioma.
+- Falas e legendas embutidas devem corresponder ao idioma do áudio selecionado. Se o pedido de dublagem não puder ser identificado, a montagem não escolhe outra faixa silenciosamente.
+- A montagem comum percorre a origem em ordem; saltos para cenas futuras são limitados e usados para compatibilidade em trechos intensos/drops. No foco de luta, a seleção permanece nas lutas escolhidas.
+- Chamadas transitórias ao Gemini expiram em 45 s, tentam novamente até três vezes e abrem circuit breaker por 30 s após falhas repetidas. O fallback local é explicitamente identificado e não mascara erros de configuração/chave.
+- Motivo: evitar incompatibilidade de idioma, regressões de continuidade e travamento da experiência quando o provedor está temporariamente indisponível. Validação real de áudio/vídeo e de chave Gemini continua pendente.
+
+## 2026-11-09 · Planejamento global e direção editorial da montagem
+- A seleção de cenas usa busca beam determinística e limitada para comparar caminhos de slots completos, em vez de aceitar apenas a melhor cena local de cada corte.
+- Cronológico bloqueia retrocesso; Narrativo acompanha a progressão por episódio/sequência e usa uma janela de candidatos quando há duração suficiente; Livre aceita saltos, mas pontua e justifica os sem sinal musical/visual.
+- Cinema, Balanceado e Hype são transformações dos parâmetros do estilo escolhido, não geradores separados nem promessa de qualidade. Não criam efeitos novos.
+- Motivo: melhorar coerência temporal e deixar o usuário controlar a intenção de montagem sem introduzir um modelo ou alegar entendimento semântico. Os limites e a validação pendente estão em `docs/LIMITATIONS.md`.
+
+## 2026-11-10 · Inteligência visual local e biblioteca por projeto
+- A análise visual local é opcional por clique, não envia quadros e usa amostras reduzidas com cache por hash de asset e chave de cena. O descritor combina grade espacial, bordas, histograma, composição e diferença/deslocamento temporal; a seleção do Auto AMV usa a categoria heurística e reduz repetição visual de cenas adjacentes.
+- Rostos, expressões e enquadramentos semânticos permanecem um complemento opcional do provedor de visão; ausência/baixa confiança não é convertida em fato. A análise local não identifica pessoas.
+- A biblioteca editável e aliases pertencem ao projeto, preservam evidências de cena e usam a mesma resolução de alias no filtro do Auto AMV. Schema v3 migra v2 criando uma biblioteca vazia.
+- Motivo: dar sinais visuais locais reais à montagem e permitir que o usuário consolide nomes sem obrigar Gemini nem confundir semelhança de pixels com identidade. Sem dependências novas; limites e validação real pendente em `docs/LIMITATIONS.md`.
+
+## 2026-11-10 · Fluxo óptico local e linguagem de câmera
+- A análise por cena usa correspondência esparsa de patches em uma grade 32×18, com poucos quadros RGB já reduzidos pelo FFmpeg. O cache local sobe para v2 e a seleção incremental reprocessa somente cenas sem descritores desta versão.
+- Cada intervalo armazena movimento aparente, direção, velocidade, sinal de escala, confiança, movimento localizado e reframe abrupto. O score de montagem só considera transições entre eventos com confiança ≥0,6; favorece direção compatível e permite contraste em drops/mudanças de energia.
+- Pan, zoom e travelling são sinais visuais aparentes, não prova da causa física. Uma sequência 2D sozinha não separa zoom da lente de aproximação do objeto nem determina a identidade do elemento em movimento; por isso a interface diz “aproximação aparente” e “movimento localizado”.
+- Motivo: evitar cortes que contrariem movimentos observáveis sem rotular cenas ambíguas como certezas. Implementação CPU, sem CUDA, dependências ou quadros enviados a serviços externos.
+
+## 2026-11-10 · Diretor Musical local
+- A análise musical muda para m4 para invalidar cache antigo e persistir eventos locais derivados do envelope espectral e da curva de energia. Tipos cobertos: ataque, acento grave, crescimento gradual, pausa, drop, transição de seção e mudança de densidade rítmica.
+- `confidence` é suporte heurístico do sinal, não probabilidade calibrada; a banda espectral dominante não identifica instrumento. Sem separação vocal, a análise não afirma que um evento é instrumental nem detecta fontes específicas.
+- O Auto AMV usa perfis musicais por estilo para variar cadência, densidade, crescimento, pausas, preparação de drop e encerramento. Ataques só viram cortes quando o perfil e o suporte do evento justificam; beats e seção continuam sendo referências, não obrigação de cortar em cada batida.
+- O mapa apresentado no diálogo usa a faixa e o trecho selecionados. O BPM de baixa confiança gera aviso, e o ajuste manual existente permanece disponível.
+- Motivo: transformar evidência temporal do áudio em decisões editáveis sem atribuir precisão ou semântica não demonstrada. Os testes sintéticos confirmam os sinais e os cortes; avaliação musical humana permanece pendente.
+
+## 2026-11-10 · Color grading por cena e continuidade
+- O color grade permanece como efeito editável no clipe, sem alterar os originais. A mesma função transforma pixels para o preview e gera uma LUT `.cube` 17³ temporária para `lut3d` no FFmpeg; arquivos LUT gerados são descartados junto com o diretório temporário da exportação.
+- A aplicação em sequência é um único grupo de comandos undoável. Na regeneração, os efeitos de cor de clipes de IA são reaproveitados por posição na timeline.
+- A compensação automática é conservadora: exposição limitada a ±0,3 EV usa luminância por plano; temperatura/matiz só usam histogramas RGB da análise visual local, limitados a ±8. Não há correção automática quando faltam amostras locais.
+- Não usar CUDA nem dependência proprietária. O preview tenta WebGL2 e cai para Canvas2D/CPU quando indisponível; a exportação usa FFmpeg CPU. Suporte a `.cube` externo e benchmark com RX 580 ficam pendentes até haver validação visual e de desempenho.
+- Motivo: habilitar ajustes editáveis e repetíveis sem homogeneizar deliberadamente as cenas ou declarar equivalência não medida. O filtro real de exportação ainda precisa de teste com FFmpeg disponível e material autorizado.
+
+## 2026-11-10 · Avaliação audiovisual baseada em evidências
+- O avaliador é lógica pura de `@amv/automv`, alimentada somente por análises em memória e pelo projeto aberto. Abrir o relatório não dispara análise, rede nem processamento pesado.
+- Não calcular nota agregada. Cada achado mantém intervalo em microssegundos, gravidade, evidências, justificativa, sugestão e clipes envolvidos; as dimensões sem dados ou com cobertura limitada são marcadas na cobertura.
+- Não interpretar todo corte como obrigação de cair numa batida: a verificação de sincronia compara somente cortes cuja justificativa declara intenção musical e só com BPM de confiança suficiente.
+- Correções automáticas ficam limitadas a mudanças locais com segurança verificável e entram como uma transação undoável. A primeira correção é encurtar a legenda anterior para remover colisão temporal.
+- Motivo: oferecer revisão reproduzível e acionável sem confundir heurísticas com julgamento humano nem fazer o relatório afirmar medições que exigiriam renderização.
+
+## 2026-11-10 · Regeneração localizada não destrutiva
+- A regeneração localizada é um fluxo separado da geração integral. A proposta é preparada em memória e só substitui IDs de clipes selecionados na trilha-alvo; clipes não selecionados são âncoras e impedem a inserção sobre eles.
+- O candidato é cortado nos limites livres e nos pontos de transição original. Efeitos, color grade, keyframes, transformações e transições são transportados quando os tempos se sobrepõem. Áudio, textos/legendas e demais trilhas não são reescritos pelo gerador localizado.
+- Confirmar salva um snapshot do projeto original e inclui a referência à versão e os comandos da regeneração no mesmo grupo da história. Se um comando falhar, o histórico não avança; se a base do projeto mudou durante a geração, a proposta é recusada e precisa ser refeita.
+- Motivo: permitir experimentar melhorias sem reconstruir o projeto inteiro, mantendo uma restauração explícita e sem perder a edição fora do intervalo escolhido.
+
+## 2026-11-10 · Transições escolhidas por evidência do par de cenas
+- A montagem decide a cada corte com sinais já disponíveis: movimento local e confiança, alinhamento de direção, personagem/ação visual, semelhança de composição/enquadramento, luminosidade, energia/drop, direção editorial e duração. Sem confiança ou suporte suficiente, conserva corte seco.
+- `match_cut` e `cut_on_action` são anotações de intenção editorial que continuam sendo cortes secos; não criam rampas nem underlay. Whip pan sincroniza saída e entrada no mesmo intervalo.
+- Preview e FFmpeg usam a mesma curva (linear/ease-in/ease-out/ease-in-out) e intensidade; o render expressa rampas por alfa temporal e desloca/desfoca as duas camadas do whip pan. Render sintético real com FFmpeg confirmou dissolve e whip pan; validação com mídia autorizada continua pendente.
+- Motivo: evitar transições aleatórias ou puramente por estilo e não prometer paridade audiovisual além do que foi executado.
+
+## 2026-11-10 · Laboratório de Cenas e anotações persistentes
+- O Laboratório é uma tela do projeto que consome episódio, visão e miniaturas já guardados no cache por asset; não reanalisa ao abrir ou filtrar. Prévia usa o proxy e o timestamp da origem, nunca o arquivo original diretamente.
+- Favoritos, marcações, tags pessoais e exclusões do Auto AMV são `SceneAnnotation`s no projeto. A migração v3→v4 cria a coleção; mutações usam `Command` com inverso para Undo/Redo. Ao remover um asset, anotações são removidas e restauradas junto com o asset no inverso.
+- A exclusão automática usa a chave estável de cena (`assetId@shotKey`) no gerador. A busca semântica manda somente o texto da consulta ao modelo e transforma a resposta em filtros validados; a correspondência final acontece localmente sobre metadados existentes.
+- Paleta visual local é uma aproximação quantizada RGB 4×4×4 dos quadros amostrados; a versão local do cache sobe para 3. Não é uma classificação de objetos/personagens. Rótulos de identidade, ação, emoção, rosto e expressão dependem de análise por modelo de visão e conservam a confiança retornada.
+- Motivo: tornar a biblioteca reutilizável e editável sem confundir dados indisponíveis com ausência de atributos, nem disparar processamento/rede silenciosamente.
+
+## 2026-11-11 · Mixer persistente e pré-escuta pelo renderizador
+- As opções do master (áudio original de vídeo, ducking, normalização EBU R128 e teto do limitador) ficam em `audioMix` no projeto; a migração v4→v5 adiciona defaults. Ganho/mute/solo/role continuam como propriedades das trilhas e comandos com inverso.
+- Clipes de vídeo com áudio são roteados como áudio original e entram no ducking da música; trilhas `voice` também acionam ducking com attack/release configuráveis. A exportação e a pré-escuta WAV usam o mesmo `audioArgs`.
+- A medição do arquivo final usa `ebur128=peak=true` e `astats` do FFmpeg empacotado. O preview contínuo usa Web Audio por compatibilidade e não é declarado equivalente ao limitador; a pré-escuta renderizada é a referência de paridade.
+- Motivo: manter a mixagem não destrutiva e validar loudness/pico no áudio efetivamente renderizado, sem alegar precisão automática de fala em conteúdo de áudio original misturado.
+
+## 2026-11-10 · Biblioteca local de sound design
+- Efeitos importados permanecem no caminho original e são referenciados por uma biblioteca JSON local, com hash e metadados editáveis de origem/licença/atribuição. A aplicação no projeto copia esses direitos para o asset.
+- Inserção na timeline é um único grupo de undo e não remove clipes de efeitos sobrepostos. O render existente trata o áudio do asset como clipe normal; ganho e fades continuam nos controles já existentes.
+- Sugestões não chamam serviços externos nem adicionam áudio sozinhas; usam somente marcadores com confiança registrados no projeto. Não são apresentadas como reconhecimento de acontecimentos visuais.
+- Motivo: dar controle local e não destrutivo aos sons importados, sem dependências comerciais, scraping ou direitos presumidos.
+
+## 2026-11-11 · Curva de velocidade por mapeamento de origem
+- `clip.keyframes.speed` define a forma da curva; a integral acumulada é normalizada para manter os limites do trecho-fonte selecionado. `sourceTimeAt` e sua inversa são a fonte única para preview, waveform, eventos da timeline, legendas e cortes.
+- A expressão de vídeo é amostrada em 64 pontos: 128 pontos excederam o limite do parser de expressões do FFmpeg no teste real. Ramp, freeze e reverse foram renderizados com o sidecar, inclusive a 24000/1001.
+- Reverse é um atributo do clipe e o sentido é aplicado no mapeamento. O preview não usa `playbackRate` negativo; exporta vídeo invertido, mas mantém áudio reverso mudo para não apresentar sincronização incorreta.
+- A exportação de áudio aproxima ramps por segmentos constantes entre amostras locais; `atempo` preserva o pitch e `asetrate` o acompanha quando selecionado. Não é time-stretch variável contínuo e não deve ser descrito como equivalência exata até validação auditiva/render real.
+- O schema sobe para v8 com migração que define reverse normal e pitch preservado em projetos legados.
+- Motivo: manter a curva editável e reversível, sem mudar os extremos de origem durante speed ramps; explicitar os limites técnicos que ainda dependem de validação com FFmpeg e WebView2.
+
+## Composição multicamadas — schema v9
+- Cada clipe armazena modo de mesclagem, máscara e id de grupo, preservando a edição não destrutiva dos assets originais. A migração v8→v9 aplica defaults neutros para projetos existentes.
+- Preview e FFmpeg consomem os mesmos valores de transformação/keyframes; o render usa alpha para máscaras e separa RGB/alpha nos blends, evitando que a conversão YUV altere o resultado do modo de mesclagem.
+- Escala animada é feita depois da composição do alpha do clipe: filtros de alpha que recebem dimensões variáveis podem congelar a geometria ou falhar no FFmpeg para Windows. A posição é centralizada pela camada variável e o teste real valida pixels em instantes distintos.
+- Split screen mostra o quadro completo de cada clipe em uma metade do projeto; não altera o crop salvo. Copiar apenas um membro do grupo não cria grupo órfão; copiar múltiplos membros gera um novo grupo.
+- Limites: máscaras são círculo/metades sem feather; faltam validação visual no WebView2 e material real autorizado. O teste sintético comprova o caminho do render, não equivalência visual universal.
+- Motivo: oferecer composição editável no próprio projeto e preservar previsibilidade ao reabrir projetos antigos, sem modificar mídia original nem declarar capacidades de máscara/preview que não foram verificadas.
+
+## Exportação configurável e validação antes da publicação
+- H.264, H.265 e ProRes usam opções explícitas de codec, contêiner, FPS racional, CRF/bitrate e resolução. ProRes requer MOV. A estimativa de tamanho é uma faixa heurística; em CRF, o tamanho depende do conteúdo.
+- A seleção automática de AMF/NVENC/QSV exige encoder anunciado e uma codificação curta bem-sucedida. Se o hardware falhar durante o render/mux, o trabalho inteiro recomeça em CPU; uma seleção manual de hardware reporta a falha sem trocar o modo silenciosamente.
+- A saída é renderizada em `.part`, decodificada e validada antes da promoção. Um destino anterior é guardado como `.backup` e restaurado se a promoção falhar; o log detalhado fica em `.log`. Cancelamento/falha não publica arquivo parcial.
+- A validação verifica duração, dimensões, FPS, codec, contagem integral de frames, um stream de áudio mixado, sincronização A/V e decodificação completa. `blackdetect` gera avisos apenas para trechos não explicados por gaps ou fades pretos da timeline; conteúdo visualmente escuro pode continuar exigindo revisão humana.
+- Motivo: não declarar sucesso para um arquivo que não passou por probe/decode e preservar o destino anterior, sem presumir suporte real a encoder de hardware só pela listagem do FFmpeg.

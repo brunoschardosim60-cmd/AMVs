@@ -44,6 +44,9 @@ importers:
       '@amv/sfx':
         specifier: workspace:*
         version: link:../../packages/sfx
+      '@amv/sound-design':
+        specifier: workspace:*
+        version: link:../../packages/sound-design
       '@amv/subtitles':
         specifier: workspace:*
         version: link:../../packages/subtitles
@@ -170,6 +173,12 @@ importers:
         version: link:../project
 
   packages/sfx: {}
+
+  packages/sound-design:
+    dependencies:
+      '@amv/project':
+        specifier: workspace:*
+        version: link:../project
 
   packages/subtitles:
     dependencies:

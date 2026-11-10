@@ -5,6 +5,9 @@ export const TEXT_ANIMATIONS_IN = [
   { id: 'fade', label: 'Surgir' },
   { id: 'pop', label: 'Pop' },
   { id: 'slide', label: 'Subir' },
+  { id: 'slide-left', label: 'Entrar da esquerda' },
+  { id: 'slide-right', label: 'Entrar da direita' },
+  { id: 'blur', label: 'Desfoque para foco' },
   { id: 'typewriter', label: 'Máquina de escrever' },
 ] as const;
 
@@ -12,10 +15,9 @@ export const TEXT_ANIMATIONS_OUT = [
   { id: '', label: 'Nenhuma' },
   { id: 'fade', label: 'Sumir' },
   { id: 'slide', label: 'Descer' },
+  { id: 'pop', label: 'Reduzir' },
+  { id: 'blur', label: 'Desfocar' },
 ] as const;
-
-const IN_S = 0.3;
-const OUT_S = 0.25;
 
 /** Texto tem algo que muda com o tempo? (decide entre 1 imagem ou sequência na exportação) */
 export function textIsAnimated(c: Clip): boolean {
@@ -23,6 +25,9 @@ export function textIsAnimated(c: Clip): boolean {
     c.text?.animationIn ||
     c.text?.animationOut ||
     c.text?.wordTimings.length ||
+    (c.text?.syllableAnimation && c.text.wordTimings.some((word) => word.syllables.length)) ||
+    c.keyframes['transform.scale']?.length ||
+    c.keyframes['transform.rotation']?.length ||
     c.keyframes['transform.x']?.length ||
     c.keyframes['transform.y']?.length ||
     c.effects.some((f) => f.enabled && f.effect === 'shake') ||
@@ -46,6 +51,22 @@ interface TextPart {
 interface TextLine {
   parts: TextPart[];
   width: number;
+}
+
+export function splitTimedText(
+  text: string,
+  wordTimings: NonNullable<Clip['text']>['wordTimings'],
+): { text: string; timingIndex: number }[] | null {
+  const parts: { text: string; timingIndex: number }[] = [];
+  let joined = '';
+  for (let index = 0; index < wordTimings.length; index++) {
+    const candidate = joined + wordTimings[index]!.text;
+    if (!text.startsWith(candidate)) return null;
+    joined = candidate;
+    parts.push({ text: wordTimings[index]!.text, timingIndex: index });
+    if (joined === text) return parts;
+  }
+  return null;
 }
 
 function measured(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, text: string, spacing: number): number {
@@ -76,9 +97,17 @@ function layoutLines(
   text: string,
   width: number,
   spacing: number,
+  wordTimings: NonNullable<Clip['text']>['wordTimings'],
 ): TextLine[] {
   const lines: TextLine[] = [];
-  let wordIndex = 0;
+  let timingIndex = 0;
+  const append = (word: string, index: number, parts: TextPart[]) => {
+    const part = { word, space: '', timingIndex: index, width: measured(ctx, word, spacing) };
+    if (parts.length && parts.reduce((sum, item) => sum + item.width, 0) + part.width > width) {
+      lines.push({ parts: parts.splice(0), width: 0 });
+    }
+    parts.push(part);
+  };
   for (const paragraph of text.split('\n')) {
     const parts: TextPart[] = [];
     for (const match of paragraph.matchAll(/\S+|\s+/gu)) {
@@ -91,11 +120,16 @@ function layoutLines(
         }
         continue;
       }
-      const part = { word: token, space: '', timingIndex: wordIndex++, width: measured(ctx, token, spacing) };
-      if (parts.length && parts.reduce((sum, item) => sum + item.width, 0) + part.width > width) {
-        lines.push({ parts: parts.splice(0), width: 0 });
+      const timedParts = splitTimedText(token, wordTimings.slice(timingIndex));
+      if (timedParts) {
+        for (const timedPart of timedParts) {
+          append(timedPart.text, timingIndex + timedPart.timingIndex, parts);
+        }
+        timingIndex += timedParts.length;
+      } else {
+        append(token, timingIndex, parts);
+        timingIndex++;
       }
-      parts.push(part);
     }
     if (parts.length) lines.push({ parts, width: 0 });
     else if (!paragraph) lines.push({ parts: [], width: 0 });
@@ -112,11 +146,15 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   const t = c.text;
   if (!t || !t.text.trim()) return;
   const dur = c.durationUs / 1e6;
-  const inDuration = Math.min(IN_S, dur * 0.4);
-  const outDuration = Math.min(OUT_S, dur * 0.25);
+  const inDuration = Math.min((t.animationInUs ?? 300_000) / 1e6, dur * 0.4);
+  const outDuration = Math.min((t.animationOutUs ?? 250_000) / 1e6, dur * 0.25);
   let alpha = look.alpha;
-  let scale = c.transform.scale;
+  const atUs = Math.round(localS * 1e6);
+  let scale = evaluateKeyframes(c.keyframes['transform.scale'], atUs, c.transform.scale);
+  alpha *= Math.max(0, Math.min(1, evaluateKeyframes(c.keyframes['transform.opacity'], atUs, c.transform.opacity)));
   let dy = 0;
+  let dx = 0;
+  let blur = 0;
   let visibleChars = Infinity;
 
   const a = t.animationIn;
@@ -131,6 +169,18 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
       dy = 40 * (1 - x) * (1 - x);
       alpha *= x;
     }
+    if (a === 'slide-left') {
+      dx = -Math.min(160, projW * 0.2) * (1 - x) * (1 - x);
+      alpha *= x;
+    }
+    if (a === 'slide-right') {
+      dx = Math.min(160, projW * 0.2) * (1 - x) * (1 - x);
+      alpha *= x;
+    }
+    if (a === 'blur') {
+      blur = 14 * (1 - x);
+      alpha *= Math.min(1, x * 1.5);
+    }
   }
   if (a === 'typewriter') {
     const span = Math.min(1.5, dur * 0.6);
@@ -144,6 +194,8 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
       dy += 30 * (1 - x);
       alpha *= x;
     }
+    if (b === 'pop') scale *= 0.75 + 0.25 * x;
+    if (b === 'blur') blur = Math.max(blur, 12 * (1 - x));
   }
   if (alpha <= 0) return;
 
@@ -151,6 +203,7 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   const size = t.size * scale * k;
   ctx.save();
   ctx.globalAlpha = Math.min(1, alpha);
+  if (blur > 0) ctx.filter = `blur(${blur * k}px)`;
   if (t.background === 'full') {
     ctx.save();
     ctx.fillStyle = '#000000';
@@ -163,19 +216,20 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   const spacing = (t.letterSpacing ?? 0) * k;
   const padding = (t.padding ?? 24) * k;
   const maxWidth = Math.max(size, Math.min(projW * (t.maxWidthRatio ?? 0.9), projW - 2 * (t.marginX ?? 48)) * k);
-  const lines = layoutLines(ctx, shown, maxWidth, spacing);
+  const wordTimings = t.wordTimings ?? [];
+  const lines = layoutLines(ctx, shown, maxWidth, spacing, wordTimings);
   const lh = size * (t.lineSpacing ?? 1.18);
   const totalHeight = Math.max(lh, lines.length * lh);
   const longestLine = Math.max(0, ...lines.map((line) => line.width));
   const contentHeight = totalHeight + 2 * padding;
   const verticalLimit = Math.max(0, (projH / 2 - (t.marginY ?? 0)) * k - contentHeight / 2);
-  const atUs = Math.round(localS * 1e6);
   const x = evaluateKeyframes(c.keyframes['transform.x'], atUs, c.transform.x);
   const y = evaluateKeyframes(c.keyframes['transform.y'], atUs, c.transform.y);
   const centerY = Math.max(-verticalLimit, Math.min(verticalLimit, y + look.dy + dy));
 
-  ctx.translate((projW / 2 + x + look.dx) * k, (projH / 2 + centerY) * k);
-  if (c.transform.rotation) ctx.rotate((c.transform.rotation * Math.PI) / 180);
+  ctx.translate((projW / 2 + x + look.dx + dx) * k, (projH / 2 + centerY) * k);
+  const rotation = evaluateKeyframes(c.keyframes['transform.rotation'], atUs, c.transform.rotation);
+  if (rotation) ctx.rotate((rotation * Math.PI) / 180);
 
   if (t.background === 'bar' || t.background === 'box') {
     ctx.save();
@@ -190,9 +244,14 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
     ctx.restore();
   }
 
-  const wordTimings = t.wordTimings ?? [];
   const nowUs = Math.round(localS * 1e6);
-  const activeWord = wordTimings.findIndex((word) => nowUs >= word.startUs && nowUs < word.endUs);
+  const activeWord = wordTimings.findIndex((word) => {
+    const reliable = !word.uncertain && (
+      word.source === 'ass' || word.source === 'lrc' || word.source === 'manual' ||
+      ((word.source === 'whisper' || word.source === 'estimated') && (word.confidence ?? 0) >= 0.78)
+    );
+    return reliable && nowUs >= word.startUs && nowUs < word.endUs;
+  });
   const y0 = -((lines.length - 1) * lh) / 2;
   lines.forEach((line, lineIndex) => {
     const y = y0 + lineIndex * lh;
@@ -201,24 +260,63 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
     for (const part of line.parts) {
       const word = wordTimings[part.timingIndex];
       const active = part.timingIndex === activeWord;
-      const wordScale = (word?.scale ?? (active ? t.highlightScale ?? 1.12 : 1)) * k;
+      const animation = t.wordAnimation ?? 'highlight';
+      const wordProgress = word ? Math.max(0, Math.min(1, (nowUs - word.startUs) / Math.max(1, word.endUs - word.startUs))) : 1;
+      const defaultWordScale = active && animation === 'highlight' ? t.highlightScale ?? 1.12 : active && animation === 'pop' ? 1 + 0.12 * backOut(wordProgress) : 1;
+      const wordScale = (word?.scale ?? defaultWordScale) * k;
       const wordX = x + (word?.offsetX ?? 0) * k;
       const wordY = y + (word?.offsetY ?? 0) * k;
       const wordSize = size * wordScale;
       ctx.save();
       ctx.font = `${word?.weight ?? t.weight ?? 700} ${wordSize}px "${t.font}", "Manrope Variable", system-ui, sans-serif`;
+      if (active && animation === 'fade') ctx.globalAlpha *= Math.min(1, wordProgress * 3);
       if (t.shadow) {
         ctx.shadowColor = 'rgba(0,0,0,0.75)';
         ctx.shadowBlur = 10 * k;
         ctx.shadowOffsetY = 3 * k;
+      }
+      if ((t.glowIntensity ?? 0) > 0) {
+        ctx.shadowColor = t.glowColor ?? '#ffde59';
+        ctx.shadowBlur = (t.glowIntensity ?? 0) * k;
       }
       if (t.outlineColor && t.outlineWidth > 0) {
         ctx.lineWidth = t.outlineWidth * 2 * k;
         ctx.strokeStyle = t.outlineColor;
         ctx.strokeText(part.word, wordX, wordY);
       }
-      ctx.fillStyle = word?.color ?? (active ? t.highlightColor ?? '#ffd166' : t.color);
-      drawSpaced(ctx, part.word, wordX, wordY, spacing * wordScale);
+      const useSyllables = !!t.syllableAnimation && !!word && !word.uncertain &&
+        (word.source === 'ass' || word.source === 'manual') && (word.confidence ?? 0) >= 0.95 &&
+        word.syllables.length > 0 && word.syllables.map((item) => item.text).join('') === part.word &&
+        word.syllables.every((item) => !item.uncertain && item.confidence !== null && item.confidence >= 0.95);
+      const syllables = useSyllables ? word.syllables : [];
+      if (syllables.length) {
+        let syllableX = wordX;
+        const syllableIndex = syllables.findIndex((item) => nowUs >= item.startUs && nowUs < item.endUs);
+        for (const [index, syllable] of syllables.entries()) {
+          const glyphWidth = measured(ctx, syllable.text, spacing * wordScale);
+          const activeSyllable = index === syllableIndex;
+          if (t.fillStyle === 'linear-gradient') {
+            const gradient = ctx.createLinearGradient(syllableX, wordY - wordSize / 2, syllableX + glyphWidth, wordY + wordSize / 2);
+            gradient.addColorStop(0, t.gradientStartColor);
+            gradient.addColorStop(1, t.gradientEndColor);
+            ctx.fillStyle = activeSyllable ? (t.highlightColor ?? '#ffd166') : gradient;
+          } else {
+            ctx.fillStyle = activeSyllable ? (t.highlightColor ?? '#ffd166') : (word?.color ?? t.color);
+          }
+          drawSpaced(ctx, syllable.text, syllableX, wordY, spacing * wordScale);
+          syllableX += glyphWidth;
+        }
+      } else {
+        if (t.fillStyle === 'linear-gradient' && !word?.color && !(active && animation === 'highlight')) {
+          const gradient = ctx.createLinearGradient(wordX, wordY - wordSize / 2, wordX + part.width * wordScale, wordY + wordSize / 2);
+          gradient.addColorStop(0, t.gradientStartColor);
+          gradient.addColorStop(1, t.gradientEndColor);
+          ctx.fillStyle = gradient;
+        } else {
+          ctx.fillStyle = word?.color ?? (active && animation === 'highlight' ? t.highlightColor ?? '#ffd166' : t.color);
+        }
+        drawSpaced(ctx, part.word, wordX, wordY, spacing * wordScale);
+      }
       ctx.restore();
       x += part.width + measured(ctx, part.space, spacing);
     }

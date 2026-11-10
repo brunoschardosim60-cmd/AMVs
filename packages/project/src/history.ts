@@ -46,8 +46,8 @@ export class ProjectHistory {
     return this.revision !== this.savedRevision;
   }
 
-  markSaved(): void {
-    this.savedRevision = this.revision;
+  markSaved(revision = this.revision): void {
+    this.savedRevision = revision;
   }
 
   get canUndo(): boolean {

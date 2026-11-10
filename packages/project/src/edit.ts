@@ -9,6 +9,8 @@
  */
 import { applyCommand, type Command } from './commands.js';
 import { newId } from './factory.js';
+import { speedAt, sourceTimeAt } from './speed.js';
+import { evaluateKeyframes, orderedKeyframes } from './keyframes.js';
 import type { Asset, Clip, Project, Track } from './schema.js';
 import { clipEndUs } from './timeline.js';
 import type { Us } from './time.js';
@@ -39,9 +41,34 @@ function assertEditable(track: Track): void {
   if (track.locked) throw new EditError(`a trilha "${track.name}" está travada`);
 }
 
-/** Quanto tempo da ORIGEM corresponde a `timelineUs` de timeline neste clipe. */
-function sourceSpan(clip: Clip, timelineUs: Us): Us {
-  return Math.round(timelineUs * clip.speed);
+function sourceRange(clip: Clip, fromUs: Us, toUs: Us): Pick<Clip, 'sourceInUs' | 'sourceOutUs'> {
+  const from = sourceTimeAt(clip, fromUs);
+  const to = sourceTimeAt(clip, toUs);
+  return clip.reverse
+    ? { sourceInUs: to, sourceOutUs: from }
+    : { sourceInUs: from, sourceOutUs: to };
+}
+
+export function sliceClipKeyframes(clip: Clip, fromUs: Us, toUs: Us): Clip['keyframes'] {
+  if (fromUs < 0 || toUs < fromUs) {
+    throw new EditError('o intervalo de quadros-chave é inválido');
+  }
+  const sliced: Clip['keyframes'] = {};
+  for (const [path, keyframes] of Object.entries(clip.keyframes)) {
+    const ordered = orderedKeyframes(keyframes);
+    if (!ordered.length) continue;
+    const exactStart = ordered.find((frame) => frame.atUs === fromUs);
+    const exactEnd = ordered.find((frame) => frame.atUs === toUs);
+    const endEasing = exactEnd?.easing ?? ordered.find((frame) => frame.atUs > toUs)?.easing ?? ordered.at(-1)!.easing;
+    sliced[path] = [
+      { atUs: 0, value: evaluateKeyframes(ordered, fromUs, ordered[0]!.value), easing: exactStart?.easing ?? 'linear' },
+      ...ordered
+        .filter((frame) => frame.atUs > fromUs && frame.atUs < toUs)
+        .map((frame) => ({ ...frame, atUs: frame.atUs - fromUs })),
+      { atUs: toUs - fromUs, value: evaluateKeyframes(ordered, toUs, ordered.at(-1)!.value), easing: endEasing },
+    ];
+  }
+  return sliced;
 }
 
 /** Duração máxima da mídia de origem (null = sem limite, ex.: imagem ou texto). */
@@ -65,20 +92,14 @@ export function splitClip(project: Project, clipId: string, atUs: Us, newClipId 
   const offset = atUs - c.timelineStartUs;
   if (offset < MIN_CLIP_US || c.durationUs - offset < MIN_CLIP_US) return [];
 
-  const leftSrc = c.sourceInUs + sourceSpan(c, offset);
-  const leftKf: Clip['keyframes'] = {};
-  const rightKf: Clip['keyframes'] = {};
-  for (const [param, list] of Object.entries(c.keyframes)) {
-    leftKf[param] = list.filter((k) => k.atUs <= offset);
-    rightKf[param] = list.filter((k) => k.atUs >= offset).map((k) => ({ ...k, atUs: k.atUs - offset }));
-  }
+  const leftKf = sliceClipKeyframes(c, 0, offset);
+  const rightKf = sliceClipKeyframes(c, offset, c.durationUs);
   const right: Clip = {
     ...structuredClone(c),
     id: newClipId,
     timelineStartUs: atUs,
     durationUs: c.durationUs - offset,
-    sourceInUs: leftSrc,
-    sourceOutUs: c.sourceOutUs,
+    ...sourceRange(c, offset, c.durationUs),
     transitionIn: null,
     keyframes: rightKf,
     effects: c.effects.map((e) => ({ ...structuredClone(e), id: newId('fx') })),
@@ -89,7 +110,12 @@ export function splitClip(project: Project, clipId: string, atUs: Us, newClipId 
     {
       type: 'clip.update',
       clipId: c.id,
-      patch: { durationUs: offset, sourceOutUs: leftSrc, keyframes: leftKf, audio: { ...c.audio, fadeOutUs: 0 } },
+      patch: {
+        durationUs: offset,
+        ...sourceRange(c, 0, offset),
+        keyframes: leftKf,
+        audio: { ...c.audio, fadeOutUs: 0 },
+      },
     },
     { type: 'clip.add', clip: right, index: index + 1 },
   ];
@@ -129,33 +155,35 @@ export function clearRange(project: Project, trackId: string, start: Us, end: Us
       // o intervalo fica no meio do clipe: divide em dois e tira o miolo
       const tailOffset = end - cs;
       const rightId = newId('clp');
+      const tailRange = sourceRange(c, tailOffset, c.durationUs);
       const tail: Clip = {
         ...structuredClone(c),
         id: rightId,
         timelineStartUs: end,
         durationUs: ce - end,
-        sourceInUs: c.sourceInUs + sourceSpan(c, tailOffset),
+        ...tailRange,
         transitionIn: null,
-        keyframes: {},
+        keyframes: sliceClipKeyframes(c, tailOffset, c.durationUs),
         effects: c.effects.map((e) => ({ ...structuredClone(e), id: newId('fx') })),
         audio: { ...c.audio, fadeInUs: 0 },
       };
       const keep = start - cs;
       out.push(
-        { type: 'clip.update', clipId: c.id, patch: { durationUs: keep, sourceOutUs: c.sourceInUs + sourceSpan(c, keep), audio: { ...c.audio, fadeOutUs: 0 } } },
+        { type: 'clip.update', clipId: c.id, patch: { durationUs: keep, ...sourceRange(c, 0, keep), keyframes: sliceClipKeyframes(c, 0, keep), audio: { ...c.audio, fadeOutUs: 0 } } },
         { type: 'clip.add', clip: tail },
       );
     } else if (cs < start) {
       // sobra a cabeça
       const keep = start - cs;
-      out.push({ type: 'clip.update', clipId: c.id, patch: { durationUs: keep, sourceOutUs: c.sourceInUs + sourceSpan(c, keep) } });
+      out.push({ type: 'clip.update', clipId: c.id, patch: { durationUs: keep, ...sourceRange(c, 0, keep), keyframes: sliceClipKeyframes(c, 0, keep) } });
     } else {
       // sobra a cauda
       const cut = end - cs;
+      const range = sourceRange(c, cut, c.durationUs);
       out.push({
         type: 'clip.update',
         clipId: c.id,
-        patch: { timelineStartUs: end, durationUs: ce - end, sourceInUs: c.sourceInUs + sourceSpan(c, cut), transitionIn: null },
+        patch: { timelineStartUs: end, durationUs: ce - end, ...range, keyframes: sliceClipKeyframes(c, cut, c.durationUs), transitionIn: null },
       });
     }
   }
@@ -239,11 +267,17 @@ export function trimBounds(project: Project, clipId: string, edge: Edge): { min:
   if (edge === 'start') {
     const prevEnd = Math.max(0, ...neighbors.filter((n) => clipEndUs(n) <= c.timelineStartUs).map(clipEndUs));
     // quanto dá para estender para a esquerda sem passar do começo da origem
-    const bySource = c.timelineStartUs - Math.floor(c.sourceInUs / c.speed);
+    const sourceStart = c.reverse ? (srcDur ?? c.sourceOutUs) - c.sourceOutUs : c.sourceInUs;
+    const startSpeed = speedAt(c, 0);
+    const bySource = startSpeed <= 0 ? 0 : c.timelineStartUs - Math.floor(sourceStart / startSpeed);
     return { min: Math.max(prevEnd, bySource, 0), max: end - MIN_CLIP_US };
   }
   const nextStart = Math.min(Infinity, ...neighbors.filter((n) => n.timelineStartUs >= end).map((n) => n.timelineStartUs));
-  const bySource = srcDur === null ? Infinity : c.timelineStartUs + Math.floor((srcDur - c.sourceInUs) / c.speed);
+  const sourceRemaining = srcDur === null ? Infinity : c.reverse ? c.sourceInUs : srcDur - c.sourceOutUs;
+  const endSpeed = speedAt(c, c.durationUs);
+  const bySource = sourceRemaining === Infinity || endSpeed <= 0
+    ? Infinity
+    : c.timelineStartUs + c.durationUs + Math.floor(sourceRemaining / endSpeed);
   return { min: c.timelineStartUs + MIN_CLIP_US, max: Math.min(nextStart, bySource) };
 }
 
@@ -256,26 +290,49 @@ export function trimClip(project: Project, clipId: string, edge: Edge, toUs: Us)
   if (edge === 'start') {
     const delta = to - c.timelineStartUs;
     if (!delta) return [];
-    const kf: Clip['keyframes'] = {};
-    for (const [p, list] of Object.entries(c.keyframes)) {
-      kf[p] = list.map((k) => ({ ...k, atUs: k.atUs - delta })).filter((k) => k.atUs >= 0);
-    }
+    const durationUs = c.durationUs - delta;
+    const sourceStart = delta < 0
+      ? sourceTimeAt(c, 0) + (c.reverse ? 1 : -1) * -delta * speedAt(c, 0)
+      : sourceTimeAt(c, delta);
+    const range = delta < 0
+      ? c.reverse
+        ? { sourceInUs: c.sourceInUs, sourceOutUs: sourceStart }
+        : { sourceInUs: Math.max(0, sourceStart), sourceOutUs: c.sourceOutUs }
+      : sourceRange(c, delta, c.durationUs);
+    const keyframes = delta < 0
+      ? Object.fromEntries(Object.entries(sliceClipKeyframes(c, 0, c.durationUs)).map(([path, frames]) => [
+        path,
+        [
+          { atUs: 0, value: frames[0]!.value, easing: 'linear' as const },
+          ...frames.map((frame) => ({ ...frame, atUs: frame.atUs - delta })),
+        ],
+      ]))
+      : sliceClipKeyframes(c, delta, c.durationUs);
     return [
       {
         type: 'clip.update',
         clipId,
         patch: {
           timelineStartUs: to,
-          durationUs: c.durationUs - delta,
-          sourceInUs: Math.max(0, c.sourceInUs + sourceSpan(c, delta)),
-          keyframes: kf,
+          durationUs,
+          ...range,
+          keyframes,
         },
       },
     ];
   }
   const dur = to - c.timelineStartUs;
   if (dur === c.durationUs) return [];
-  return [{ type: 'clip.update', clipId, patch: { durationUs: dur, sourceOutUs: c.sourceInUs + sourceSpan(c, dur) } }];
+  const range = sourceRange(c, 0, dur);
+  return [{
+    type: 'clip.update',
+    clipId,
+    patch: {
+      durationUs: dur,
+      ...range,
+      keyframes: sliceClipKeyframes(c, 0, dur),
+    },
+  }];
 }
 
 // ---------------------------------------------------------------- excluir
@@ -322,21 +379,33 @@ export function pasteClips(project: Project, data: ClipboardData, atUs: Us): { c
   const commands: Command[] = [];
   const newIds: string[] = [];
   let current = project;
+  const eligible = data.clips.filter((src) => {
+    const track = project.tracks.find((t) => t.id === src.trackId);
+    return !!track && !track.locked && (!src.assetId || project.assets.some((a) => a.id === src.assetId));
+  });
+  const groupCounts = new Map<string, number>();
+  for (const src of eligible) {
+    if (src.groupId) groupCounts.set(src.groupId, (groupCounts.get(src.groupId) ?? 0) + 1);
+  }
+  const copiedGroupIds = new Map(
+    [...groupCounts]
+      .filter(([, count]) => count > 1)
+      .map(([groupId]) => [groupId, newId('grp')]),
+  );
   const push = (cmds: Command[]) => {
     for (const c of cmds) current = applyCommand(current, c).project;
     commands.push(...cmds);
   };
-  for (const src of data.clips) {
+  for (const src of eligible) {
     const track = project.tracks.find((t) => t.id === src.trackId);
-    if (!track || track.locked) continue;
-    if (src.assetId && !project.assets.some((a) => a.id === src.assetId)) continue;
+    if (!track) continue;
     const start = atUs + (src.timelineStartUs - data.originUs);
     const id = newId('clp');
     push(clearRange(current, track.id, start, start + src.durationUs));
     push([
       {
         type: 'clip.add',
-        clip: { ...structuredClone(src), id, timelineStartUs: start, effects: src.effects.map((e) => ({ ...e, id: newId('fx') })), origin: 'user' },
+        clip: { ...structuredClone(src), id, timelineStartUs: start, groupId: src.groupId ? copiedGroupIds.get(src.groupId) ?? null : null, effects: src.effects.map((e) => ({ ...e, id: newId('fx') })), origin: 'user' },
       },
     ]);
     newIds.push(id);
@@ -410,8 +479,12 @@ export function insertAsset(project: Project, o: InsertOptions): Command[] {
     sourceInUs: sIn,
     sourceOutUs: sOut,
     speed: 1,
+    reverse: false,
     transform: { x: 0, y: 0, scale: track.kind === 'video' ? defaultScale(project, asset) : 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
-    audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, streamIndex: null },
+    blendMode: 'normal',
+    mask: 'none',
+    groupId: null,
+    audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null },
     effects: [],
     transitionIn: null,
     keyframes: {},

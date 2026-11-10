@@ -1,6 +1,6 @@
 import type { EpisodeAnalysis, MusicAnalysis, Shot } from '@amv/analysis';
 import { generateAmv, STYLES, type StyleId } from '@amv/automv';
-import { applyCommand, clipEndUs, newId, splitClip, TextContentSchema, type Clip, type Command, type EffectInstance, type Project } from '@amv/project';
+import { applyCommand, clipEndUs, newId, sourceTimeAt, splitClip, TextContentSchema, timelineLocalAtSource, type Clip, type Command, type EffectInstance, type Project } from '@amv/project';
 import type { ChangeItem, ChangeSet } from './changeset.js';
 
 const S = 1_000_000;
@@ -34,7 +34,8 @@ export function musicOnTimeline(ctx: AssistantContext): { clip: Clip; a: MusicAn
 
 /** Tempo da música → tempo da timeline. */
 function musicToTimeline(clip: Clip, s: number): number {
-  return clip.timelineStartUs / S + (s - clip.sourceInUs / S) / clip.speed;
+  const localUs = timelineLocalAtSource(clip, us(s));
+  return localUs === null ? Number.NaN : (clip.timelineStartUs + localUs) / S;
 }
 
 export function beatsOnTimeline(ctx: AssistantContext): { beats: number[]; drops: number[] } {
@@ -152,12 +153,10 @@ export function findWeakPoints(ctx: AssistantContext): Finding[] {
     for (const c of vclips) {
       const len = c.durationUs / S;
       const mid = (c.timelineStartUs + c.durationUs / 2) / S;
-      const ms = c.sourceInUs / S;
-      const musicT = m.clip.sourceInUs / S + (mid - m.clip.timelineStartUs / S) * m.clip.speed;
+      const musicT = sourceTimeAt(m.clip, Math.round((mid - m.clip.timelineStartUs / S) * S)) / S;
       const ei = Math.floor(musicT / m.a.energyStepS);
       const e = m.a.energy[ei] ?? 0;
       if (len > 3 && e > 0.7) out.push({ atS: c.timelineStartUs / S, severity: 'média', text: `Clipe de ${len.toFixed(1)} s numa parte forte da música: corte mais rápido aqui.`, clipId: c.id });
-      void ms;
     }
   }
   // buraco no vídeo
@@ -325,9 +324,9 @@ export function proposeSpeechBeforeDrop(ctx: AssistantContext, args: { text?: st
   const busy = p.clips.some((c) => c.trackId === voice.id && c.timelineStartUs / S < drop && clipEndUs(c) / S > at);
   if (busy) return 'Já tem uma fala na trilha de vozes antes do drop. Remova ou mova ela primeiro.';
   const vclip: Clip = {
-    id: newId('clp'), trackId: voice.id, assetId: line.assetId, timelineStartUs: us(at), durationUs: us(len), sourceInUs: us(line.startS), sourceOutUs: us(line.startS) + us(len), speed: 1,
-    transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
-    audio: { gainDb: 2, fadeInUs: 30_000, fadeOutUs: 60_000, pitchSemitones: 0, streamIndex: null }, effects: [], transitionIn: null, keyframes: {}, text: null,
+    id: newId('clp'), trackId: voice.id, assetId: line.assetId, timelineStartUs: us(at), durationUs: us(len), sourceInUs: us(line.startS), sourceOutUs: us(line.startS) + us(len), speed: 1, reverse: false,
+    transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } }, blendMode: 'normal', mask: 'none', groupId: null,
+    audio: { gainDb: 2, fadeInUs: 30_000, fadeOutUs: 60_000, pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null }, effects: [], transitionIn: null, keyframes: {}, text: null,
     origin: 'ai', reason: `Fala marcante (${line.kind}, impacto ${line.impact.toFixed(2)}) — ${line.episode} ${mmss(line.startS)}`, confidence: line.impact, label: null,
   };
   const a = item('add', `Fala "${line.text ?? line.kind}" de ${line.episode} terminando no drop (${mmss(drop)})`, us(at), [{ type: 'clip.add', clip: vclip }]);

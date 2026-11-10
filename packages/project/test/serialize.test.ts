@@ -112,6 +112,151 @@ describe('serialização', () => {
       alignment: 'center',
       wordTimings: [],
     });
+
+  });
+
+  it('migra v3 para v4 criando a biblioteca de anotações vazia', () => {
+    const raw = JSON.parse(serializeProject(richProject())) as Record<string, unknown>;
+    raw.schemaVersion = 3;
+    delete raw.sceneAnnotations;
+    const result = parseProject(JSON.stringify(raw));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.migratedFrom).toBe(3);
+      expect(result.project.sceneAnnotations).toEqual([]);
+    }
+  });
+
+  it('migra v4 preservando o projeto e adicionando as opções padrão de mixagem', () => {
+    const raw = JSON.parse(serializeProject(richProject())) as Record<string, unknown>;
+    raw.schemaVersion = 4;
+    delete raw.audioMix;
+    const result = parseProject(JSON.stringify(raw));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.migratedFrom).toBe(4);
+      expect(result.project.audioMix).toMatchObject({
+        duckingEnabled: true,
+        normalization: 'off',
+        limiterEnabled: true,
+      });
+    }
+  });
+
+  it('migra v5 preservando metadados de direitos ou adicionando campos vazios', () => {
+    const raw = JSON.parse(serializeProject(richProject())) as {
+      schemaVersion: number;
+      assets: { rights?: Record<string, unknown> }[];
+    };
+    raw.schemaVersion = 5;
+    delete raw.assets[0]!.rights;
+    raw.assets[1]!.rights = { origin: 'Biblioteca local', license: 'CC BY 4.0', attribution: 'Artista' };
+
+    const result = parseProject(JSON.stringify(raw));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.migratedFrom).toBe(5);
+      expect(result.project.assets[0]?.rights).toEqual({ origin: '', license: '', attribution: '' });
+      expect(result.project.assets[1]?.rights).toEqual({ origin: 'Biblioteca local', license: 'CC BY 4.0', attribution: 'Artista' });
+    }
+  });
+
+  it('migra v6 preservando cronometragem e criando defaults tipográficos sem inferir palavras ou sílabas', () => {
+    const raw = JSON.parse(serializeProject(richProject())) as {
+      schemaVersion: number;
+      clips: { text: Record<string, unknown> | null }[];
+    };
+    raw.schemaVersion = 6;
+    for (const clip of raw.clips) {
+      if (!clip.text) continue;
+      for (const field of [
+        'animationInUs', 'animationOutUs', 'fillStyle', 'gradientStartColor', 'gradientEndColor',
+        'glowColor', 'glowIntensity', 'wordAnimation', 'syllableAnimation', 'section',
+        'textSource', 'manualText', 'translations',
+      ]) delete clip.text[field];
+      if (clip.text && clip.text.text === 'Eu não vou perder!') {
+        clip.text.text = 'I will not lose!';
+        clip.text.original = 'Eu não vou perder!';
+        clip.text.lang = 'en';
+      }
+      if (Array.isArray(clip.text.wordTimings)) {
+        clip.text.wordTimings = (clip.text.wordTimings as Record<string, unknown>[]).map(({ syllables: _syllables, ...word }) => word);
+      }
+    }
+
+    const result = parseProject(JSON.stringify(raw));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.migratedFrom).toBe(6);
+      const text = result.project.clips.find((clip) => clip.text)?.text;
+      expect(text).toMatchObject({
+        fillStyle: 'solid',
+        glowIntensity: 0,
+        section: 'verse',
+        wordTimings: [],
+      });
+      expect(text).toMatchObject({
+        textSource: 'translation',
+        manualText: null,
+        translations: { en: 'I will not lose!' },
+      });
+    }
+  });
+
+  it('migra v7 com direção normal e preservação de pitch como padrões seguros', () => {
+    const raw = JSON.parse(serializeProject(richProject())) as {
+      schemaVersion: number;
+      clips: { reverse?: boolean; audio: Record<string, unknown> }[];
+    };
+    raw.schemaVersion = 7;
+    for (const clip of raw.clips) {
+      delete clip.reverse;
+      delete clip.audio.pitchMode;
+    }
+
+    const result = parseProject(JSON.stringify(raw));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.migratedFrom).toBe(7);
+      expect(result.project.clips.every((clip) => !clip.reverse && clip.audio.pitchMode === 'preserve')).toBe(true);
+    }
+  });
+
+  it('migra v8 adicionando defaults de composição sem alterar clipes antigos', () => {
+    const raw = JSON.parse(serializeProject(richProject())) as {
+      schemaVersion: number;
+      clips: Record<string, unknown>[];
+    };
+    raw.schemaVersion = 8;
+    for (const clip of raw.clips) {
+      delete clip.blendMode;
+      delete clip.mask;
+      delete clip.groupId;
+    }
+
+    const result = parseProject(JSON.stringify(raw));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.migratedFrom).toBe(8);
+      expect(result.project.clips.map(({ blendMode, mask, groupId }) => [blendMode, mask, groupId])).toEqual([
+        ['normal', 'none', null],
+        ['normal', 'none', null],
+      ]);
+    }
+  });
+
+  it('migra projetos v2 sem alterar conteúdo e cria biblioteca de personagens vazia', () => {
+    const raw = JSON.parse(serializeProject(richProject())) as Record<string, unknown>;
+    raw.schemaVersion = 2;
+    delete raw.characterLibrary;
+    const clipsBefore = JSON.stringify(raw.clips);
+
+    const result = parseProject(JSON.stringify(raw));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.migratedFrom).toBe(2);
+    expect(result.project.characterLibrary).toEqual([]);
+    expect(JSON.stringify(result.project.clips)).toBe(clipsBefore);
   });
 });
 

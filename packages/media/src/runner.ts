@@ -38,6 +38,8 @@ export interface FileSystem {
 }
 
 export class CancelledError extends Error {
+  logPath?: string;
+
   constructor() {
     super('cancelado');
     this.name = 'CancelledError';

@@ -4,6 +4,7 @@ export interface Cue {
   startS: number;
   endS: number;
   text: string;
+  language?: string | null;
   words?: CueWord[];
 }
 
@@ -14,6 +15,7 @@ export interface CueWord {
   source: 'ass' | 'lrc' | 'whisper' | 'manual' | 'estimated';
   confidence?: number | null;
   uncertain?: boolean;
+  syllables?: { startS: number; endS: number; text: string; source: 'ass' | 'manual'; confidence: number }[];
 }
 
 function ts(h: string, m: string, s: string, frac = '0'): number {
@@ -72,7 +74,13 @@ function assKaraokeWords(raw: string, startS: number, endS: number): CueWord[] {
 
   const combined = syllables.map((part) => part.text).join('');
   if (/[\u3040-\u30ff\u3400-\u9fff]/u.test(combined)) {
-    return syllables.map((part) => ({ ...part, text: part.text.trim(), source: 'ass' as const })).filter((part) => part.text);
+    return syllables.map((part) => ({
+      ...part,
+      text: part.text.trim(),
+      source: 'ass' as const,
+      confidence: 1,
+      syllables: [{ ...part, text: part.text.trim(), source: 'ass' as const, confidence: 1 }],
+    })).filter((part) => part.text);
   }
 
   const glyphs: { char: string; startS: number; endS: number }[] = [];
@@ -84,11 +92,23 @@ function assKaraokeWords(raw: string, startS: number, endS: number): CueWord[] {
   const wordPattern = /[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu;
   for (const match of text.matchAll(wordPattern)) {
     const first = Array.from(text.slice(0, match.index)).length;
-    const wordGlyphs = glyphs.slice(first, first + Array.from(match[0]).length);
+    let end = first + Array.from(match[0]).length;
+    while (end < glyphs.length && /[^\p{L}\p{N}\s]/u.test(glyphs[end]!.char)) end++;
+    const wordGlyphs = glyphs.slice(first, end);
     const firstGlyph = wordGlyphs[0];
     const lastGlyph = wordGlyphs.at(-1);
     if (firstGlyph && lastGlyph && lastGlyph.endS > firstGlyph.startS) {
-      out.push({ text: match[0], startS: firstGlyph.startS, endS: lastGlyph.endS, source: 'ass', confidence: 1 });
+      const wordSyllables: NonNullable<CueWord['syllables']> = [];
+      for (const glyph of wordGlyphs) {
+        if (/\s/u.test(glyph.char)) continue;
+        const previous = wordSyllables.at(-1);
+        if (previous && previous.startS === glyph.startS && previous.endS === glyph.endS) {
+          previous.text += glyph.char;
+        } else {
+          wordSyllables.push({ text: glyph.char, startS: glyph.startS, endS: glyph.endS, source: 'ass', confidence: 1 });
+        }
+      }
+      out.push({ text: wordGlyphs.map((glyph) => glyph.char).join(''), startS: firstGlyph.startS, endS: lastGlyph.endS, source: 'ass', confidence: 1, syllables: wordSyllables });
     }
   }
   return out;

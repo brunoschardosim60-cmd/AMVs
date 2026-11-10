@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EpisodeAnalysis, MusicAnalysis, Shot } from '@amv/analysis';
 import { applyCommand, clipEndUs, createProject, insertAsset, type Asset, type Project } from '@amv/project';
-import { chat, closeSelection, findWeakPoints, listModels, localTurn, parseAnthropic, PRESETS, runTurn, validateSelection, type AssistantContext, type FetchLike } from '../src/index.js';
+import { chat, closeSelection, fetchWithTimeout, findWeakPoints, listModels, localTurn, parseAnthropic, PRESETS, runTurn, validateSelection, type AssistantContext, type FetchLike } from '../src/index.js';
 
 const S = 1_000_000;
 function setup(): AssistantContext {
@@ -86,6 +86,49 @@ describe('chat local (sem modelo)', () => {
 });
 
 describe('chat com modelo (respostas gravadas)', () => {
+  it('Gemini repete falha transitória e respeita Retry-After', async () => {
+    const cfg = { ...PRESETS.find((p) => p.id === 'gemini')!, model: 'retry-test' };
+    let calls = 0;
+    const fetch: FetchLike = async () => {
+      calls++;
+      if (calls === 1) return {
+        ok: false,
+        status: 429,
+        headers: { get: (name) => name.toLowerCase() === 'retry-after' ? '0' : null },
+        text: async () => 'limite temporário',
+      };
+      return { ok: true, status: 200, text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }) };
+    };
+    await expect(chat(cfg, 'secret', fetch, '', [{ role: 'user', content: 'oi' }], [])).resolves.toMatchObject({ text: 'ok' });
+    expect(calls).toBe(2);
+  });
+
+  it('Gemini abre o circuit breaker após três chamadas esgotarem tentativas', async () => {
+    const cfg = { ...PRESETS.find((p) => p.id === 'gemini')!, model: 'circuit-test' };
+    let calls = 0;
+    const fetch: FetchLike = async () => {
+      calls++;
+      return { ok: false, status: 503, text: async () => 'temporariamente indisponível' };
+    };
+    const request = () => chat(cfg, 'secret', fetch, '', [{ role: 'user', content: 'oi' }], []);
+    for (let i = 0; i < 3; i++) await expect(request()).rejects.toMatchObject({ retryable: true });
+    const attempted = calls;
+    await expect(request()).rejects.toThrow(/Circuit breaker aberto/);
+    expect(calls).toBe(attempted);
+    expect(calls).toBe(9);
+  });
+
+  it('timeout do provedor é limitado e classificado como transitório', async () => {
+    let requestSignal: AbortSignal | undefined;
+    const fetch: FetchLike = async (_url, init) => {
+      requestSignal = init.signal;
+      return new Promise(() => undefined);
+    };
+    await expect(fetchWithTimeout(fetch, 'https://example.test', { method: 'POST', headers: {}, body: '' }, 5))
+      .rejects.toMatchObject({ retryable: true });
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
   it('Gemini usa a API oficial, converte tool calls e contabiliza uso', async () => {
     const cfg = PRESETS.find((p) => p.id === 'gemini')!;
     let request: { url: string; headers: Record<string, string>; body: Record<string, unknown> } | undefined;

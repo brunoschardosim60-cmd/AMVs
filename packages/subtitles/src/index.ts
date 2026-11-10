@@ -1,5 +1,5 @@
 import type { Cue } from '@amv/analysis';
-import { applyCommand, clipEndUs, newId, TextContentSchema, type Clip, type Command, type Project, type TextWordTiming } from '@amv/project';
+import { applyCommand, clearRange as clearTimelineRange, clipEndUs, newId, TextContentSchema, timelineLocalAtSource, type Clip, type Command, type Project, type TextWordTiming } from '@amv/project';
 
 /**
  * Legendas na timeline: são clipes de texto comuns na trilha de texto.
@@ -10,7 +10,9 @@ import { applyCommand, clipEndUs, newId, TextContentSchema, type Clip, type Comm
 const S = 1_000_000;
 const us = (s: number) => Math.round(s * S);
 
-export type SubtitleLook = 'legenda' | 'destaque' | 'palavra' | 'karaoke' | 'lyrics-cinematic' | 'dialogue-dramatic' | 'impact-typography';
+export type SubtitleLook =
+  | 'legenda' | 'destaque' | 'palavra' | 'karaoke' | 'lyrics-cinematic' | 'dialogue-dramatic' | 'impact-typography'
+  | 'section-intro' | 'section-verse' | 'section-chorus' | 'section-climax';
 
 export const LOOKS: { id: SubtitleLook; label: string; description: string }[] = [
   { id: 'legenda', label: 'Legenda', description: 'Embaixo, contorno preto, discreta.' },
@@ -20,6 +22,10 @@ export const LOOKS: { id: SubtitleLook; label: string; description: string }[] =
   { id: 'lyrics-cinematic', label: 'Lyrics Cinematic', description: 'Letra grande com realce palavra a palavra.' },
   { id: 'dialogue-dramatic', label: 'Dialogue Dramatic', description: 'Fala legível com caixa escura e contorno.' },
   { id: 'impact-typography', label: 'Impact Typography', description: 'Texto central grande com entrada pop.' },
+  { id: 'section-intro', label: 'Intro', description: 'Título espaçado e cinematográfico; edite o estilo no Inspector após aplicar.' },
+  { id: 'section-verse', label: 'Verso', description: 'Legenda discreta em área segura; edite o estilo no Inspector após aplicar.' },
+  { id: 'section-chorus', label: 'Refrão', description: 'Letra com realce gradual; edite o estilo no Inspector após aplicar.' },
+  { id: 'section-climax', label: 'Clímax', description: 'Tipografia de impacto com gradiente e glow; edite o estilo no Inspector após aplicar.' },
 ];
 
 export interface UntimedLyricAlignment {
@@ -133,6 +139,14 @@ export function lookText(look: SubtitleLook, H: number, text: string): { transfo
       return { transform: t(0.28), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.062), weight: 700, color: '#ffffff', outlineColor: '#000000', outlineWidth: 2, shadow: true, animationIn: 'fade', animationOut: 'fade', background: 'box', backgroundOpacity: 0.78, alignment: 'center', maxWidthRatio: 0.82, marginX: Math.round(H * 0.08), padding: Math.round(H * 0.025), lineSpacing: 1.22 }) };
     case 'impact-typography':
       return { transform: t(0), text: content({ text: text.toUpperCase(), font: 'Manrope Variable', size: Math.round(H * 0.14), weight: 900, color: '#ffffff', outlineColor: '#050505', outlineWidth: 5, shadow: true, animationIn: 'pop', animationOut: 'fade', background: 'box', backgroundOpacity: 0.68, alignment: 'center', maxWidthRatio: 0.88, marginX: Math.round(H * 0.06), padding: Math.round(H * 0.03), highlightColor: '#ffe066', highlightScale: 1.25 }) };
+    case 'section-intro':
+      return { transform: t(-0.2), text: content({ text: text.toUpperCase(), font: 'Manrope Variable', size: Math.round(H * 0.08), weight: 700, color: '#ffffff', outlineColor: '#11131a', outlineWidth: 2, shadow: true, animationIn: 'slide', animationOut: 'fade', fillStyle: 'linear-gradient', gradientStartColor: '#fff2bd', gradientEndColor: '#e5a84b', glowColor: '#ffd36e', glowIntensity: 4, letterSpacing: 4, alignment: 'center', section: 'intro' }) };
+    case 'section-verse':
+      return { transform: t(0.34), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.05), color: '#ffffff', outlineColor: '#000000', outlineWidth: 3, shadow: true, animationIn: 'fade', animationOut: 'fade', background: 'box', backgroundOpacity: 0.58, alignment: 'center', section: 'verse' }) };
+    case 'section-chorus':
+      return { transform: t(0.18), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.085), weight: 800, color: '#ffffff', outlineColor: '#08090c', outlineWidth: 3, shadow: true, animationIn: 'pop', animationOut: 'fade', fillStyle: 'linear-gradient', gradientStartColor: '#fff2a6', gradientEndColor: '#ff78bc', glowColor: '#ff91d0', glowIntensity: 8, highlightColor: '#ffffff', highlightScale: 1.16, wordAnimation: 'highlight', alignment: 'center', section: 'chorus' }) };
+    case 'section-climax':
+      return { transform: t(0), text: content({ text: text.toUpperCase(), font: 'Manrope Variable', size: Math.round(H * 0.13), weight: 900, color: '#ffffff', outlineColor: '#08090c', outlineWidth: 5, shadow: true, animationIn: 'pop', animationOut: 'blur', fillStyle: 'linear-gradient', gradientStartColor: '#fff4bd', gradientEndColor: '#ff4b57', glowColor: '#ff503c', glowIntensity: 18, highlightColor: '#ffffff', highlightScale: 1.2, wordAnimation: 'pop', background: 'none', alignment: 'center', section: 'climax' }) };
     default:
       return { transform: t(0.38), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.045), color: '#ffffff', outlineColor: '#000000', outlineWidth: 3, shadow: false, animationIn: null, animationOut: null }) };
   }
@@ -158,13 +172,21 @@ export function subtitleClip(
     sourceInUs: 0,
     sourceOutUs: Math.max(40_000, durUs),
     speed: 1,
+    reverse: false,
     transform: l.transform,
-    audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, streamIndex: null },
+    blendMode: 'normal',
+    mask: 'none',
+    groupId: null,
+    audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null },
     effects: [],
     transitionIn: null,
     keyframes: {},
     text: {
       ...l.text,
+      textSource: 'original',
+      manualText: null,
+      translations: {},
+      original: text,
       wordTimings,
       timingPrecision: wordTimings.length ? 'word' : 'segment',
     },
@@ -194,21 +216,6 @@ export function normalizeCues(cues: Cue[]): Cue[] {
   return out.filter((c) => c.endS - c.startS >= 0.04);
 }
 
-/** Remove (e encurta) clipes da trilha que caem no intervalo. */
-function clearRange(project: Project, trackId: string, fromUs: number, toUs: number): Command[] {
-  const cmds: Command[] = [];
-  for (const c of project.clips) {
-    if (c.trackId !== trackId) continue;
-    const a = c.timelineStartUs;
-    const b = clipEndUs(c);
-    if (b <= fromUs || a >= toUs) continue;
-    if (a >= fromUs && b <= toUs) cmds.push({ type: 'clip.remove', clipId: c.id });
-    else if (a < fromUs) cmds.push({ type: 'clip.update', clipId: c.id, patch: { durationUs: fromUs - a, sourceOutUs: c.sourceInUs + (fromUs - a) } });
-    else cmds.push({ type: 'clip.update', clipId: c.id, patch: { timelineStartUs: toUs, durationUs: b - toUs, sourceOutUs: c.sourceInUs + (b - toUs) } });
-  }
-  return cmds;
-}
-
 export interface PlaceOptions {
   trackId: string;
   /** Onde o tempo 0 da legenda cai na timeline. */
@@ -229,7 +236,7 @@ export function placeCues(project: Project, cues: Cue[], opts: PlaceOptions): Co
   const from = Math.max(0, Math.min(...items.map((c) => c.a)));
   const to = Math.max(...items.map((c) => c.b));
   return [
-    ...clearRange(project, opts.trackId, from, to),
+    ...clearTimelineRange(project, opts.trackId, from, to),
     ...items.map((c) => {
       const clipStartUs = Math.max(0, c.a);
       const clipEnd = c.b;
@@ -244,6 +251,19 @@ export function placeCues(project: Project, cues: Cue[], opts: PlaceOptions): Co
           source: word.source,
           confidence: word.confidence ?? null,
           uncertain: word.uncertain ?? (word.confidence != null && word.confidence < 0.78),
+          syllables: (word.syllables ?? []).flatMap((syllable) => {
+            const syllableStartUs = Math.max(clipStartUs, opts.offsetUs + us(syllable.startS));
+            const syllableEndUs = Math.min(clipEnd, opts.offsetUs + us(syllable.endS));
+            if (syllableEndUs <= syllableStartUs) return [];
+            return [{
+              text: syllable.text,
+              startUs: syllableStartUs - clipStartUs,
+              endUs: syllableEndUs - clipStartUs,
+              source: syllable.source,
+              confidence: syllable.confidence,
+              uncertain: false,
+            }];
+          }),
         }];
       });
       return {
@@ -259,25 +279,36 @@ export function placeCues(project: Project, cues: Cue[], opts: PlaceOptions): Co
  * do clipe e coloca exatamente onde ele está na timeline (considera a velocidade).
  */
 export function cuesForClip(clip: Clip, episodeCues: Cue[]): Cue[] {
-  const srcA = clip.sourceInUs / S;
-  const srcB = clip.sourceOutUs / S;
+  const srcA = Math.min(clip.sourceInUs, clip.sourceOutUs) / S;
+  const srcB = Math.max(clip.sourceInUs, clip.sourceOutUs) / S;
   const t0 = clip.timelineStartUs / S;
   const out: Cue[] = [];
   for (const c of episodeCues) {
     if (c.endS <= srcA || c.startS >= srcB) continue;
     const a = Math.max(c.startS, srcA);
     const b = Math.min(c.endS, srcB);
+    const localA = timelineLocalAtSource(clip, a * S);
+    const localB = timelineLocalAtSource(clip, b * S);
+    if (localA === null || localB === null || localA === localB) continue;
     const words = c.words?.flatMap((word) => {
       const wordStart = Math.max(word.startS, a);
       const wordEnd = Math.min(word.endS, b);
       if (wordEnd <= wordStart) return [];
+      const localStart = timelineLocalAtSource(clip, wordStart * S);
+      const localEnd = timelineLocalAtSource(clip, wordEnd * S);
+      if (localStart === null || localEnd === null || localStart === localEnd) return [];
       return [{
         ...word,
-        startS: t0 + (wordStart - srcA) / clip.speed,
-        endS: t0 + (wordEnd - srcA) / clip.speed,
+        startS: t0 + Math.min(localStart, localEnd) / S,
+        endS: t0 + Math.max(localStart, localEnd) / S,
       }];
     });
-    out.push({ startS: t0 + (a - srcA) / clip.speed, endS: t0 + (b - srcA) / clip.speed, text: c.text, ...(words?.length ? { words } : {}) });
+    out.push({
+      startS: t0 + Math.min(localA, localB) / S,
+      endS: t0 + Math.max(localA, localB) / S,
+      text: c.text,
+      ...(words?.length ? { words } : {}),
+    });
   }
   return out;
 }
@@ -324,7 +355,7 @@ export function restyleSubtitles(project: Project, clipIds: string[], look: Subt
   return project.clips
     .filter((c) => clipIds.includes(c.id) && c.text)
     .map((c) => {
-      const raw = look === 'palavra' ? c.text!.text.toUpperCase() : c.text!.text;
+      const raw = look === 'palavra' || look === 'section-climax' ? c.text!.text.toUpperCase() : c.text!.text;
       const l = lookText(look, H, raw);
       return {
         type: 'clip.update' as const,
@@ -336,6 +367,9 @@ export function restyleSubtitles(project: Project, clipIds: string[], look: Subt
             text: raw,
             original: c.text!.original,
             lang: c.text!.lang,
+            textSource: c.text!.textSource,
+            manualText: c.text!.manualText,
+            translations: c.text!.translations,
             wordTimings: c.text!.wordTimings,
             timingPrecision: c.text!.timingPrecision,
           },
@@ -396,6 +430,43 @@ export const langLabel = (code: string) => SUBTITLE_LANGS.find((l) => l.code ===
 /** Texto original de uma legenda (antes de qualquer tradução). */
 export const originalText = (c: Clip) => c.text?.original ?? c.text?.text ?? '';
 
+export type SubtitleTextVariant =
+  | { type: 'original' }
+  | { type: 'translation'; lang: string }
+  | { type: 'manual' };
+
+export function editSubtitleTextManually(
+  current: NonNullable<Clip['text']>,
+  text: string,
+): NonNullable<Clip['text']> {
+  return {
+    ...current,
+    text,
+    textSource: 'manual',
+    manualText: text,
+    original: current.original ?? current.text,
+    lang: undefined,
+    wordTimings: [],
+    timingPrecision: 'segment',
+  };
+}
+
+export function selectSubtitleTextVariant(
+  current: NonNullable<Clip['text']>,
+  variant: SubtitleTextVariant,
+): NonNullable<Clip['text']> {
+  if (variant.type === 'original' && current.original !== undefined) {
+    return { ...current, text: current.original, textSource: 'original', lang: undefined, wordTimings: [], timingPrecision: 'segment' };
+  }
+  if (variant.type === 'translation' && current.translations[variant.lang] !== undefined) {
+    return { ...current, text: current.translations[variant.lang]!, textSource: 'translation', lang: variant.lang, wordTimings: [], timingPrecision: 'segment' };
+  }
+  if (variant.type === 'manual' && current.manualText !== null) {
+    return { ...current, text: current.manualText, textSource: 'manual', lang: undefined, wordTimings: [], timingPrecision: 'segment' };
+  }
+  return current;
+}
+
 /**
  * Troca o texto das legendas pelas traduções (mesma ordem de `clips`; null = mantém).
  * O original fica guardado no próprio clipe: dá para voltar ou traduzir para outro idioma
@@ -406,7 +477,22 @@ export function applyTranslation(clips: Clip[], translations: (string | null)[],
   clips.forEach((c, i) => {
     const t = translations[i];
     if (!c.text || t === null || t === undefined || !t.trim()) return;
-    cmds.push({ type: 'clip.update', clipId: c.id, patch: { text: { ...c.text, text: t, original: c.text.original ?? c.text.text, lang, wordTimings: [], timingPrecision: 'segment' } } });
+    cmds.push({
+      type: 'clip.update',
+      clipId: c.id,
+      patch: {
+        text: {
+          ...c.text,
+          text: t,
+          textSource: 'translation',
+          translations: { ...c.text.translations, [lang]: t },
+          original: c.text.original ?? c.text.text,
+          lang,
+          wordTimings: [],
+          timingPrecision: 'segment',
+        },
+      },
+    });
   });
   return cmds;
 }
@@ -414,9 +500,19 @@ export function applyTranslation(clips: Clip[], translations: (string | null)[],
 /** Volta as legendas traduzidas ao texto original. */
 export function restoreOriginals(clips: Clip[]): Command[] {
   return clips
-    .filter((c) => c.text?.original !== undefined)
-    .map((c) => {
-      const { original, lang: _lang, ...rest } = c.text!;
-      return { type: 'clip.update' as const, clipId: c.id, patch: { text: { ...rest, text: original! } } };
-    });
+    .filter((c) => c.text?.original !== undefined && c.text.textSource !== 'original')
+    .map((c) => ({
+      type: 'clip.update' as const,
+      clipId: c.id,
+      patch: {
+        text: {
+          ...c.text!,
+          text: c.text!.original!,
+          textSource: 'original' as const,
+          lang: undefined,
+          wordTimings: [],
+          timingPrecision: 'segment' as const,
+        },
+      },
+    }));
 }

@@ -134,7 +134,9 @@ export async function embeddedSubtitles(runner: ProcessRunner, path: string, pro
     o += c.length;
   }
   const text = decodeSubtitleBytes(all);
-  return asAss ? parseAss(text) : parseSrt(text);
+  const cues = asAss ? parseAss(text) : parseSrt(text);
+  const language = pick.language ?? pick.title ?? null;
+  return cues.map((cue) => ({ ...cue, language }));
 }
 
 export async function analyzeMusicFile(runner: ProcessRunner, path: string, durationS: number, report: Report, signal?: AbortSignal): Promise<MusicAnalysis> {

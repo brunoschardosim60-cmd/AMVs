@@ -56,12 +56,13 @@ export interface ChatResult {
   usage: { input: number; output: number } | null;
 }
 
-export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; headers?: { get(name: string): string | null }; text(): Promise<string> }>;
 
 export class ProviderError extends Error {
   constructor(
     message: string,
     readonly status: number | null,
+    readonly retryable = false,
   ) {
     super(message);
     this.name = 'ProviderError';
@@ -84,6 +85,127 @@ function explain(status: number, body: string, cfg: ProviderConfig): string {
 
 const trimSlash = (s: string) => s.replace(/\/+$/, '');
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const REQUEST_TIMEOUT_MS = 45_000;
+const MAX_TRANSIENT_ATTEMPTS = 3;
+const CIRCUIT_FAILURE_LIMIT = 3;
+const CIRCUIT_COOLDOWN_MS = 30_000;
+const geminiFailures = new Map<string, { count: number; openUntil: number }>();
+
+function providerKey(cfg: ProviderConfig): string {
+  return `${cfg.kind}:${trimSlash(cfg.baseUrl)}:${cfg.model}`;
+}
+
+function retryAfterMs(res: Awaited<ReturnType<FetchLike>>): number | null {
+  const header = res.headers?.get('retry-after');
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.max(0, Math.min(15_000, seconds * 1000));
+  const date = Date.parse(header);
+  return Number.isFinite(date) ? Math.max(0, Math.min(15_000, date - Date.now())) : null;
+}
+
+function wait(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(Object.assign(new Error('cancelado'), { name: 'AbortError' }));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(Object.assign(new Error('cancelado'), { name: 'AbortError' }));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
+export async function fetchWithTimeout(
+  fetch: FetchLike,
+  url: string,
+  init: Parameters<FetchLike>[1],
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<Awaited<ReturnType<FetchLike>>> {
+  const controller = new AbortController();
+  const upstreamAbort = () => controller.abort();
+  if (init.signal?.aborted) throw Object.assign(new Error('cancelado'), { name: 'AbortError' });
+  init.signal?.addEventListener('abort', upstreamAbort, { once: true });
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      fetch(url, { ...init, signal: controller.signal }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+          reject(new ProviderError('A requisição ao provedor excedeu 45 segundos.', null, true));
+        }, timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    if (init.signal?.aborted) throw Object.assign(new Error('cancelado'), { name: 'AbortError' });
+    if (timedOut && !(error instanceof ProviderError)) throw new ProviderError('A requisição ao provedor excedeu 45 segundos.', null, true);
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+    init.signal?.removeEventListener('abort', upstreamAbort);
+  }
+}
+
+async function callGeminiWithRetry(
+  cfg: ProviderConfig,
+  key: string,
+  fetch: FetchLike,
+  system: string,
+  messages: ChatMessage[],
+  tools: ToolSpec[],
+  signal?: AbortSignal,
+): Promise<Awaited<ReturnType<FetchLike>>> {
+  const circuitKey = providerKey(cfg);
+  const state = geminiFailures.get(circuitKey);
+  if (state && state.openUntil > Date.now()) {
+    throw new ProviderError(`Circuit breaker aberto para ${cfg.name} (${cfg.model}); tente novamente em alguns segundos.`, 503, true);
+  }
+  if (state && state.openUntil > 0) geminiFailures.delete(circuitKey);
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_TRANSIENT_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetchWithTimeout(fetch, `${trimSlash(cfg.baseUrl)}/models/${encodeURIComponent(cfg.model)}:generateContent`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+        body: JSON.stringify(geminiBody(system, messages, tools)),
+        signal,
+      });
+      if (res.ok || (res.status !== 429 && res.status < 500)) {
+        geminiFailures.delete(circuitKey);
+        return res;
+      }
+      lastError = new ProviderError(explain(res.status, '', cfg), res.status, true);
+      if (attempt < MAX_TRANSIENT_ATTEMPTS - 1) {
+        const delay = retryAfterMs(res) ?? Math.round(300 * 2 ** attempt * (0.75 + Math.random() * 0.5));
+        await wait(delay, signal);
+        continue;
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') throw error;
+      lastError = error;
+      if (error instanceof ProviderError && !error.retryable) throw error;
+      if (attempt < MAX_TRANSIENT_ATTEMPTS - 1) {
+        await wait(Math.round(300 * 2 ** attempt * (0.75 + Math.random() * 0.5)), signal);
+        continue;
+      }
+    }
+  }
+
+  const failures = (geminiFailures.get(circuitKey)?.count ?? 0) + 1;
+  geminiFailures.set(circuitKey, {
+    count: failures,
+    openUntil: failures >= CIRCUIT_FAILURE_LIMIT ? Date.now() + CIRCUIT_COOLDOWN_MS : 0,
+  });
+  if (lastError instanceof ProviderError) throw lastError;
+  throw new ProviderError(`Falha temporária no ${cfg.name} após ${MAX_TRANSIENT_ATTEMPTS} tentativas: ${errText(lastError)}`, null, true);
+}
 
 function assertGeminiBaseUrl(baseUrl: string): void {
   if (trimSlash(baseUrl) !== GEMINI_BASE_URL) throw new ProviderError('O Gemini só pode usar a API oficial generativelanguage.googleapis.com.', null);
@@ -104,7 +226,10 @@ export async function chat(
   let res: Awaited<ReturnType<FetchLike>>;
   try {
     if (cfg.kind === 'anthropic') res = await callAnthropic(cfg, key!, fetch, system, messages, tools, signal);
-    else if (cfg.kind === 'gemini') res = await callGemini(cfg, key!, fetch, system, messages, tools, signal);
+    else if (cfg.kind === 'gemini') {
+      assertGeminiBaseUrl(cfg.baseUrl);
+      res = await callGeminiWithRetry(cfg, key!, fetch, system, messages, tools, signal);
+    }
     else res = await callOpenAi(cfg, key, fetch, system, messages, tools, signal);
   } catch (e) {
     if (e instanceof ProviderError) throw e;
@@ -233,9 +358,7 @@ function toGemini(messages: ChatMessage[]) {
   return out;
 }
 
-function callGemini(cfg: ProviderConfig, key: string, fetch: FetchLike, system: string, messages: ChatMessage[], tools: ToolSpec[], signal?: AbortSignal) {
-  assertGeminiBaseUrl(cfg.baseUrl);
-  const model = encodeURIComponent(cfg.model);
+function geminiBody(system: string, messages: ChatMessage[], tools: ToolSpec[]): Record<string, unknown> {
   const declarations = tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
   const body: Record<string, unknown> = {
     systemInstruction: { parts: [{ text: system }] },
@@ -243,12 +366,7 @@ function callGemini(cfg: ProviderConfig, key: string, fetch: FetchLike, system: 
     generationConfig: { temperature: 0.4 },
   };
   if (declarations.length) body.tools = [{ functionDeclarations: declarations }];
-  return fetch(`${trimSlash(cfg.baseUrl)}/models/${model}:generateContent`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
-    body: JSON.stringify(body),
-    signal,
-  });
+  return body;
 }
 
 export function parseGemini(body: string): ChatResult {

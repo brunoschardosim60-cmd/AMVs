@@ -19,6 +19,16 @@ export const RESOLUTION_PRESETS: ExportPreset[] = [
   { id: '720', label: '720p', height: 720 },
 ];
 
+export const OUTPUT_FRAME_RATES: { id: string; label: string; value: { num: number; den: number } | null }[] = [
+  { id: 'project', label: 'Do projeto', value: null },
+  { id: '23976', label: '23,976 fps', value: { num: 24000, den: 1001 } },
+  { id: '24', label: '24 fps', value: { num: 24, den: 1 } },
+  { id: '25', label: '25 fps', value: { num: 25, den: 1 } },
+  { id: '30', label: '30 fps', value: { num: 30, den: 1 } },
+  { id: '50', label: '50 fps', value: { num: 50, den: 1 } },
+  { id: '60', label: '60 fps', value: { num: 60, den: 1 } },
+];
+
 export function outputSize(project: Project, preset: ExportPreset): { width: number; height: number } {
   const P = project.settings;
   if (!preset.height) return { width: P.width, height: P.height };
@@ -27,6 +37,26 @@ export function outputSize(project: Project, preset: ExportPreset): { width: num
   const k = preset.height / short;
   const even = (v: number) => Math.max(2, 2 * Math.round(v / 2));
   return { width: even(P.width * k), height: even(P.height * k) };
+}
+
+export function estimateOutputSize(
+  durationUs: number,
+  width: number,
+  height: number,
+  codec: 'h264' | 'h265' | 'prores',
+  audioBitrateK: number,
+  rateControl: 'crf' | 'bitrate',
+  bitrateK: number,
+  crf: number,
+): { minBytes: number; maxBytes: number } {
+  const durationSeconds = durationUs / 1e6;
+  const baseline = rateControl === 'bitrate'
+    ? bitrateK
+    : codec === 'prores'
+      ? 145_000
+      : (codec === 'h265' ? 3500 : 6000) * (width * height / (1920 * 1080)) * 2 ** (((codec === 'h265' ? 20 : 18) - crf) / 6);
+  const totalBytes = durationSeconds * (baseline + audioBitrateK) * 1000 / 8;
+  return { minBytes: Math.round(totalBytes * 0.7), maxBytes: Math.round(totalBytes * 1.3) };
 }
 
 /**

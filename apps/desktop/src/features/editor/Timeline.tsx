@@ -10,6 +10,9 @@ import {
   projectDurationUs,
   TextContentSchema,
   snapPoints,
+  sourceTimeAt,
+  speedAt,
+  timelineLocalAtSource,
   trimBounds,
   trimClip,
   type Clip,
@@ -18,7 +21,7 @@ import {
   type Project,
   type Track,
 } from '@amv/project';
-import { ChevronDown, ChevronUp, Eye, EyeOff, Lock, LockOpen, Magnet, Plus, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronDown, ChevronUp, Eye, EyeOff, Lock, LockOpen, Magnet, Plus, ScanSearch, SlidersHorizontal, Sparkles, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
@@ -27,6 +30,9 @@ import { ignoreEditorKey, pxToUs, useEditor, usToPx, ZOOM_MAX, ZOOM_MIN } from '
 import { useStrip, useWaveform } from './mediaCache';
 import { pickLevel } from '@amv/media';
 import { selectClipsInMarquee } from './timelineSelection';
+import { QualityDialog } from './QualityDialog';
+import { GenerateDialog } from '../automv/GenerateDialog';
+import { AudioMixerDialog } from './AudioMixerDialog';
 
 const HEADER_W = 168;
 const RULER_H = 26;
@@ -92,13 +98,13 @@ const Waveform = memo(function Waveform({ clip, widthPx, zoom, session, color }:
     const ctx = cv.getContext('2d')!;
     ctx.clearRect(0, 0, cv.width, cv.height);
     ctx.fillStyle = color;
-    const level = pickLevel(w, zoom / clip.speed); // px por segundo de ORIGEM
+    const level = pickLevel(w, zoom / Math.max(0.1, speedAt(clip, clip.durationUs / 2))); // média local para escolher o nível do waveform
     const secondsPerBucket = level.samplesPerBucket / w.sampleRate;
     const mid = cv.height / 2;
     const scaleX = cssW / widthPx; // se o canvas foi limitado, comprime
     for (let x = 0; x < cv.width; x++) {
       const tlUs = ((x / dpr / scaleX) / zoom) * 1e6;
-      const srcS = (clip.sourceInUs + tlUs * clip.speed) / 1e6;
+      const srcS = sourceTimeAt(clip, tlUs) / 1e6;
       const i = Math.floor(srcS / secondsPerBucket);
       if (i < 0 || i >= level.mins.length) continue;
       const lo = level.mins[i]! / 32768;
@@ -107,7 +113,7 @@ const Waveform = memo(function Waveform({ clip, widthPx, zoom, session, color }:
       const y2 = mid - lo * mid * 0.95;
       ctx.fillRect(x, y1, 1, Math.max(1, y2 - y1));
     }
-  }, [w, widthPx, zoom, clip.sourceInUs, clip.speed, color]);
+  }, [w, widthPx, zoom, clip.sourceInUs, clip.sourceOutUs, clip.durationUs, clip.speed, clip.reverse, clip.keyframes.speed, color]);
   if (!w) return null;
   return <canvas ref={ref} className="pointer-events-none absolute inset-x-0 bottom-0 h-[62%]" style={{ width: Math.min(widthPx, 8000) }} />;
 });
@@ -122,7 +128,7 @@ const Thumbs = memo(function Thumbs({ clip, widthPx, zoom, session, height }: { 
   const tiles = [];
   for (let i = 0; i < n; i++) {
     const tlS = (i * tileW) / zoom;
-    const srcS = (clip.sourceInUs / 1e6) + tlS * clip.speed;
+    const srcS = sourceTimeAt(clip, tlS * 1e6) / 1e6;
     const idx = Math.min(plan.count - 1, Math.max(0, Math.floor(srcS / plan.intervalS)));
     const col = idx % plan.cols;
     const row = Math.floor(idx / plan.cols);
@@ -150,6 +156,9 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
   const toast = useApp((s) => s.toast);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [gesture, setGesture] = useState<Gesture>(null);
+  const [qualityOpen, setQualityOpen] = useState(false);
+  const [regenerateOpen, setRegenerateOpen] = useState(false);
+  const [audioMixerOpen, setAudioMixerOpen] = useState(false);
   const gestureRef = useRef<Gesture>(null);
   gestureRef.current = gesture;
   const [dropHint, setDropHintState] = useState<{ trackId: string; startUs: number; durUs: number; ok: boolean } | null>(null);
@@ -162,6 +171,18 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
 
   const tracks = project.tracks;
   const durationUs = projectDurationUs(project);
+  const targetVideoTrack = [...tracks].reverse().find((track) => track.kind === 'video');
+  const regenerableClips = targetVideoTrack
+    ? project.clips.filter((clip) => selection.includes(clip.id) && clip.trackId === targetVideoTrack.id && !!clip.assetId && !clip.text)
+    : [];
+  const localizedRange = regenerableClips.length
+    ? {
+        startUs: Math.min(...regenerableClips.map((clip) => clip.timelineStartUs)),
+        endUs: Math.max(...regenerableClips.map(clipEndUs)),
+        trackId: targetVideoTrack!.id,
+        clipIds: regenerableClips.map((clip) => clip.id),
+      }
+    : null;
   const contentW = Math.max(usToPx(durationUs, zoom) + 400, (scrollRef.current?.clientWidth ?? 1200) - HEADER_W);
   const thresholdUs = pxToUs(SNAP_PX, zoom);
 
@@ -173,15 +194,20 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
       if (t?.kind !== 'audio' || !c.assetId) continue;
       const m = session.assetRuntime(c.assetId).music;
       if (!m) continue;
-      const toTl = (s: number) => c.timelineStartUs + ((s * 1e6 - c.sourceInUs) / c.speed);
+      const toTl = (s: number) => {
+        const localUs = timelineLocalAtSource(c, s * 1e6);
+        return localUs === null ? Number.NaN : c.timelineStartUs + localUs;
+      };
       const inside = (us: number) => us >= c.timelineStartUs && us < c.timelineStartUs + c.durationUs;
       const downs = new Set(m.downbeats.map((d) => Math.round(d * 1000)));
       for (const b of m.beats) {
         const us = Math.round(toTl(b));
+        if (!Number.isFinite(us)) continue;
         if (inside(us)) out.push({ atUs: us, kind: downs.has(Math.round(b * 1000)) ? 'down' : 'beat', trackId: c.trackId });
       }
       for (const d of m.drops.slice(0, 2)) {
         const us = Math.round(toTl(d));
+        if (!Number.isFinite(us)) continue;
         if (inside(us)) out.push({ atUs: us, kind: 'drop', trackId: c.trackId });
       }
     }
@@ -255,8 +281,12 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
     }
     if (!selection.includes(clip.id)) {
       ids = [clip.id];
-      select(ids);
     }
+    const groups = new Set(ids.map((id) => project.clips.find((item) => item.id === id)?.groupId).filter((id): id is string => !!id));
+    const expanded = new Set(ids);
+    for (const grouped of project.clips) if (grouped.groupId && groups.has(grouped.groupId)) expanded.add(grouped.id);
+    ids = [...expanded];
+    if (!selection.includes(clip.id) || ids.length !== selection.length) select(ids);
     if (track.locked) return;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     if (offset <= EDGE_PX && rect.width > EDGE_PX * 3) {
@@ -471,9 +501,10 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
       {
         type: 'clip.add',
         clip: {
-          id, trackId: track.id, assetId: null, timelineStartUs: playheadUs, durationUs: 3_000_000, sourceInUs: 0, sourceOutUs: 3_000_000, speed: 1,
+          id, trackId: track.id, assetId: null, timelineStartUs: playheadUs, durationUs: 3_000_000, sourceInUs: 0, sourceOutUs: 3_000_000, speed: 1, reverse: false,
           transform: { x: 0, y: Math.round(P.height * 0.36), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
-          audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, streamIndex: null },
+          blendMode: 'normal', mask: 'none', groupId: null,
+          audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null },
           effects: [], transitionIn: null, keyframes: {},
           text: TextContentSchema.parse({ text: 'Seu texto', font: 'Manrope Variable', size: Math.round(P.height * 0.05), color: '#ffffff', outlineColor: '#000000', outlineWidth: 3, shadow: true, animationIn: 'fade', animationOut: 'fade' }),
           origin: 'user', reason: null, confidence: null, label: null,
@@ -557,6 +588,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
   };
 
   return (
+    <>
     <section className="flex min-h-0 flex-1 flex-col border-t border-line bg-base" aria-label="Timeline">
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-line-soft px-2">
         <IconButton label={snapping ? 'Encaixe ligado (segure Alt para ignorar)' : 'Encaixe desligado'} aria-pressed={snapping} className={snapping ? 'text-violet-strong' : ''} onClick={() => setSnapping(!snapping)}>
@@ -594,6 +626,21 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
         </button>
         <button type="button" className="flex items-center gap-1 rounded px-2 py-1 text-xs text-ink-soft hover:bg-raised hover:text-ink" onClick={() => addTrack('audio')} title="Adicionar faixa de áudio">
           <Plus size={13} /> Áudio
+        </button>
+        <IconButton label="Abrir mixer de áudio" onClick={() => setAudioMixerOpen(true)}>
+          <SlidersHorizontal size={15} />
+        </IconButton>
+        <IconButton label="Avaliar qualidade audiovisual" onClick={() => setQualityOpen(true)}>
+          <ScanSearch size={15} />
+        </IconButton>
+        <button
+          type="button"
+          className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-ink-soft hover:bg-raised hover:text-ink disabled:cursor-not-allowed disabled:text-faint"
+          title={localizedRange ? 'Gerar uma alternativa apenas para os clipes de vídeo selecionados' : 'Selecione clipes de vídeo na trilha principal'}
+          disabled={!localizedRange}
+          onClick={() => setRegenerateOpen(true)}
+        >
+          <Sparkles size={14} /> Melhorar seleção
         </button>
         <span className="tnum ml-auto pr-2 text-xs text-muted">
           {selection.length ? `${selection.length} selecionado(s) · ` : ''}duração {formatTimecode(durationUs, project.settings.fps)}
@@ -699,7 +746,13 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
               const width = Math.max(2, usToPx(box.dur, zoom));
               const sel = selection.includes(c.id);
               const missing = asset?.status === 'missing';
-              const keyTimes = [...new Set([...(c.keyframes['transform.x'] ?? []), ...(c.keyframes['transform.y'] ?? [])].map((keyframe) => keyframe.atUs))];
+              const keyTimes = [...new Set([
+                ...(c.keyframes['transform.x'] ?? []),
+                ...(c.keyframes['transform.y'] ?? []),
+                ...(c.keyframes['transform.scale'] ?? []),
+                ...(c.keyframes['transform.rotation'] ?? []),
+                ...(c.keyframes['transform.opacity'] ?? []),
+              ].map((keyframe) => keyframe.atUs))];
               return (
                 <div
                   key={c.id}
@@ -707,7 +760,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                   tabIndex={-1}
                   aria-pressed={sel}
                   aria-label={`${c.label ?? asset?.name ?? 'clipe'} em ${formatTimecode(c.timelineStartUs, project.settings.fps)}`}
-                  title={`${c.label ?? asset?.name ?? 'Texto'}${c.reason ? `\nIA: ${c.reason}` : ''}`}
+                  title={`${c.label ?? asset?.name ?? 'Texto'}${c.groupId ? '\nElemento agrupado' : ''}${c.reason ? `\nIA: ${c.reason}` : ''}`}
                   onPointerDown={(e) => onClipPointerDown(e, c)}
                   className={`pointer-events-auto absolute overflow-hidden rounded-md border ${trackColor(t)} ${sel ? 'ring-2 ring-ink' : ''} ${box.dragging ? 'opacity-80 shadow-lg shadow-black/50' : ''} ${missing ? 'border-dashed border-warn' : ''} ${t.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
                   style={{ left, width, top: trackTops.tops[ti]! + 2, height: h - 4, zIndex: box.dragging ? 5 : 1 }}
@@ -719,6 +772,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                   ))}
                   <span className="relative z-[1] block truncate px-1.5 pt-0.5 text-2xs font-medium text-ink drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]">
                     {c.origin === 'ai' && <span className="mr-1 text-violet-strong">IA</span>}
+                    {c.groupId && <span className="mr-1 text-azure">Grupo</span>}
                     {c.speed !== 1 && <span className="mr-1 text-warn">{c.speed}×</span>}
                     {c.text ? c.text.text : (c.label ?? asset?.name)}
                   </span>
@@ -775,5 +829,15 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
         </div>
       </div>
     </section>
+    {qualityOpen && <QualityDialog session={session} onClose={() => setQualityOpen(false)} />}
+    {audioMixerOpen && <AudioMixerDialog session={session} onClose={() => setAudioMixerOpen(false)} />}
+    {regenerateOpen && localizedRange && (
+      <GenerateDialog
+        session={session}
+        localizedRange={localizedRange}
+        onClose={() => setRegenerateOpen(false)}
+      />
+    )}
+    </>
   );
 }

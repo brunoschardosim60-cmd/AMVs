@@ -5,6 +5,7 @@ import type { EpisodeAnalysis, MusicAnalysis } from '@amv/analysis';
  * cada estilo é um conjunto de parâmetros, não um prompt.
  */
 export type StyleId = 'hype' | 'rapido' | 'superacao' | 'letra' | 'discurso' | 'emocional';
+export type EditorialDirection = 'cinematic' | 'balanced' | 'hype';
 
 export interface StyleDef {
   id: StyleId;
@@ -12,6 +13,18 @@ export interface StyleDef {
   description: string;
   /** Batidas por corte conforme a energia da música (baixa, média, alta). */
   beatsPerCut: [number, number, number];
+  /** Variação determinística do agrupamento de batidas, sem jitter nos cortes. */
+  rhythmPattern: [number, number, number, number];
+  /** Quanto alongar planos durante pausas detectadas. */
+  pauseHold: number;
+  /** Quanto acelerar os cortes ao longo de um crescimento detectado. */
+  buildAcceleration: number;
+  /** Quanto acelerar nos instantes anteriores a um drop. */
+  preDropAcceleration: number;
+  /** Quanto alongar planos no encerramento musical. */
+  endingHold: number;
+  /** Sensibilidade a ataques fortes, sem transformar todo onset em corte. */
+  accentSensitivity: number;
   /** Corte nunca menor que isto (s). */
   minCutS: number;
   /** Intensidade de cena desejada (0..1) para energia baixa e alta da música. */
@@ -38,6 +51,12 @@ export const STYLES: StyleDef[] = [
     label: 'Hype / Luta',
     description: 'Cortes rápidos na batida, vários animes, clarão e tremida nos impactos. Calmo no começo, explode no drop.',
     beatsPerCut: [4, 2, 1],
+    rhythmPattern: [1, 1.25, 0.75, 1],
+    pauseHold: 1.35,
+    buildAcceleration: 0.28,
+    preDropAcceleration: 0.22,
+    endingHold: 1.5,
+    accentSensitivity: 0.62,
     minCutS: 0.22,
     targetIntensity: [0.3, 0.95],
     speechBeforeDrop: true,
@@ -52,6 +71,12 @@ export const STYLES: StyleDef[] = [
     label: 'Impacto rápido',
     description: 'Cortes de meia batida para destacar socos, golpes e impactos; desacelera nos trechos calmos da música.',
     beatsPerCut: [1, 0.5, 0.5],
+    rhythmPattern: [1, 1, 1, 1],
+    pauseHold: 1.25,
+    buildAcceleration: 0.15,
+    preDropAcceleration: 0.12,
+    endingHold: 1.4,
+    accentSensitivity: 0.88,
     minCutS: 0.2,
     targetIntensity: [0.55, 0.98],
     speechBeforeDrop: true,
@@ -67,6 +92,12 @@ export const STYLES: StyleDef[] = [
     label: 'Superação',
     description: 'Começa pesado e lento, frase marcante antes da virada, depois cenas de vitória. Cor quente.',
     beatsPerCut: [8, 4, 2],
+    rhythmPattern: [1.25, 1, 0.75, 1],
+    pauseHold: 1.7,
+    buildAcceleration: 0.38,
+    preDropAcceleration: 0.32,
+    endingHold: 1.8,
+    accentSensitivity: 0.48,
     minCutS: 0.35,
     targetIntensity: [0.2, 0.85],
     speechBeforeDrop: true,
@@ -81,6 +112,12 @@ export const STYLES: StyleDef[] = [
     label: 'Letra na tela',
     description: 'Uma palavra grande da letra a cada corte, cada uma numa cena diferente. Precisa da letra com tempo (LRC).',
     beatsPerCut: [2, 1, 1],
+    rhythmPattern: [1, 1, 0.8, 1.2],
+    pauseHold: 1.4,
+    buildAcceleration: 0.18,
+    preDropAcceleration: 0.18,
+    endingHold: 1.4,
+    accentSensitivity: 0.58,
     minCutS: 0.25,
     targetIntensity: [0.4, 0.9],
     speechBeforeDrop: false,
@@ -95,6 +132,12 @@ export const STYLES: StyleDef[] = [
     label: 'Discurso motivacional',
     description: 'As falas dos personagens contam a história, com a música baixa por baixo e legenda em pedaços. Preto e branco.',
     beatsPerCut: [8, 8, 4],
+    rhythmPattern: [1.25, 1, 1.25, 0.75],
+    pauseHold: 1.8,
+    buildAcceleration: 0.15,
+    preDropAcceleration: 0.1,
+    endingHold: 2,
+    accentSensitivity: 0.25,
     minCutS: 0.8,
     targetIntensity: [0.2, 0.6],
     speechBeforeDrop: false,
@@ -109,6 +152,12 @@ export const STYLES: StyleDef[] = [
     label: 'Emocional',
     description: 'Poucos cortes, cenas longas e transições suaves.',
     beatsPerCut: [16, 8, 8],
+    rhythmPattern: [1.25, 0.8, 1.4, 0.8],
+    pauseHold: 2,
+    buildAcceleration: 0.12,
+    preDropAcceleration: 0.08,
+    endingHold: 2.2,
+    accentSensitivity: 0.2,
     minCutS: 1.5,
     targetIntensity: [0.05, 0.45],
     speechBeforeDrop: false,
@@ -123,6 +172,42 @@ export const STYLES: StyleDef[] = [
 
 export function styleDef(id: StyleId): StyleDef {
   return STYLES.find((s) => s.id === id)!;
+}
+
+export function editorialStyle(style: StyleDef, direction: EditorialDirection): StyleDef {
+  if (direction === 'balanced') return style;
+  if (direction === 'cinematic') {
+    return {
+      ...style,
+      beatsPerCut: style.beatsPerCut.map((beats) => Math.max(1.5, Math.round(beats * 1.6))) as StyleDef['beatsPerCut'],
+      rhythmPattern: style.rhythmPattern.map((beats) => Math.max(0.75, Math.round(beats * 1.15 * 4) / 4)) as StyleDef['rhythmPattern'],
+      minCutS: Math.max(0.7, style.minCutS),
+      pauseHold: style.pauseHold * 1.15,
+      buildAcceleration: style.buildAcceleration * 0.75,
+      preDropAcceleration: style.preDropAcceleration * 0.75,
+      endingHold: style.endingHold * 1.2,
+      accentSensitivity: style.accentSensitivity * 0.65,
+      transition: 'dissolve',
+      impactFx: style.impactFx * 0.35,
+      narrative: Math.max(0.75, style.narrative),
+      sceneBias: style.sceneBias === 'emotion' ? 'emotion' : undefined,
+    };
+  }
+  return {
+    ...style,
+    beatsPerCut: style.beatsPerCut.map((beats) => Math.max(0.5, Math.round(beats * 0.55 * 2) / 2)) as StyleDef['beatsPerCut'],
+    rhythmPattern: style.rhythmPattern.map((beats) => Math.max(0.5, Math.round(beats * 0.85 * 4) / 4)) as StyleDef['rhythmPattern'],
+    minCutS: Math.min(0.22, style.minCutS),
+    pauseHold: Math.max(1, style.pauseHold * 0.85),
+    buildAcceleration: Math.min(0.5, style.buildAcceleration * 1.2),
+    preDropAcceleration: Math.min(0.35, style.preDropAcceleration * 1.2),
+    endingHold: Math.max(1.1, style.endingHold * 0.85),
+    accentSensitivity: Math.min(1, style.accentSensitivity * 1.25),
+    transition: 'cut',
+    impactFx: Math.min(1.25, style.impactFx * 1.25),
+    narrative: Math.max(0.5, style.narrative),
+    sceneBias: 'impact',
+  };
 }
 
 export interface StyleEvidence {

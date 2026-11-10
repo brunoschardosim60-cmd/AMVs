@@ -12,6 +12,88 @@ function setup() {
 }
 
 describe('comandos', () => {
+  it('biblioteca de personagens é uma mutação de projeto com undo', () => {
+    const { p } = setup();
+    const character = {
+      id: 'char-asta',
+      name: 'Asta',
+      aliases: ['garoto de cabelo branco'],
+      evidence: [{ assetId: p.assets[0]!.id, sceneKey: 't100', source: 'vision' as const, confidence: 0.82 }],
+      confidence: 0.82,
+      confirmed: true,
+    };
+    const result = applyCommand(p, { type: 'project.characterLibrary.update', characters: [character] });
+
+    expect(result.project.characterLibrary).toEqual([character]);
+    expect(applyCommand(result.project, result.inverse).project).toEqual(p);
+  });
+
+  it('anotações do laboratório são persistentes, únicas por cena e reversíveis', () => {
+    const { p, v } = setup();
+    const annotation = {
+      assetId: v.id,
+      sceneKey: 't100',
+      favorite: true,
+      marked: true,
+      excludedFromAuto: true,
+      tags: ['golpe final'],
+    };
+    const result = applyCommand(p, {
+      type: 'project.sceneAnnotation.update',
+      assetId: v.id,
+      sceneKey: 't100',
+      annotation,
+    });
+
+    expect(result.project.sceneAnnotations).toEqual([annotation]);
+    expect(applyCommand(result.project, result.inverse).project).toEqual(p);
+    const withSecond = applyCommand(result.project, {
+      type: 'project.sceneAnnotation.update',
+      assetId: v.id,
+      sceneKey: 't200',
+      annotation: { assetId: v.id, sceneKey: 't200', favorite: false, marked: true, excludedFromAuto: false, tags: [] },
+    }).project;
+    const updated = applyCommand(withSecond, {
+      type: 'project.sceneAnnotation.update',
+      assetId: v.id,
+      sceneKey: 't100',
+      annotation: { ...annotation, favorite: false },
+    });
+    expect(applyCommand(updated.project, updated.inverse).project).toEqual(withSecond);
+    expect(applyCommand(result.project, {
+      type: 'project.sceneAnnotation.update',
+      assetId: v.id,
+      sceneKey: 't100',
+      annotation: null,
+    }).project.sceneAnnotations).toEqual([]);
+  });
+
+  it('remover uma mídia limpa evidências da biblioteca e undo as restaura', () => {
+    const { p, v } = setup();
+    const withCharacter = applyCommand(p, {
+      type: 'project.characterLibrary.update',
+      characters: [{
+        id: 'char-asta',
+        name: 'Asta',
+        aliases: [],
+        evidence: [{ assetId: v.id, sceneKey: 't100', source: 'vision', confidence: 0.8 }],
+        confidence: 0.8,
+        confirmed: true,
+      }],
+    }).project;
+    const withAnnotation = applyCommand(withCharacter, {
+      type: 'project.sceneAnnotation.update',
+      assetId: v.id,
+      sceneKey: 't100',
+      annotation: { assetId: v.id, sceneKey: 't100', favorite: true, marked: false, excludedFromAuto: false, tags: [] },
+    }).project;
+    const removed = applyCommand(withAnnotation, { type: 'asset.remove', assetId: v.id });
+
+    expect(removed.project.characterLibrary[0]?.evidence).toEqual([]);
+    expect(removed.project.sceneAnnotations).toEqual([]);
+    expect(applyCommand(removed.project, removed.inverse).project).toEqual(withAnnotation);
+  });
+
   it('todo comando seguido do inverso devolve o projeto original', () => {
     const { p, v, a, v1, music } = setup();
     const c1 = clip(v1.id, v.id);
@@ -150,6 +232,17 @@ describe('histórico', () => {
     }
     expect(undos).toBe(3);
     expect(h.project.name).toBe('n1');
+  });
+
+  it('marcar uma revisão antiga como salva não limpa alterações mais recentes', () => {
+    const { p } = setup();
+    const h = new ProjectHistory(p);
+    h.execute({ type: 'project.rename', name: 'Revisão 1' });
+    const savedRevision = h.version;
+    h.execute({ type: 'project.rename', name: 'Revisão 2' });
+    h.markSaved(savedRevision);
+    expect(h.dirty).toBe(true);
+    expect(h.project.name).toBe('Revisão 2');
   });
 });
 

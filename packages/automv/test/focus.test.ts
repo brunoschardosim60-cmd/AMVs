@@ -82,6 +82,14 @@ describe('foco na luta', () => {
     expect(v1.some(inA) && v1.some(inB)).toBe(true);
   });
 
+  it('modo misturar mantém a origem em ordem cronológica dentro do mesmo episódio', () => {
+    const { on } = run([twoFights('ep1', 0.6, 0.6)], { focus: 'mix' });
+    const v1 = on('V1');
+    for (let i = 1; i < v1.length; i++) {
+      expect(v1[i]!.sourceInUs).toBeGreaterThanOrEqual(v1[i - 1]!.sourceOutUs - 50_000);
+    }
+  });
+
   it('escolhe a luta mais forte; "Gerar outra versão" ainda vem de uma luta só', () => {
     const ep = twoFights('ep1', 0.5, 0.8);
     const pool = chooseSequences([ep], 30, {});
@@ -316,6 +324,46 @@ describe('faixa de áudio da fala (japonês × português)', () => {
     const ep = { ...twoFights('ep1', 0.7, 0.7, [{ startS: 20, endS: 22, kind: 'fala' as const, confidence: 0.9, text: 'Vamos!', impact: 0.9 }]), audioStreams: two };
     expect(run([ep], { focus: 'fight', useSpeech: true }).on('Vozes')[0]!.audio.streamIndex).toBe(2);
     expect(run([ep], { focus: 'fight', useSpeech: true, voiceLang: 'pt' }).on('Vozes')[0]!.audio.streamIndex).toBe(1);
+  });
+
+  it('título vence tag errada e não mostra legenda em idioma diferente do áudio', () => {
+    const streams = [
+      { index: 1, language: 'jpn', title: 'English Dub' },
+      { index: 2, language: 'jpn', title: 'Japanese Original' },
+    ];
+    const ep = {
+      ...twoFights('ep1', 0.7, 0.7, [{
+        startS: 20, endS: 22, kind: 'fala' as const, confidence: 0.9,
+        text: 'I will win!', language: 'eng', impact: 0.9,
+      }]),
+      audioStreams: streams,
+    };
+    const { out, on } = run([ep], { focus: 'fight', useSpeech: true, showText: true });
+    expect(pickAudioStream(ep)).toBe(2);
+    expect(on('Vozes')[0]!.audio.streamIndex).toBe(2);
+    const textTrack = out.tracks.find((track) => track.kind === 'text')!;
+    expect(out.clips.some((clip) => clip.trackId === textTrack.id)).toBe(false);
+    expect(on('V1').some((clip) => clip.reason?.includes('I will win!'))).toBe(false);
+  });
+
+  it('mantém a legenda quando o idioma do texto corresponde à faixa selecionada', () => {
+    const streams = [
+      { index: 1, language: 'jpn', title: 'Português dublado' },
+      { index: 2, language: 'jpn', title: 'Japanese Original' },
+    ];
+    const ep = {
+      ...twoFights('ep1', 0.7, 0.7, [{
+        startS: 20, endS: 22, kind: 'fala' as const, confidence: 0.9,
+        text: 'Eu vou vencer!', language: 'por', impact: 0.9,
+      }]),
+      audioStreams: streams,
+    };
+    const { out, on } = run([ep], { focus: 'fight', useSpeech: true, showText: true, voiceLang: 'pt' });
+    expect(pickAudioStream(ep, 'pt')).toBe(1);
+    expect(on('Vozes')[0]!.audio.streamIndex).toBe(1);
+    const textTrack = out.tracks.find((track) => track.kind === 'text')!;
+    expect(out.clips.some((clip) => clip.trackId === textTrack.id)).toBe(true);
+    expect(on('V1').some((clip) => clip.reason?.includes('Eu vou vencer!'))).toBe(true);
   });
 });
 

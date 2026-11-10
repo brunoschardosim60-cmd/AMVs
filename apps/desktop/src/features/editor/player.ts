@@ -6,7 +6,7 @@
  * usa os originais e é exata. O tempo do projeto é sempre a fonte da verdade.
  */
 import { drawTextLayer } from './textLayer';
-import { clipEndUs, evalClipLook, evaluateKeyframes, projectDurationUs, transitionUnderlay, type Clip, type ClipLook, type Project, type Track } from '@amv/project';
+import { aggregateColorGrade, applyWhipPan, automaticDuckingGain, clipEndUs, createColorGradeLut, evalClipLook, evaluateKeyframes, isColorGradeNeutral, projectDurationUs, sampleColorGradeLut, sourceTimeAt, speedAt, transitionUnderlay, type Clip, type ClipLook, type ColorGradeLut, type Project, type Track } from '@amv/project';
 
 export interface MediaSource {
   /** URL do proxy de vídeo (vídeos) ou do arquivo/proxy de áudio. */
@@ -16,6 +16,7 @@ export interface MediaSource {
 }
 
 interface Slot {
+  slotKey: string;
   clipId: string;
   el: HTMLVideoElement | HTMLAudioElement | HTMLImageElement;
   kind: 'video' | 'audio' | 'image';
@@ -39,8 +40,139 @@ const MAX_SLOTS = 6;
 /** Elemento fora do playhead há mais que isso é fechado (libera a conexão). */
 const IDLE_RELEASE_MS = 1500;
 
+function canvasBlendMode(mode: Clip['blendMode']): GlobalCompositeOperation {
+  return mode === 'addition' ? 'lighter' : mode === 'normal' ? 'source-over' : mode;
+}
+
+function clipMask(ctx: CanvasRenderingContext2D, mask: Clip['mask'], x: number, y: number, width: number, height: number): void {
+  if (mask === 'none') return;
+  ctx.beginPath();
+  if (mask === 'circle') ctx.ellipse(x + width / 2, y + height / 2, width / 2, height / 2, 0, 0, Math.PI * 2);
+  else if (mask === 'left') ctx.rect(x, y, width / 2, height);
+  else if (mask === 'right') ctx.rect(x + width / 2, y, width / 2, height);
+  else if (mask === 'top') ctx.rect(x, y, width, height / 2);
+  else ctx.rect(x, y + height / 2, width, height / 2);
+  ctx.clip();
+}
+
+class ColorGradeGpu {
+  private readonly canvas: HTMLCanvasElement;
+  private readonly gl: WebGL2RenderingContext;
+  private readonly program: WebGLProgram;
+  private readonly sourceTexture: WebGLTexture;
+  private readonly lutTextures = new Map<string, WebGLTexture>();
+
+  private constructor(canvas: HTMLCanvasElement, gl: WebGL2RenderingContext, program: WebGLProgram, sourceTexture: WebGLTexture) {
+    this.canvas = canvas;
+    this.gl = gl;
+    this.program = program;
+    this.sourceTexture = sourceTexture;
+  }
+
+  static create(): ColorGradeGpu | null {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, premultipliedAlpha: false });
+    if (!gl) return null;
+    const compile = (type: number, source: string) => {
+      const shader = gl.createShader(type);
+      if (!shader) return null;
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    };
+    const vertex = compile(gl.VERTEX_SHADER, `#version 300 es
+      out vec2 uv;
+      void main() {
+        vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0);
+        uv = p * 0.5 + 0.5;
+        gl_Position = vec4(p, 0.0, 1.0);
+      }`);
+    const fragment = compile(gl.FRAGMENT_SHADER, `#version 300 es
+      precision highp float;
+      uniform sampler2D frameTexture;
+      uniform sampler3D gradeTexture;
+      uniform float gradeSize;
+      in vec2 uv;
+      out vec4 color;
+      void main() {
+        vec4 source = texture(frameTexture, uv);
+        vec3 lutCoord = (clamp(source.rgb, 0.0, 1.0) * (gradeSize - 1.0) + 0.5) / gradeSize;
+        color = vec4(texture(gradeTexture, lutCoord).rgb, source.a);
+      }`);
+    if (!vertex || !fragment) return null;
+    const program = gl.createProgram();
+    if (!program) return null;
+    gl.attachShader(program, vertex);
+    gl.attachShader(program, fragment);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
+    const sourceTexture = gl.createTexture();
+    if (!sourceTexture) return null;
+    gl.bindTexture(gl.TEXTURE_2D, sourceTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return new ColorGradeGpu(canvas, gl, program, sourceTexture);
+  }
+
+  apply(source: HTMLCanvasElement, key: string, lut: ColorGradeLut): HTMLCanvasElement | null {
+    const gl = this.gl;
+    if (gl.isContextLost()) return null;
+    if (this.canvas.width !== source.width) this.canvas.width = source.width;
+    if (this.canvas.height !== source.height) this.canvas.height = source.height;
+    gl.viewport(0, 0, source.width, source.height);
+    gl.useProgram(this.program);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.sourceTexture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+
+    let lutTexture = this.lutTextures.get(key);
+    if (!lutTexture) {
+      lutTexture = gl.createTexture() ?? undefined;
+      if (!lutTexture) return null;
+      const bytes = new Uint8Array(lut.size * lut.size * lut.size * 4);
+      for (let source = 0, target = 0; source < lut.data.length; source += 3, target += 4) {
+        bytes[target] = Math.round(lut.data[source]! * 255);
+        bytes[target + 1] = Math.round(lut.data[source + 1]! * 255);
+        bytes[target + 2] = Math.round(lut.data[source + 2]! * 255);
+        bytes[target + 3] = 255;
+      }
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_3D, lutTexture);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+      gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, lut.size, lut.size, lut.size, 0, gl.RGBA, gl.UNSIGNED_BYTE, bytes);
+      this.lutTextures.set(key, lutTexture);
+      if (this.lutTextures.size > 32) {
+        const oldest = this.lutTextures.keys().next().value!;
+        gl.deleteTexture(this.lutTextures.get(oldest)!);
+        this.lutTextures.delete(oldest);
+      }
+    } else {
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_3D, lutTexture);
+    }
+
+    gl.uniform1i(gl.getUniformLocation(this.program, 'frameTexture'), 0);
+    gl.uniform1i(gl.getUniformLocation(this.program, 'gradeTexture'), 1);
+    gl.uniform1f(gl.getUniformLocation(this.program, 'gradeSize'), lut.size);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    return this.canvas;
+  }
+}
+
 export function sourceTimeS(clip: Clip, atUs: number): number {
-  return (clip.sourceInUs + (atUs - clip.timelineStartUs) * clip.speed) / 1e6;
+  return sourceTimeAt(clip, atUs - clip.timelineStartUs) / 1e6;
 }
 
 export function activeClips(project: Project, atUs: number, track: Track): Clip | null {
@@ -51,7 +183,7 @@ export function activeClips(project: Project, atUs: number, track: Track): Clip 
 }
 
 /** Ganho linear de um clipe de áudio no instante, incluindo fades e ganho da trilha. */
-export function clipVolume(clip: Clip, track: Track, atUs: number, anySolo: boolean): number {
+export function clipVolume(clip: Clip, track: Track, atUs: number, anySolo: boolean, project?: Project): number {
   if (track.muted || (anySolo && !track.solo)) return 0;
   const db = clip.audio.gainDb + track.gainDb + keyframeGainDb(clip, atUs - clip.timelineStartUs);
   let v = Math.pow(10, db / 20);
@@ -59,6 +191,7 @@ export function clipVolume(clip: Clip, track: Track, atUs: number, anySolo: bool
   const left = clipEndUs(clip) - atUs;
   if (clip.audio.fadeInUs > 0 && into < clip.audio.fadeInUs) v *= into / clip.audio.fadeInUs;
   if (clip.audio.fadeOutUs > 0 && left < clip.audio.fadeOutUs) v *= left / clip.audio.fadeOutUs;
+  if (project) v *= automaticDuckingGain(project, track.id, atUs);
   return Math.max(0, v);
 }
 
@@ -89,6 +222,9 @@ export class Player {
   private clockStartPerf = 0;
   private pausedAtUs = 0;
   private ctx: CanvasRenderingContext2D | null = null;
+  private colorBuffer: HTMLCanvasElement | null = null;
+  private readonly colorLuts = new Map<string, ColorGradeLut>();
+  private colorGradeGpu: ColorGradeGpu | null | undefined;
   private audioContext: AudioContext | null = null;
   private audioLimiter: DynamicsCompressorNode | null = null;
   private listeners = new Set<(us: number) => void>();
@@ -118,10 +254,14 @@ export class Player {
 
   setProject(p: Project): void {
     this.project = p;
+    if (this.audioLimiter) {
+      this.audioLimiter.threshold.value = p.audioMix.limiterCeilingDb;
+      this.audioLimiter.ratio.value = p.audioMix.limiterEnabled ? 20 : 1;
+    }
     // libera elementos de clipes que deixaram de existir
     const ids = new Set(p.clips.map((c) => c.id));
     for (const [id, s] of this.slots) {
-      if (!ids.has(id)) {
+      if (!ids.has(s.clipId)) {
         this.release(s);
         this.slots.delete(id);
       }
@@ -181,8 +321,8 @@ export class Player {
 
   // ------------------------------------------------------------ elementos
 
-  private slotFor(clip: Clip, kind: Slot['kind']): Slot | null {
-    const existing = this.slots.get(clip.id);
+  private slotFor(clip: Clip, kind: Slot['kind'], slotKey = `${kind}:${clip.id}`): Slot | null {
+    const existing = this.slots.get(slotKey);
     const url =
       kind === 'video' ? this.media.videoUrl(clip.assetId!) : kind === 'audio' ? this.media.audioUrl(clip.assetId!) : this.media.imageUrl(clip.assetId!);
     if (!url) return null;
@@ -197,7 +337,8 @@ export class Player {
         this.slots.delete(id);
         s.clipId = clip.id;
         s.lastUsed = performance.now();
-        this.slots.set(clip.id, s);
+        s.slotKey = slotKey;
+        this.slots.set(slotKey, s);
         return s;
       }
     }
@@ -228,13 +369,13 @@ export class Player {
       }
       m.src = url;
       el = m;
-      const slot: Slot = { clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode, gainNode };
-      this.slots.set(clip.id, slot);
+      const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode, gainNode };
+      this.slots.set(slotKey, slot);
       this.evict();
       return slot;
     }
-    const slot: Slot = { clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode: null, gainNode: null };
-    this.slots.set(clip.id, slot);
+    const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode: null, gainNode: null };
+    this.slots.set(slotKey, slot);
     this.evict();
     return slot;
   }
@@ -260,9 +401,9 @@ export class Player {
     if (this.audioContext && this.audioLimiter) return this.audioContext;
     const context = new AudioContext();
     const limiter = context.createDynamicsCompressor();
-    limiter.threshold.value = -0.3;
+    limiter.threshold.value = this.project.audioMix.limiterCeilingDb;
     limiter.knee.value = 0;
-    limiter.ratio.value = 20;
+    limiter.ratio.value = this.project.audioMix.limiterEnabled ? 20 : 1;
     limiter.attack.value = 0.003;
     limiter.release.value = 0.05;
     limiter.connect(context.destination);
@@ -304,7 +445,7 @@ export class Player {
     const sorted = [...this.slots.values()].sort((a, b) => a.lastUsed - b.lastUsed);
     for (const s of sorted.slice(0, this.slots.size - MAX_SLOTS)) {
       this.release(s);
-      this.slots.delete(s.clipId);
+      this.slots.delete(s.slotKey);
     }
   }
 
@@ -317,14 +458,21 @@ export class Player {
         m.volume = 0;
       } else {
         m.volume = 1;
-        gainNode.gain.setTargetAtTime(volume, context.currentTime, 0.015);
+        gainNode.gain.setTargetAtTime(clip.reverse ? 0 : volume, context.currentTime, 0.015);
       }
+    }
+    m.preservesPitch = clip.audio.pitchMode === 'preserve';
+    const playbackRate = speedAt(clip, atUs - clip.timelineStartUs);
+    if (clip.reverse || playbackRate <= 0.001) {
+      if (!m.paused) m.pause();
+      if (!m.seeking && m.readyState >= 1 && Math.abs(m.currentTime - target) > 0.015) m.currentTime = target;
+      return;
     }
     if (this.playing) {
       if (this.audioContext?.state === 'suspended') {
         void this.audioContext.resume().catch((error: unknown) => this.reportAudioError(error, 'Não foi possível iniciar o áudio do preview'));
       }
-      if (m.playbackRate !== clip.speed) m.playbackRate = clip.speed;
+      if (m.playbackRate !== playbackRate) m.playbackRate = playbackRate;
       if (Math.abs(m.currentTime - target) > DRIFT_PLAYING_S && m.readyState >= 1) m.currentTime = target;
       if (m.paused) {
         void m.play().catch((error: unknown) => {
@@ -360,7 +508,8 @@ export class Player {
     const p = this.project;
     const used = new Set<string>();
     this.frameUsed = used;
-    const anySolo = p.tracks.some((x) => x.solo);
+    const mixTracks = p.tracks.filter((track) => track.kind === 'audio' || (track.kind === 'video' && p.audioMix.includeVideoAudio));
+    const anySolo = mixTracks.some((track) => track.solo);
 
     // áudio: todas as trilhas de áudio
     for (const track of p.tracks) {
@@ -371,14 +520,38 @@ export class Player {
         if (!near) continue;
         const slot = this.slotFor(c, 'audio');
         if (!slot) continue;
-        used.add(c.id);
+        used.add(slot.slotKey);
         const m = slot.el as HTMLMediaElement;
-        if (t >= c.timelineStartUs) this.syncMedia(m, c, t, clipVolume(c, track, t, anySolo), slot.gainNode);
+        if (t >= c.timelineStartUs) this.syncMedia(m, c, t, clipVolume(c, track, t, anySolo, this.project), slot.gainNode);
         else {
           // pré-carregado: parado no primeiro quadro
           if (!m.paused) m.pause();
-          const first = c.sourceInUs / 1e6;
+          const first = sourceTimeS(c, c.timelineStartUs);
           if (Math.abs(m.currentTime - first) > 0.05 && m.readyState >= 1 && !m.seeking) m.currentTime = first;
+        }
+      }
+    }
+
+    if (p.audioMix.includeVideoAudio) {
+      for (const track of p.tracks) {
+        if (track.kind !== 'video' || track.muted || (anySolo && !track.solo)) continue;
+        const audioTrack: Track = { ...track, kind: 'audio', role: 'voice' };
+        for (const c of p.clips) {
+          if (c.trackId !== track.id || !c.assetId) continue;
+          const asset = p.assets.find((item) => item.id === c.assetId);
+          if (!asset?.probe?.audio.length) continue;
+          const near = t >= c.timelineStartUs - PRELOAD_US && t < clipEndUs(c);
+          if (!near) continue;
+          const slot = this.slotFor(c, 'audio', `embedded-audio:${c.id}`);
+          if (!slot) continue;
+          used.add(slot.slotKey);
+          const media = slot.el as HTMLMediaElement;
+          if (t >= c.timelineStartUs) this.syncMedia(media, c, t, clipVolume(c, audioTrack, t, anySolo, this.project), slot.gainNode);
+          else {
+            if (!media.paused) media.pause();
+            const first = sourceTimeS(c, c.timelineStartUs);
+            if (Math.abs(media.currentTime - first) > 0.05 && media.readyState >= 1 && !media.seeking) media.currentTime = first;
+          }
         }
       }
     }
@@ -403,12 +576,14 @@ export class Player {
         if (!near) continue;
         const active = t >= c.timelineStartUs;
         const localS = (t - c.timelineStartUs) / 1e6;
-        const look = evalClipLook(c, localS, c.durationUs / 1e6);
+        let look = evalClipLook(c, localS, c.durationUs / 1e6);
         // transição de entrada: o clipe anterior continua por baixo (origem segue além do fim)
         if (active && c.transitionIn && localS < c.transitionIn.durationUs / 1e6) {
+          look = applyWhipPan(look, c.transitionIn, localS, false, p.settings.width);
           const under = transitionUnderlay(trackClips, c);
           if (under) {
-            const ulook = evalClipLook(under, (t - under.timelineStartUs) / 1e6, under.durationUs / 1e6);
+            let ulook = evalClipLook(under, (t - under.timelineStartUs) / 1e6, under.durationUs / 1e6);
+            ulook = applyWhipPan(ulook, c.transitionIn, localS, true, p.settings.width);
             ulook.overlays = [];
             this.drawClip(ctx, under, t, ulook, k, used, true);
           }
@@ -450,13 +625,13 @@ export class Player {
       if (active) this.drawPlaceholder(ctx, 'Preparando proxy…');
       return;
     }
-    used.add(c.id);
+    used.add(slot.slotKey);
     if (kind === 'video') {
       const v = slot.el as HTMLVideoElement;
       if (active) this.syncMedia(v, c, t, null);
       else {
         if (!v.paused) v.pause();
-        const first = c.sourceInUs / 1e6;
+        const first = sourceTimeS(c, c.timelineStartUs);
         if (Math.abs(v.currentTime - first) > 0.05 && v.readyState >= 1 && !v.seeking) v.currentTime = first;
       }
       if (active && v.readyState >= 2) this.drawMedia(ctx, v, v.videoWidth, v.videoHeight, c, k, look, localS);
@@ -473,6 +648,9 @@ export class Player {
     const localUs = Math.round(localS * 1e6);
     const x = evaluateKeyframes(c.keyframes['transform.x'], localUs, tr.x);
     const y = evaluateKeyframes(c.keyframes['transform.y'], localUs, tr.y);
+    const scale = evaluateKeyframes(c.keyframes['transform.scale'], localUs, tr.scale);
+    const rotation = evaluateKeyframes(c.keyframes['transform.rotation'], localUs, tr.rotation);
+    const opacity = evaluateKeyframes(c.keyframes['transform.opacity'], localUs, tr.opacity);
     const crop = tr.crop;
     let cw = sw * (1 - crop.left - crop.right);
     let ch = sh * (1 - crop.top - crop.bottom);
@@ -481,8 +659,8 @@ export class Player {
     let sy = sh * crop.top;
     // encaixa (contain) no quadro do projeto, depois aplica escala/posição/rotação
     const fit = Math.min(P.width / cw, P.height / ch);
-    const w = cw * fit * tr.scale;
-    const h = ch * fit * tr.scale;
+    const w = cw * fit * scale;
+    const h = ch * fit * scale;
     // zoom = recorte central ampliado (igual ao zoompan da exportação)
     if (look.zoom > 1) {
       const nw = cw / look.zoom;
@@ -492,26 +670,67 @@ export class Player {
       cw = nw;
       ch = nh;
     }
+    let drawable: CanvasImageSource = src;
+    const grade = aggregateColorGrade(c.effects);
+    if (!isColorGradeNeutral(grade)) {
+      const gradeKey = JSON.stringify(grade);
+      let lut = this.colorLuts.get(gradeKey);
+      if (!lut) {
+        lut = createColorGradeLut(grade);
+        this.colorLuts.set(gradeKey, lut);
+        if (this.colorLuts.size > 64) this.colorLuts.delete(this.colorLuts.keys().next().value!);
+      }
+      this.colorBuffer ??= document.createElement('canvas');
+      const buffer = this.colorBuffer;
+      const bufferWidth = Math.max(1, Math.round(w * k));
+      const bufferHeight = Math.max(1, Math.round(h * k));
+      if (buffer.width !== bufferWidth) buffer.width = bufferWidth;
+      if (buffer.height !== bufferHeight) buffer.height = bufferHeight;
+      const bufferContext = buffer.getContext('2d', { willReadFrequently: true });
+      if (!bufferContext) throw new Error('Não foi possível iniciar o processamento de cor do preview.');
+      bufferContext.drawImage(src, sx, sy, cw, ch, 0, 0, bufferWidth, bufferHeight);
+      if (this.colorGradeGpu === undefined) {
+        this.colorGradeGpu = ColorGradeGpu.create();
+        if (!this.colorGradeGpu) console.warn('WebGL2 indisponível para o color grade; usando processamento CPU.');
+      }
+      const gpuOutput = this.colorGradeGpu?.apply(buffer, gradeKey, lut);
+      if (gpuOutput) {
+        drawable = gpuOutput;
+      } else {
+        const image = bufferContext.getImageData(0, 0, bufferWidth, bufferHeight);
+        for (let i = 0; i < image.data.length; i += 4) {
+          const [r, g, b] = sampleColorGradeLut([image.data[i]! / 255, image.data[i + 1]! / 255, image.data[i + 2]! / 255], lut);
+          image.data[i] = Math.round(r * 255);
+          image.data[i + 1] = Math.round(g * 255);
+          image.data[i + 2] = Math.round(b * 255);
+        }
+        bufferContext.putImageData(image, 0, 0);
+        drawable = buffer;
+      }
+      sx = 0;
+      sy = 0;
+      cw = bufferWidth;
+      ch = bufferHeight;
+    }
     ctx.save();
-    ctx.globalAlpha = look.alpha;
+    ctx.globalAlpha = look.alpha * Math.max(0, Math.min(1, opacity));
+    ctx.globalCompositeOperation = canvasBlendMode(c.blendMode);
     const filters: string[] = [];
     if (look.blur > 0) filters.push(`blur(${look.blur * k}px)`);
-    if (look.brightness) filters.push(`brightness(${1 + look.brightness})`);
-    if (look.contrast !== 1) filters.push(`contrast(${look.contrast})`);
-    if (look.saturation !== 1) filters.push(`saturate(${look.saturation})`);
     if (filters.length) ctx.filter = filters.join(' ');
     ctx.translate((P.width / 2 + x + look.dx) * k, (P.height / 2 + y + look.dy) * k);
-    if (tr.rotation) ctx.rotate((tr.rotation * Math.PI) / 180);
+    if (rotation) ctx.rotate((rotation * Math.PI) / 180);
+    clipMask(ctx, c.mask, -w * k / 2, -h * k / 2, w * k, h * k);
     if (look.rgbSplit > 0) {
       // canais deslocados: vermelho para um lado, azul para o outro
       const off = look.rgbSplit * k;
-      ctx.drawImage(src, sx, sy, cw, ch, (-w / 2) * k, (-h / 2) * k, w * k, h * k);
+      ctx.drawImage(drawable, sx, sy, cw, ch, (-w / 2) * k, (-h / 2) * k, w * k, h * k);
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = look.alpha * 0.35;
-      ctx.drawImage(src, sx, sy, cw, ch, (-w / 2) * k - off, (-h / 2) * k, w * k, h * k);
-      ctx.drawImage(src, sx, sy, cw, ch, (-w / 2) * k + off, (-h / 2) * k, w * k, h * k);
+      ctx.drawImage(drawable, sx, sy, cw, ch, (-w / 2) * k - off, (-h / 2) * k, w * k, h * k);
+      ctx.drawImage(drawable, sx, sy, cw, ch, (-w / 2) * k + off, (-h / 2) * k, w * k, h * k);
     } else {
-      ctx.drawImage(src, sx, sy, cw, ch, (-w / 2) * k, (-h / 2) * k, w * k, h * k);
+      ctx.drawImage(drawable, sx, sy, cw, ch, (-w / 2) * k, (-h / 2) * k, w * k, h * k);
     }
     ctx.restore();
     if (look.vignette > 0) {
@@ -539,7 +758,11 @@ export class Player {
   }
 
   private drawText(ctx: CanvasRenderingContext2D, c: Clip, k: number, look: ClipLook, localS: number): void {
+    ctx.save();
+    ctx.globalCompositeOperation = canvasBlendMode(c.blendMode);
+    clipMask(ctx, c.mask, 0, 0, ctx.canvas.width, ctx.canvas.height);
     drawTextLayer(ctx, c, this.project.settings.width, this.project.settings.height, k, look, localS);
+    ctx.restore();
   }
 
   private drawPlaceholder(ctx: CanvasRenderingContext2D, text: string): void {

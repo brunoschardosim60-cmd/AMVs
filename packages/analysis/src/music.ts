@@ -5,9 +5,23 @@
  */
 import { mean, movingAverage, normalize, percentile, rmsFrames, stft, toDb } from './dsp.js';
 
-export const MUSIC_ANALYSIS_VERSION = 'm3';
+export const MUSIC_ANALYSIS_VERSION = 'm4';
 
 export type SectionLabel = 'intro' | 'verso' | 'pré-refrão' | 'refrão' | 'drop' | 'ponte' | 'final';
+export type MusicEventType = 'onset' | 'impact' | 'growth' | 'pause' | 'drop' | 'section-change' | 'rhythm-change';
+export type FrequencyBand = 'low' | 'mid' | 'high';
+
+export interface MusicEvent {
+  atS: number;
+  type: MusicEventType;
+  /** Heurística baseada nos sinais locais; não é uma probabilidade calibrada. */
+  confidence: number;
+  strength: number;
+  durationS?: number;
+  /** Banda espectral dominante do ataque, não identifica um instrumento. */
+  band?: FrequencyBand;
+  direction?: 'faster' | 'slower';
+}
 
 export interface Section {
   startS: number;
@@ -31,6 +45,8 @@ export interface MusicAnalysis {
   sections: Section[];
   /** Instantes de drop (entrada forte depois de construção), do mais forte ao mais fraco. */
   drops: number[];
+  /** Eventos derivados do envelope e da curva de energia. Ausente em caches antigos. */
+  events?: MusicEvent[];
   /** Intensidade geral 0..100 (média da energia + densidade de ataques). */
   intensity: number;
   /** Volume médio aproximado (dBFS RMS). */
@@ -72,6 +88,7 @@ export function setManualTempo(analysis: MusicAnalysis, bpm: number, anchorS: nu
 
 export interface OnsetEnvelope {
   env: Float32Array;
+  bands: [Float32Array, Float32Array, Float32Array];
   /** Quadros por segundo do envelope. */
   rate: number;
   /**
@@ -96,6 +113,7 @@ export function onsetEnvelope(samples: Float32Array, sampleRate: number): OnsetE
     [Math.round(2000 / binHz), Math.min(spec.size / 2, Math.round(8000 / sampleRate * spec.size))],
   ];
   const env = new Float32Array(n);
+  const bandEnvelopes: Float32Array[] = [];
   for (const [lo, hi] of bands) {
     const band = new Float32Array(n);
     let prevB: Float32Array | null = null;
@@ -114,12 +132,18 @@ export function onsetEnvelope(samples: Float32Array, sampleRate: number): OnsetE
       prevB = lm;
     }
     const nb = normalize(band);
+    bandEnvelopes.push(nb);
     for (let f = 0; f < n; f++) env[f] = env[f]! + nb[f]!;
   }
   // remove a tendência local (deixa só os picos)
   const trend = movingAverage(env, 8);
   for (let i = 0; i < n; i++) env[i] = Math.max(0, env[i]! - trend[i]!);
-  return { env: normalize(env), rate: sampleRate / hop, offsetS: (2048 / 2 + hop) / sampleRate };
+  return {
+    env: normalize(env),
+    bands: bandEnvelopes as OnsetEnvelope['bands'],
+    rate: sampleRate / hop,
+    offsetS: (2048 / 2 + hop) / sampleRate,
+  };
 }
 
 /** BPM por autocorrelação do envelope, com preferência suave por 90–160 BPM. */
@@ -332,6 +356,141 @@ export function findSections(downbeats: number[], energy: number[], stepS: numbe
   return { sections, drops };
 }
 
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function median(values: number[]): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+function detectMusicEvents(
+  onset: OnsetEnvelope,
+  energy: number[],
+  stepS: number,
+  durationS: number,
+  bpmConfidence: number,
+  sections: Section[],
+  drops: number[],
+): MusicEvent[] {
+  const events: MusicEvent[] = [];
+  const energyAt = (atS: number) => energy[Math.max(0, Math.min(energy.length - 1, Math.floor(atS / stepS)))] ?? 0;
+  const onsetThreshold = Math.max(0.24, onset.env.reduce((sum, value) => sum + value, 0) / Math.max(1, onset.env.length) * 2.5);
+  const minGap = Math.max(1, Math.round(onset.rate * 0.075));
+  let lastPeak = -minGap;
+  for (let i = 1; i + 1 < onset.env.length; i++) {
+    const strength = onset.env[i]!;
+    if (strength < onsetThreshold || strength < onset.env[i - 1]! || strength <= onset.env[i + 1]!) continue;
+    if (i - lastPeak < minGap) continue;
+    lastPeak = i;
+    const atS = i / onset.rate + onset.offsetS;
+    if (atS < 0 || atS >= durationS) continue;
+    const bandStrengths = onset.bands.map((band) => band[i] ?? 0);
+    const bandIndex = bandStrengths.indexOf(Math.max(...bandStrengths));
+    const band: FrequencyBand = bandIndex === 0 ? 'low' : bandIndex === 1 ? 'mid' : 'high';
+    const confidence = clamp01(strength * (0.5 + 0.5 * bpmConfidence));
+    events.push({ atS, type: 'onset', confidence, strength, band });
+    if (band === 'low' && strength >= 0.62 && energyAt(atS) >= 0.55) {
+      events.push({ atS, type: 'impact', confidence: clamp01(confidence * energyAt(atS)), strength, band });
+    }
+  }
+
+  const growthCandidates: { atS: number; strength: number }[] = [];
+  for (let atS = 0; atS + 4 <= durationS; atS += 1) {
+    const levels = Array.from({ length: 4 }, (_, second) =>
+      median(Array.from({ length: Math.max(1, Math.round(1 / stepS)) }, (_, i) => energyAt(atS + second + i * stepS))),
+    );
+    const rises = levels.slice(1).map((level, index) => level - levels[index]!);
+    const rise = levels.at(-1)! - levels[0]!;
+    const largestStep = Math.max(...rises);
+    if (rise >= 0.16 && rises.filter((delta) => delta > 0.015).length >= 2
+      && largestStep < rise * 0.7 && rises.every((delta) => delta >= -0.08)) {
+      growthCandidates.push({ atS, strength: rise });
+    }
+  }
+  for (let i = 0; i < growthCandidates.length;) {
+    const first = growthCandidates[i]!;
+    let end = first.atS + 4;
+    let strength = first.strength;
+    while (i + 1 < growthCandidates.length && growthCandidates[i + 1]!.atS <= end) {
+      i++;
+      end = Math.max(end, growthCandidates[i]!.atS + 4);
+      strength = Math.max(strength, growthCandidates[i]!.strength);
+    }
+    events.push({
+      atS: first.atS,
+      type: 'growth',
+      durationS: Math.min(durationS - first.atS, end - first.atS),
+      confidence: clamp01(0.45 + strength),
+      strength,
+    });
+    i++;
+  }
+
+  let pauseStart: number | null = null;
+  for (let i = 0; i <= energy.length; i++) {
+    const atS = i * stepS;
+    const quiet = i < energy.length && energy[i]! <= 0.08;
+    if (quiet && pauseStart === null) pauseStart = atS;
+    if ((!quiet || i === energy.length) && pauseStart !== null) {
+      const duration = Math.min(durationS, atS) - pauseStart;
+      if (duration >= 0.5) {
+        events.push({
+          atS: pauseStart,
+          type: 'pause',
+          durationS: duration,
+          confidence: clamp01(0.55 + Math.min(0.35, (0.5 - median(energy)) * 0.7)),
+          strength: clamp01(1 - median(energy.slice(Math.floor(pauseStart / stepS), i))),
+        });
+      }
+      pauseStart = null;
+    }
+  }
+
+  for (const atS of drops) {
+    const before = median(Array.from({ length: 16 }, (_, i) => energyAt(Math.max(0, atS - 4 + i * stepS))));
+    const after = median(Array.from({ length: 16 }, (_, i) => energyAt(atS + i * stepS)));
+    const rise = Math.max(0, after - before);
+    events.push({ atS, type: 'drop', confidence: clamp01(0.5 + rise), strength: rise });
+  }
+  for (const [index, section] of sections.slice(1).entries()) {
+    events.push({
+      atS: section.startS,
+      type: 'section-change',
+      confidence: 0.55,
+      strength: Math.abs(section.energy - (sections[index]?.energy ?? section.energy)),
+    });
+  }
+
+  const onsets = events.filter((event) => event.type === 'onset').map((event) => event.atS);
+  let lastRhythmChangeS = -Infinity;
+  for (let atS = 4; atS + 4 <= durationS; atS += 2) {
+    const before = onsets.filter((time) => time >= atS - 4 && time < atS).map((time, i, all) => i ? time - all[i - 1]! : 0).filter((value) => value > 0);
+    const after = onsets.filter((time) => time >= atS && time < atS + 4).map((time, i, all) => i ? time - all[i - 1]! : 0).filter((value) => value > 0);
+    if (before.length < 3 || after.length < 3) continue;
+    const previousInterval = median(before);
+    const nextInterval = median(after);
+    const variation = Math.abs(nextInterval - previousInterval) / Math.max(0.01, previousInterval);
+    if (variation >= 0.3 && atS - lastRhythmChangeS >= 4) {
+      events.push({
+        atS,
+        type: 'rhythm-change',
+        confidence: clamp01(0.45 + variation * 0.35),
+        strength: variation,
+        direction: nextInterval < previousInterval ? 'faster' : 'slower',
+      });
+      lastRhythmChangeS = atS;
+    }
+  }
+
+  return events
+    .filter((event) => Number.isFinite(event.atS) && event.atS >= 0 && event.atS < durationS)
+    .sort((a, b) => a.atS - b.atS || a.type.localeCompare(b.type));
+}
+
 /** Análise completa a partir de PCM mono float. */
 export function analyzeMusic(samples: Float32Array, sampleRate: number): MusicAnalysis {
   const durationS = samples.length / sampleRate;
@@ -345,6 +504,7 @@ export function analyzeMusic(samples: Float32Array, sampleRate: number): MusicAn
   const stepS = 0.25;
   const { energy, loudnessDb } = energyCurve(samples, sampleRate, stepS);
   const { sections, drops } = findSections(downbeats, energy, stepS, durationS, beats);
+  const events = detectMusicEvents(o, energy, stepS, durationS, confidence, sections, drops);
   const onsetDensity = mean(Array.from(o.env).map((v) => (v > 0.3 ? 1 : 0))) * o.rate; // ataques/s
   const intensity = Math.round(Math.max(0, Math.min(100, 70 * mean(energy) + 6 * Math.min(5, onsetDensity))));
   return {
@@ -358,6 +518,13 @@ export function analyzeMusic(samples: Float32Array, sampleRate: number): MusicAn
     energyStepS: stepS,
     sections,
     drops: drops.map((d) => Math.round(d * 1000) / 1000),
+    events: events.map((event) => ({
+      ...event,
+      atS: Math.round(event.atS * 1000) / 1000,
+      ...(event.durationS === undefined ? {} : { durationS: Math.round(event.durationS * 1000) / 1000 }),
+      confidence: Math.round(event.confidence * 100) / 100,
+      strength: Math.round(event.strength * 1000) / 1000,
+    })),
     intensity,
     loudnessDb: Math.round(loudnessDb * 10) / 10,
   };

@@ -20,16 +20,17 @@ import {
   projectDurationUs,
   ProjectHistory,
   serializeProject,
+  insertAsset,
   type Asset,
   type Command,
   type Project,
   type ProjectSettings,
 } from '@amv/project';
 import type { Platform } from '../platform/types';
-import { analyzeEpisodeFile, analyzeMusicFile, EPISODE_ANALYSIS_VERSION, grabFrameJpeg, mergeShotVision, MUSIC_ANALYSIS_VERSION, selectVisionTargets, shotKey, toBase64, VISION_VERSION, type EpisodeAnalysis, type EpisodeVision, type MusicAnalysis, type VisionScope } from '@amv/analysis';
+import { analyzeEpisodeFile, analyzeLocalVisualFrames, analyzeMusicFile, EPISODE_ANALYSIS_VERSION, findSimilarVisualScenes, grabFrameJpeg, grabFrameRgb, LOCAL_VISION_VERSION, mergeShotVision, MUSIC_ANALYSIS_VERSION, selectLocalVisionTargets, selectVisionTargets, shotKey, toBase64, VISION_VERSION, type EpisodeAnalysis, type EpisodeVision, type MusicAnalysis, type VisionScope } from '@amv/analysis';
 import { labelScenes, type FetchLike, type ProviderConfig, type SceneAnalysisContext, type SceneLyricMatch } from '@amv/assistant';
 import { renderSfx, SFX_KINDS, SFX_LABEL, sfxFileName, toWav, type SfxKind } from '@amv/sfx';
-import { rememberRecent, updateRecent } from './recents';
+import { forgetRecent, rememberRecent, updateRecent } from './recents';
 
 export const PROJECT_EXTENSION = 'amvproj';
 
@@ -59,6 +60,22 @@ export type OpenResult =
 
 type Listener = () => void;
 
+export interface ProjectBackup {
+  path: string;
+  createdAt: string;
+  sizeBytes: number;
+  valid: boolean;
+}
+
+export interface ProjectDependencyReport {
+  missingAssets: { id: string; path: string }[];
+  missingVersions: { id: string; path: string }[];
+  invalidVersions: { id: string; path: string; error: string }[];
+  invalidReferences: { clipId: string; reference: string }[];
+  mediaUsage: { assetId: string; path: string; clipIds: string[]; missing: boolean }[];
+  valid: boolean;
+}
+
 /**
  * Sessão de um projeto aberto: histórico, arquivo em disco, artefatos de mídia,
  * autosave e relocalização. Não conhece React; a UI só assina mudanças.
@@ -72,6 +89,7 @@ export class ProjectSession {
   private env: MediaEnv | null = null;
   private lastAutosaveRevision = -1;
   private disposed = false;
+  private persistence: Promise<unknown> = Promise.resolve();
 
   private constructor(
     private readonly platform: Platform,
@@ -109,6 +127,12 @@ export class ProjectSession {
     path: string,
     preferAutosave = false,
   ): Promise<{ session: ProjectSession | null; result: OpenResult }> {
+    try {
+      await recoverAtomicFile(platform, path);
+      await recoverAtomicFile(platform, autosavePath(path));
+    } catch (error) {
+      return { session: null, result: { ok: false, error: 'não foi possível recuperar a gravação interrompida', details: [String(error)] } };
+    }
     const readText = async (p: string) => new TextDecoder().decode(await platform.fs.readFile(p));
     if (!(await platform.fs.exists(path))) {
       return { session: null, result: { ok: false, error: 'o arquivo do projeto não existe mais', details: [path] } };
@@ -136,6 +160,8 @@ export class ProjectSession {
 
   /** Existe autosave mais recente que o arquivo salvo? */
   static async hasRecovery(platform: Platform, path: string): Promise<boolean> {
+    await recoverAtomicFile(platform, path);
+    await recoverAtomicFile(platform, autosavePath(path));
     const auto = autosavePath(path);
     if (!(await platform.fs.exists(auto))) return false;
     try {
@@ -193,57 +219,228 @@ export class ProjectSession {
   }
 
   execute(command: Command, label?: string): void {
-    const before = new Set(this.project.assets.map((a) => a.id));
+    const before = new Map(this.project.assets.map((asset) => [asset.id, asset.path]));
     this.history.execute(command, label);
     this.afterChange(before);
   }
 
   undo(): void {
-    const before = new Set(this.project.assets.map((a) => a.id));
+    const before = new Map(this.project.assets.map((asset) => [asset.id, asset.path]));
     this.history.undo();
     this.afterChange(before);
   }
 
   redo(): void {
-    const before = new Set(this.project.assets.map((a) => a.id));
+    const before = new Map(this.project.assets.map((asset) => [asset.id, asset.path]));
     this.history.redo();
     this.afterChange(before);
   }
 
   /** Cancela jobs de mídias que saíram do projeto e reprocessa as que voltaram (undo). */
-  private afterChange(before: Set<string>): void {
-    const now = new Set(this.project.assets.map((a) => a.id));
-    for (const id of before) if (!now.has(id)) this.queue.cancelAsset(id);
+  private afterChange(before: Map<string, string>): void {
+    const now = new Map(this.project.assets.map((asset) => [asset.id, asset.path]));
+    for (const id of before.keys()) if (!now.has(id)) {
+      this.queue.cancelAsset(id);
+      this.runtime.delete(id);
+    }
     for (const a of this.project.assets) {
-      if (!before.has(a.id) && a.status !== 'missing' && !this.runtime.get(a.id)?.artifacts) void this.process(a);
+      if ((!before.has(a.id) || before.get(a.id) !== a.path) && a.status !== 'missing') {
+        this.queue.cancelAsset(a.id);
+        this.runtime.delete(a.id);
+        void this.process(a);
+      }
     }
   }
 
   // ---------- salvar ----------
 
   async save(): Promise<void> {
-    const project = { ...this.project, updatedAt: new Date().toISOString() };
-    await writeAtomic(this.platform, this.path, serializeProject(project));
-    this.history.markSaved();
-    // o autosave vira lixo depois de salvar
-    const auto = autosavePath(this.path);
-    if (await this.platform.fs.exists(auto)) await this.platform.fs.remove(auto);
-    await this.touchRecent();
-    this.emit();
+    await this.enqueuePersistence(async () => {
+      if (!this.dirty && await this.platform.fs.exists(this.path)) {
+        const auto = autosavePath(this.path);
+        if (await this.platform.fs.exists(auto)) await this.platform.fs.remove(auto);
+        await this.touchRecent();
+        return;
+      }
+      const revision = this.history.version;
+      const text = serializeProject({ ...this.project, updatedAt: new Date().toISOString() });
+      await this.backupCurrentFile(this.path);
+      await writeAtomic(this.platform, this.path, text);
+      this.history.markSaved(revision);
+      if (this.history.version === revision) {
+        const auto = autosavePath(this.path);
+        if (await this.platform.fs.exists(auto)) await this.platform.fs.remove(auto);
+      }
+      await this.pruneBackups(this.path);
+      await this.touchRecent();
+      this.emit();
+    });
   }
 
   async saveAs(path: string): Promise<void> {
-    this.path = withExtension(path);
-    await this.save();
+    const target = withExtension(path);
+    await this.enqueuePersistence(async () => {
+      const revision = this.history.version;
+      const text = serializeProject({ ...this.project, updatedAt: new Date().toISOString() });
+      await this.backupCurrentFile(target);
+      await writeAtomic(this.platform, target, text);
+      this.path = target;
+      this.history.markSaved(revision);
+      const auto = autosavePath(target);
+      if (this.history.version === revision && await this.platform.fs.exists(auto)) await this.platform.fs.remove(auto);
+      await this.pruneBackups(target);
+      await this.touchRecent();
+      this.emit();
+    });
   }
 
   /** Grava `<projeto>.autosave` se houve mudança desde o último autosave. */
   async autosave(): Promise<boolean> {
-    if (!this.dirty || this.history.version === this.lastAutosaveRevision) return false;
-    const project = { ...this.project, updatedAt: new Date().toISOString() };
-    await writeAtomic(this.platform, autosavePath(this.path), serializeProject(project));
-    this.lastAutosaveRevision = this.history.version;
-    return true;
+    return this.enqueuePersistence(async () => {
+      const revision = this.history.version;
+      if (!this.dirty || revision === this.lastAutosaveRevision) return false;
+      const target = autosavePath(this.path);
+      const text = serializeProject({ ...this.project, updatedAt: new Date().toISOString() });
+      await writeAtomic(this.platform, target, text);
+      this.lastAutosaveRevision = revision;
+      return true;
+    });
+  }
+
+  private enqueuePersistence<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.persistence.then(operation, operation);
+    this.persistence = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private async backupCurrentFile(path: string): Promise<void> {
+    if (!(await this.platform.fs.exists(path))) return;
+    const dir = backupsPath(path);
+    await this.platform.fs.mkdir(dir);
+    const bytes = await this.platform.fs.readFile(path);
+    const backup = joinPath(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${newId('backup')}.amvproj`);
+    await writeAtomicBytes(this.platform, backup, bytes);
+  }
+
+  private async pruneBackups(path: string, limit = 10): Promise<void> {
+    const dir = backupsPath(path);
+    if (!(await this.platform.fs.exists(dir))) return;
+    const files = (await this.platform.fs.readDir(dir))
+      .filter((name) => name.toLowerCase().endsWith('.amvproj'))
+      .sort()
+      .reverse();
+    for (const name of files.slice(limit)) await this.platform.fs.remove(joinPath(dir, name));
+  }
+
+  async listBackups(): Promise<ProjectBackup[]> {
+    const dir = backupsPath(this.path);
+    if (!(await this.platform.fs.exists(dir))) return [];
+    const names = (await this.platform.fs.readDir(dir))
+      .filter((name) => name.toLowerCase().endsWith('.amvproj'))
+      .sort()
+      .reverse();
+    const backups: ProjectBackup[] = [];
+    for (const name of names) {
+      const path = joinPath(dir, name);
+      const text = new TextDecoder().decode(await this.platform.fs.readFile(path));
+      const parsed = parseProject(text);
+      const statSize = await this.platform.fs.size(path);
+      const stamp = name.match(/^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)/)?.[1]
+        ?.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, 'T$1:$2:$3.$4Z');
+      backups.push({
+        path,
+        createdAt: stamp && Number.isFinite(Date.parse(stamp)) ? new Date(stamp).toISOString() : new Date(0).toISOString(),
+        sizeBytes: statSize,
+        valid: parsed.ok,
+      });
+    }
+    return backups;
+  }
+
+  async restoreBackup(path: string): Promise<void> {
+    const backups = await this.listBackups();
+    const backup = backups.find((item) => item.path === path && item.valid);
+    if (!backup) throw new Error('backup não encontrado ou inválido');
+    const parsed = parseProject(new TextDecoder().decode(await this.platform.fs.readFile(path)));
+    if (!parsed.ok) throw new Error(`backup inválido: ${parsed.error}`);
+    await this.backupCurrentFile(this.path);
+    for (const asset of this.project.assets) this.queue.cancelAsset(asset.id);
+    this.runtime.clear();
+    const previous = new Map(this.project.assets.map((asset) => [asset.id, asset.path]));
+    this.history.execute(
+      { type: 'project.replace', project: { ...parsed.project, id: this.project.id } },
+      'Restaurar backup',
+    );
+    this.afterChange(previous);
+    await this.checkAssets();
+    this.emit();
+  }
+
+  async validateDependencies(): Promise<ProjectDependencyReport> {
+    const assetIds = new Set(this.project.assets.map((asset) => asset.id));
+    const trackIds = new Set(this.project.tracks.map((track) => track.id));
+    const missingAssets: ProjectDependencyReport['missingAssets'] = [];
+    const mediaUsage: ProjectDependencyReport['mediaUsage'] = [];
+    const invalidReferences: ProjectDependencyReport['invalidReferences'] = [];
+    for (const asset of this.project.assets) {
+      const missing = !(await this.platform.fs.exists(asset.path));
+      if (missing) missingAssets.push({ id: asset.id, path: asset.path });
+      mediaUsage.push({
+        assetId: asset.id,
+        path: asset.path,
+        clipIds: this.project.clips.filter((clip) => clip.assetId === asset.id).map((clip) => clip.id),
+        missing,
+      });
+    }
+    for (const clip of this.project.clips) {
+      if (!trackIds.has(clip.trackId)) invalidReferences.push({ clipId: clip.id, reference: `trilha ${clip.trackId}` });
+      if (clip.assetId && !assetIds.has(clip.assetId)) invalidReferences.push({ clipId: clip.id, reference: `mídia ${clip.assetId}` });
+    }
+    const missingVersions: ProjectDependencyReport['missingVersions'] = [];
+    const invalidVersions: ProjectDependencyReport['invalidVersions'] = [];
+    for (const version of this.project.versions) {
+      if (!(await this.platform.fs.exists(version.file))) {
+        missingVersions.push({ id: version.id, path: version.file });
+        continue;
+      }
+      const parsed = parseProject(new TextDecoder().decode(await this.platform.fs.readFile(version.file)));
+      if (!parsed.ok) invalidVersions.push({ id: version.id, path: version.file, error: parsed.error });
+    }
+    return {
+      missingAssets,
+      missingVersions,
+      invalidVersions,
+      invalidReferences,
+      mediaUsage,
+      valid: !missingAssets.length && !missingVersions.length && !invalidVersions.length && !invalidReferences.length,
+    };
+  }
+
+  async duplicateTo(path: string, name = `${this.project.name} (cópia)`): Promise<ProjectSession> {
+    if (this.dirty) await this.save();
+    const target = withExtension(path);
+    const duplicate = await copyProjectTo(this.platform, this.project, this.path, target, name, newId('project'));
+    const session = new ProjectSession(this.platform, duplicate, target);
+    await session.checkAssets();
+    await session.touchRecent();
+    return session;
+  }
+
+  async archiveTo(path: string): Promise<void> {
+    await this.save();
+    const source = this.path;
+    const target = withExtension(path);
+    if (source.toLowerCase() === target.toLowerCase()) throw new Error('escolha um destino diferente para arquivar o projeto');
+    const archived = await copyProjectTo(this.platform, this.project, source, target, this.project.name, this.project.id);
+    this.path = target;
+    this.history.reset(archived);
+    const cleanupPaths = [source, `${source}.versoes`, backupsPath(source), autosavePath(source)];
+    for (const oldPath of cleanupPaths) {
+      if (await this.platform.fs.exists(oldPath)) await this.platform.fs.remove(oldPath);
+    }
+    await forgetRecent(this.platform, source);
+    await this.touchRecent();
+    this.emit();
   }
 
   private async touchRecent(): Promise<void> {
@@ -307,6 +504,86 @@ export class ProjectSession {
     }
     this.emit();
     return report;
+  }
+
+  /** Importa ou reutiliza um som e o coloca na trilha de efeitos numa única ação de undo. */
+  async addSoundToTimeline(options: {
+    path: string;
+    name: string;
+    rights: NonNullable<Asset['rights']>;
+    startUs: number;
+  }): Promise<string> {
+    const { asset: inspected } = await inspectFile(await this.mediaEnv(), options.path);
+    if (inspected.kind !== 'audio' || !inspected.probe?.audio.length) {
+      throw new Error('o arquivo selecionado não contém áudio');
+    }
+
+    const existing = this.project.assets.find((asset) => asset.hash === inspected.hash);
+    const asset: Asset = existing
+      ? {
+          ...existing,
+          ...(existing.status === 'missing' ? {
+            path: inspected.path,
+            probe: inspected.probe,
+            status: inspected.status,
+            error: inspected.error,
+          } : {}),
+          rights: {
+            origin: options.rights.origin || existing.rights?.origin || options.path,
+            license: options.rights.license || existing.rights?.license || '',
+            attribution: options.rights.attribution || existing.rights?.attribution || '',
+          },
+        }
+      : { ...inspected, name: options.name, rights: { ...options.rights, origin: options.rights.origin || options.path } };
+
+    let track = this.project.tracks.find((item) => item.kind === 'audio' && item.role === 'sfx');
+    const commands: Command[] = [];
+    if (!existing) commands.push({ type: 'asset.add', asset });
+    else if (JSON.stringify(existing.rights ?? {}) !== JSON.stringify(asset.rights ?? {}) || existing.status === 'missing') {
+      commands.push({
+        type: 'asset.update',
+        assetId: existing.id,
+        patch: { rights: asset.rights, ...(existing.status === 'missing' ? { path: asset.path, probe: asset.probe, status: asset.status, error: asset.error } : {}) },
+      });
+    }
+    if (!track) {
+      track = {
+        id: newId('trk'),
+        kind: 'audio',
+        name: 'Efeitos sonoros',
+        role: 'sfx',
+        locked: false,
+        hidden: false,
+        muted: false,
+        solo: false,
+        gainDb: 0,
+      };
+      commands.push({ type: 'track.add', track });
+    }
+    if (track.locked) throw new Error(`a trilha "${track.name}" está travada`);
+
+    const stagedProject: Project = {
+      ...this.project,
+      assets: existing
+        ? this.project.assets.map((item) => item.id === existing.id ? asset : item)
+        : [...this.project.assets, asset],
+      tracks: this.project.tracks.some((item) => item.id === track.id) ? this.project.tracks : [...this.project.tracks, track],
+    };
+    const clipCommand = insertAsset(stagedProject, {
+      assetId: asset.id,
+      trackId: track.id,
+      startUs: Math.max(0, Math.round(options.startUs)),
+    }).find((command) => command.type === 'clip.add');
+    if (!clipCommand || clipCommand.type !== 'clip.add') throw new Error('não foi possível criar o clipe de áudio');
+    commands.push(clipCommand);
+
+    this.history.transaction(`Adicionar ${options.name} à timeline`, commands);
+    if (!existing || existing.status === 'missing') {
+      this.runtime.set(asset.id, { artifacts: null, warnings: [], errors: [] });
+      void this.process(asset);
+    }
+    this.emit();
+    return clipCommand.clip.id;
   }
 
 
@@ -388,6 +665,94 @@ export class ProjectSession {
     return selectVisionTargets(ep, includeLabeled ? {} : this.assetRuntime(assetId).vision?.shots ?? {}, scope, max);
   }
 
+  localVisionTargets(assetId: string, scope: VisionScope = 'fights', max = scope === 'all' ? Infinity : 120): { startS: number; endS: number; midS: number; samples: number[] }[] {
+    const ep = this.assetRuntime(assetId).episode;
+    if (!ep) return [];
+    return selectLocalVisionTargets(ep, this.assetRuntime(assetId).vision?.shots ?? {}, scope, max);
+  }
+
+  /** Extrai amostras locais por cena e persiste os descritores sem exigir modelo externo. */
+  async runLocalVision(
+    assetId: string,
+    o: { scope?: VisionScope; max?: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void },
+  ): Promise<{ analyzed: number; failed: number; frameFailures: number }> {
+    const asset = this.project.assets.find((item) => item.id === assetId && item.kind === 'video');
+    if (!asset) throw new Error('episódio não encontrado');
+    const prior = await this.loadVision(assetId);
+    const scope = o.scope ?? 'fights';
+    const targets = this.localVisionTargets(assetId, scope, o.max ?? (scope === 'all' ? Infinity : 120));
+    if (!targets.length) return { analyzed: 0, failed: 0, frameFailures: 0 };
+    const env = await this.mediaEnv();
+    const source = this.assetRuntime(assetId).artifacts?.proxyPath ?? asset.path;
+    const vision: EpisodeVision = {
+      version: VISION_VERSION,
+      model: prior?.model ?? `local-visual-v${LOCAL_VISION_VERSION}`,
+      localModel: `local-visual-v${LOCAL_VISION_VERSION}`,
+      shots: { ...(prior?.shots ?? {}) },
+    };
+    const analysis = this.assetRuntime(assetId).episode!;
+    let analyzed = 0;
+    let failed = 0;
+    let frameFailures = 0;
+
+    for (let index = 0; index < targets.length; index++) {
+      if (o.signal?.aborted) throw Object.assign(new Error('análise cancelada'), { name: 'AbortError' });
+      const target = targets[index]!;
+      const key = shotKey(target.startS);
+      const shot = analysis.shots.find((item) => shotKey(item.startS) === key);
+      if (!shot) continue;
+      const frames = [];
+      const frameTimes: number[] = [];
+      for (const timeS of target.samples) {
+        try {
+          frames.push(await grabFrameRgb(env.runner, source, timeS, 160, o.signal));
+          frameTimes.push(timeS);
+        } catch (error) {
+          if (o.signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+          frameFailures++;
+        }
+      }
+      if (!frames.length) {
+        failed++;
+        o.onProgress?.(index + 1, targets.length);
+        continue;
+      }
+      const position = analysis.shots.indexOf(shot);
+      const hasDialogue = analysis.speech.some((speech) => speech.endS > shot.startS && speech.startS < shot.endS)
+        || analysis.subtitles.some((cue) => cue.endS > shot.startS && cue.startS < shot.endS);
+      const local = analyzeLocalVisualFrames(frames, shot, {
+        dialogue: hasDialogue,
+        previousMotion: analysis.shots[position - 1]?.motion,
+        nextMotion: analysis.shots[position + 1]?.motion,
+      }, frameTimes);
+      vision.shots[key] = { ...(vision.shots[key] ?? { characters: [], fight: false, note: '' }), ...local };
+      analyzed++;
+
+      await this.platform.fs.writeFile(await this.visionFile(asset), new TextEncoder().encode(JSON.stringify(vision)));
+      this.runtime.set(assetId, { ...this.assetRuntime(assetId), vision: { ...vision, shots: { ...vision.shots } } });
+      this.emit();
+      o.onProgress?.(index + 1, targets.length);
+    }
+    if (analyzed) {
+      const ranked = Object.entries(vision.shots)
+        .filter(([, scene]) => !!scene.local)
+        .sort(([a], [b]) => {
+          const aShot = analysis.shots.find((item) => shotKey(item.startS) === a);
+          const bShot = analysis.shots.find((item) => shotKey(item.startS) === b);
+          return (bShot?.intensity ?? 0) - (aShot?.intensity ?? 0) || a.localeCompare(b);
+        })
+        .slice(0, 300);
+      const matches = findSimilarVisualScenes(ranked.map(([key, scene]) => ({ key, features: scene.local! })));
+      for (const [key, scene] of ranked) {
+        scene.local!.similarScenes = matches[key]!.slice(0, 5);
+      }
+      await this.platform.fs.writeFile(await this.visionFile(asset), new TextEncoder().encode(JSON.stringify(vision)));
+      this.runtime.set(assetId, { ...this.assetRuntime(assetId), vision: { ...vision, shots: { ...vision.shots } } });
+      this.emit();
+    }
+    return { analyzed, failed, frameFailures };
+  }
+
   /** Analisa cenas visualmente; no modo detalhado usa três quadros por cena e retoma do cache. */
   async runVision(
     assetId: string,
@@ -400,7 +765,12 @@ export class ProjectSession {
     const targets = this.visionTargets(assetId, scope, o.max ?? (scope === 'all' ? Infinity : 120), o.matchLyrics);
     const env = await this.mediaEnv();
     const src = this.assetRuntime(assetId).artifacts?.proxyPath ?? asset.path;
-    const vision: EpisodeVision = { version: VISION_VERSION, model: o.provider.model || o.provider.name, shots: { ...(prior?.shots ?? {}) } };
+    const vision: EpisodeVision = {
+      version: VISION_VERSION,
+      model: o.provider.model || o.provider.name,
+      localModel: prior?.localModel,
+      shots: { ...(prior?.shots ?? {}) },
+    };
     const known = [...new Set(Object.values(vision.shots).flatMap((s) => s.characters))];
     const usage = { input: 0, output: 0 };
     const lyricMatches: Record<string, Record<string, SceneLyricMatch>> = {};
@@ -452,7 +822,15 @@ export class ProjectSession {
             return !failedIds.has(id) && label ? [label] : [];
           });
           if (sceneSamples.length) {
-            labels[key] = mergeShotVision(sceneSamples);
+            const merged = mergeShotVision(sceneSamples);
+            labels[key] = {
+              ...merged,
+              ...(vision.shots[key]?.local ? { local: vision.shots[key]!.local } : {}),
+              ...(!merged.sceneType && vision.shots[key]?.sceneType ? {
+                sceneType: vision.shots[key]!.sceneType,
+                sceneTypeConfidence: vision.shots[key]!.sceneTypeConfidence,
+              } : {}),
+            };
             analyzed++;
           } else failed++;
           if (o.matchLyrics && ids.length) {
@@ -646,13 +1024,23 @@ export class ProjectSession {
   /** Guarda a timeline atual como versão (arquivo ao lado do projeto). */
   async saveVersion(name: string): Promise<string | null> {
     if (!this.project.clips.length) return null;
+    const version = await this.createVersionSnapshot(name, this.project);
+    this.history.execute({ type: 'version.add', version }, `Guardar versão "${name}"`);
+    return version.id;
+  }
+
+  async createVersionSnapshot(name: string, project: Project = this.project): Promise<Project['versions'][number]> {
+    if (!project.clips.length) throw new Error('A timeline está vazia; não há versão para guardar.');
     const id = newId('ver');
     const dir = this.versionsDir();
     await this.platform.fs.mkdir(dir);
     const file = joinPath(dir, `${id}.amvproj`);
-    await writeAtomic(this.platform, file, serializeProject(this.project));
-    this.history.execute({ type: 'version.add', version: { id, name, createdAt: new Date().toISOString(), origin: 'user', file } }, `Guardar versão "${name}"`);
-    return id;
+    await writeAtomic(this.platform, file, serializeProject(project));
+    return { id, name, createdAt: new Date().toISOString(), origin: 'user', file };
+  }
+
+  async removeVersionSnapshot(file: string): Promise<void> {
+    if (await this.platform.fs.exists(file)) await this.platform.fs.remove(file);
   }
 
   /** Volta a timeline de uma versão (clipes e marcadores). Um único desfazer. */
@@ -661,14 +1049,11 @@ export class ProjectSession {
     if (!v) throw new Error('versão não encontrada');
     const parsed = parseProject(new TextDecoder().decode(await this.platform.fs.readFile(v.file)));
     if (!parsed.ok) throw new Error(`a versão está corrompida: ${parsed.error}`);
-    const old = parsed.project;
-    const assets = new Set(this.project.assets.map((a) => a.id));
-    const tracks = new Set(this.project.tracks.map((t) => t.id));
-    const cmds: Command[] = [
-      ...this.project.clips.map((c) => ({ type: 'clip.remove' as const, clipId: c.id })),
-      ...old.clips.filter((c) => tracks.has(c.trackId) && (!c.assetId || assets.has(c.assetId))).map((c) => ({ type: 'clip.add' as const, clip: c })),
-    ];
-    this.history.transaction(`Voltar para "${v.name}"`, cmds);
+    const previousAssets = new Map(this.project.assets.map((asset) => [asset.id, asset.path]));
+    const before = previousAssets;
+    const replacement = { ...parsed.project, id: this.project.id, versions: this.project.versions };
+    this.history.execute({ type: 'project.replace', project: replacement }, `Voltar para "${v.name}"`);
+    this.afterChange(before);
   }
 
   removeAsset(assetId: string): void {
@@ -691,8 +1076,107 @@ export function autosavePath(path: string): string {
   return `${path}.autosave`;
 }
 
+export function backupsPath(path: string): string {
+  return `${path}.backups`;
+}
+
+function projectAtPath(project: Project, path: string, id: string, name: string, duplicate = false): Project {
+  const dir = `${path}.versoes`;
+  const now = new Date().toISOString();
+  return {
+    ...project,
+    id,
+    name,
+    ...(duplicate ? { createdAt: now, updatedAt: now } : {}),
+    versions: project.versions.map((version) => ({
+      ...version,
+      file: joinPath(dir, `${version.id}.amvproj`),
+    })),
+  };
+}
+
+async function copyProjectTo(platform: Platform, project: Project, sourcePath: string, path: string, name: string, id: string): Promise<Project> {
+  const versionDir = `${path}.versoes`;
+  const backupDir = backupsPath(path);
+  if (await platform.fs.exists(path) || await platform.fs.exists(versionDir) || await platform.fs.exists(backupDir)) {
+    throw new Error(`o destino do projeto ou seus dados auxiliares já existem: ${path}`);
+  }
+  const copied = projectAtPath(project, path, id, name, id !== project.id);
+  try {
+    if (project.versions.length) {
+      await platform.fs.mkdir(versionDir);
+      for (let index = 0; index < project.versions.length; index++) {
+        const source = project.versions[index]!;
+        const parsed = parseProject(new TextDecoder().decode(await platform.fs.readFile(source.file)));
+        if (!parsed.ok) throw new Error(`a versão "${source.name}" não pode ser copiada: ${parsed.error}`);
+        const snapshot = projectAtPath(parsed.project, path, id, parsed.project.name);
+        await writeAtomic(platform, copied.versions[index]!.file, serializeProject(snapshot));
+      }
+    }
+
+    const sourceBackups = backupsPath(sourcePath);
+    if (sourceBackups && await platform.fs.exists(sourceBackups)) {
+      await platform.fs.mkdir(backupDir);
+      for (const name of (await platform.fs.readDir(sourceBackups)).filter((file) => file.toLowerCase().endsWith('.amvproj'))) {
+        const source = joinPath(sourceBackups, name);
+        const bytes = await platform.fs.readFile(source);
+        const parsed = parseProject(new TextDecoder().decode(bytes));
+        const target = joinPath(backupDir, name);
+        if (parsed.ok) {
+          const backupProject = projectAtPath(parsed.project, path, id, parsed.project.name);
+          await writeAtomic(platform, target, serializeProject(backupProject));
+        } else {
+          await writeAtomicBytes(platform, target, bytes);
+        }
+      }
+    }
+
+    await writeAtomic(platform, path, serializeProject(copied));
+    const saved = parseProject(new TextDecoder().decode(await platform.fs.readFile(path)));
+    if (!saved.ok) throw new Error(`a cópia do projeto não passou na validação: ${saved.error}`);
+    for (const version of saved.project.versions) {
+      const snapshot = parseProject(new TextDecoder().decode(await platform.fs.readFile(version.file)));
+      if (!snapshot.ok) throw new Error(`a cópia da versão "${version.name}" não passou na validação: ${snapshot.error}`);
+    }
+    return copied;
+  } catch (error) {
+    for (const ownedPath of [path, versionDir, backupDir]) {
+      if (await platform.fs.exists(ownedPath)) await platform.fs.remove(ownedPath);
+    }
+    throw error;
+  }
+}
+
 async function writeAtomic(platform: Platform, path: string, text: string): Promise<void> {
-  const tmp = `${path}.tmp`;
-  await platform.fs.writeFile(tmp, new TextEncoder().encode(text));
-  await platform.fs.rename(tmp, path);
+  await writeAtomicBytes(platform, path, new TextEncoder().encode(text));
+}
+
+async function writeAtomicBytes(platform: Platform, path: string, data: Uint8Array): Promise<void> {
+  const tmp = `${path}.transaction.tmp`;
+  const displaced = `${path}.transaction.old`;
+  await recoverAtomicFile(platform, path);
+  try {
+    await platform.fs.writeFile(tmp, data);
+    if (await platform.fs.exists(path)) await platform.fs.rename(path, displaced);
+    try {
+      await platform.fs.rename(tmp, path);
+    } catch (error) {
+      if (!(await platform.fs.exists(path)) && await platform.fs.exists(displaced)) await platform.fs.rename(displaced, path);
+      throw error;
+    }
+    if (await platform.fs.exists(displaced)) await platform.fs.remove(displaced);
+  } catch (error) {
+    if (await platform.fs.exists(tmp)) await platform.fs.remove(tmp);
+    throw error;
+  }
+}
+
+async function recoverAtomicFile(platform: Platform, path: string): Promise<void> {
+  const tmp = `${path}.transaction.tmp`;
+  const displaced = `${path}.transaction.old`;
+  if (await platform.fs.exists(displaced)) {
+    if (await platform.fs.exists(path)) await platform.fs.remove(displaced);
+    else await platform.fs.rename(displaced, path);
+  }
+  if (await platform.fs.exists(tmp)) await platform.fs.remove(tmp);
 }

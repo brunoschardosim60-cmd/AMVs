@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { EpisodeAnalysis, MusicAnalysis, Shot } from '@amv/analysis';
-import { applyCommand, clipEndUs, createProject, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
+import { shotKey, type EpisodeAnalysis, type MusicAnalysis, type Shot } from '@amv/analysis';
+import { applyCommand, ClipSchema, clipEndUs, createProject, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
 import { chooseMusicRange, generateAmv, lyricCueKey, makeSlots, recommendStyle, styleDef, type EpisodeInput, type GenerateOptions, type MusicInput } from '../src/index.js';
 
 const S = 1_000_000;
@@ -71,6 +71,62 @@ describe('trecho da música', () => {
     expect((40 - a) / 60).toBeCloseTo(0.4, 1);
   });
 
+  describe('Laboratório de Cenas', () => {
+    it('exclui do Auto AMV uma cena marcada no projeto', () => {
+      let p = project();
+      const ep = episode('ep1', 150, 3);
+      ep.analysis.shots[0]!.startS = 0.033333;
+      const sceneKey = shotKey(ep.analysis.shots[0]!.startS);
+      p = applyCommand(p, {
+        type: 'project.sceneAnnotation.update',
+        assetId: 'ep1',
+        sceneKey,
+        annotation: {
+          assetId: 'ep1', sceneKey, favorite: false, marked: false, excludedFromAuto: true, tags: [],
+        },
+      }).project;
+      const result = generateAmv(p, music(), [ep], {
+        ...base, focus: 'mix', useSpeech: false, durationS: 10, musicStartS: 0,
+      });
+      const videoClips = result.commands.flatMap((command) =>
+        command.type === 'clip.add' && command.clip.trackId === p.tracks.find((track) => track.name === 'V1')!.id
+          ? [command.clip]
+          : [],
+      );
+      expect(videoClips.length).toBeGreaterThan(0);
+      expect(videoClips.some((clip) => clip.assetId === 'ep1' && clip.sourceInUs === 33_333)).toBe(false);
+    });
+  });
+  describe('preservação de color grading', () => {
+    it('mantém a correção manual das cenas ao regenerar a mesma região', () => {
+      const p = project();
+      const videoTrackId = p.tracks.find((track) => track.name === 'V1')!.id;
+      const previous = ClipSchema.parse({
+        id: 'graded-before-regeneration',
+        trackId: videoTrackId,
+        assetId: 'ep1',
+        timelineStartUs: 0,
+        durationUs: 5 * S,
+        sourceInUs: 0,
+        sourceOutUs: 5 * S,
+        origin: 'ai',
+        effects: [{ id: 'manual-grade', effect: 'color', enabled: true, params: { exposure: 0.25, temperature: 28, saturation: 0.9 } }],
+      });
+      const withPrevious = applyCommand(p, { type: 'clip.add', clip: previous }).project;
+      const result = generateAmv(withPrevious, music(), [episode('ep1', 150, 3)], { ...base, useSpeech: false });
+      const regenerated = applyCommand(withPrevious, { type: 'batch', commands: result.commands }).project;
+      const firstVideoClip = regenerated.clips
+        .filter((clip) => clip.trackId === videoTrackId)
+        .sort((a, b) => a.timelineStartUs - b.timelineStartUs)[0]!;
+      expect(firstVideoClip.effects.find((effect) => effect.effect === 'color')?.params).toMatchObject({
+        exposure: 0.25,
+        temperature: 28,
+        saturation: 0.9,
+      });
+      expect(firstVideoClip.effects.find((effect) => effect.effect === 'color')?.id).not.toBe('manual-grade');
+    });
+  });
+
   it('cortes ficam mais rápidos depois do drop e nunca atravessam o drop', () => {
     const slots = makeSlots(music().analysis, [16, 76], styleDef('hype'), 2);
     const before = slots.filter((s) => s.endS <= 24);
@@ -118,9 +174,44 @@ describe('trecho da música', () => {
     expect(slots.some((slot) => Math.abs(slot.endS - 23.25) < 0.01)).toBe(true);
     expect(slots.some((slot) => Math.abs(slot.startS - 23.25) < 0.01)).toBe(true);
   });
+
+  it('varia a densidade por estilo e só aumenta cortes em acentos fortes', () => {
+    const analysis = music().analysis;
+    analysis.events = [
+      { atS: 45.25, type: 'impact', confidence: 0.95, strength: 0.92, band: 'low' },
+      { atS: 32, type: 'pause', confidence: 0.9, strength: 0.8, durationS: 4 },
+      { atS: 16, type: 'growth', confidence: 0.9, strength: 0.4, durationS: 8 },
+    ];
+    const range: [number, number] = [16, 76];
+    const hype = makeSlots(analysis, range, styleDef('hype'), 2);
+    const emotional = makeSlots(analysis, range, styleDef('emocional'), 2);
+    const weakAccent = makeSlots({
+      ...analysis,
+      events: analysis.events!.map((event) => ({ ...event, confidence: 0.2 })),
+    }, range, styleDef('hype'), 2);
+    expect(hype.some((slot) => Math.abs(slot.endS - 29.25) < 0.01)).toBe(true);
+    expect(weakAccent.some((slot) => Math.abs(slot.endS - 29.25) < 0.01)).toBe(false);
+    expect(hype.some((slot) => Math.abs(slot.startS - 29.25) < 0.01 && slot.musicCue?.includes('acento espectral'))).toBe(true);
+    expect(hype.some((slot) => slot.startS >= 16 && slot.startS < 20 && slot.endS - slot.startS >= 0.9)).toBe(true);
+    const avg = (slots: typeof hype) => slots.reduce((sum, slot) => sum + slot.endS - slot.startS, 0) / slots.length;
+    expect(avg(emotional)).toBeGreaterThan(avg(hype));
+    expect(hype.length).toBeLessThan(analysis.beats.filter((beat) => beat >= range[0] && beat <= range[1]).length);
+
+  });
 });
 
 describe('gerar AMV — hype', () => {
+  it('avisa quando a pulsação não sustenta cortes precisos', () => {
+    const uncertain = music();
+    uncertain.analysis.bpmConfidence = 0.2;
+    const result = generateAmv(project(), uncertain, [episode('ep1', 150, 3)], {
+      ...base,
+      useSpeech: false,
+      voiceMoments: 0,
+    });
+    expect(result.warnings.some((warning) => warning.includes('Confiança baixa na pulsação'))).toBe(true);
+  });
+
   it('monta vídeo inteiro, sem sobreposição, na batida, com motivo em cada clipe', () => {
     const { r, out, on } = run();
     const v1 = on('V1');
@@ -142,11 +233,13 @@ describe('gerar AMV — hype', () => {
     expect(r.summary.drop).toBe(24);
   });
 
-  it('drop: cena de impacto com clarão e tremida', () => {
+  it('drop: cena de impacto usa transição de clarão e efeito de tremida sem duplicar o flash', () => {
     const { on } = run();
     const drop = on('V1').find((c) => c.timelineStartUs === 24 * S)!;
     expect(drop.reason).toMatch(/Drop em 0:24/);
-    expect(drop.effects.map((e) => e.effect)).toEqual(expect.arrayContaining(['flash', 'shake']));
+    expect(drop.transitionIn?.transition).toBe('flash');
+    expect(drop.effects.map((e) => e.effect)).toContain('shake');
+    expect(drop.effects.map((e) => e.effect)).not.toContain('flash');
     expect(drop.reason).toMatch(/impacto/);
   });
 
@@ -158,6 +251,8 @@ describe('gerar AMV — hype', () => {
     const earlyClip = on('V1').find((clip) => clip.timelineStartUs <= 10 * S && clipEndUs(clip) > 10 * S);
     expect(earlyClip?.reason).toMatch(/Abertura/);
     expect(on('V1').find((clip) => clip.timelineStartUs === 24 * S)?.reason).toMatch(/Clímax/);
+    expect(on('V1')[0]?.reason).toMatch(/critérios:/);
+    expect(on('V1')[0]?.confidence).toBeNull();
   });
 
   it('não descarta uma cena escura só pelo brilho', () => {
@@ -219,11 +314,12 @@ describe('outros estilos', () => {
     expect(Math.max(...speechCaptions.map((clip) => clip.text!.size))).toBeGreaterThan(Math.min(...speechCaptions.map((clip) => clip.text!.size)));
   });
 
-  it('emocional: poucos cortes longos com dissolver', () => {
+  it('emocional: poucos cortes longos e não inventa dissolves sem evidência visual', () => {
     const { on } = run({ style: 'emocional' });
     const v1 = on('V1');
     expect(v1.length).toBeLessThan(25);
-    expect(v1.slice(1).every((c) => c.transitionIn?.transition === 'dissolve')).toBe(true);
+    expect(v1.slice(1).some((c) => c.transitionIn?.transition === 'dissolve')).toBe(false);
+    expect(v1.slice(1).every((c) => c.reason?.includes('corte seco') || c.transitionIn?.transition === 'flash')).toBe(true);
   });
 
   it('letra: cortes palavra a palavra só usam timestamps fornecidos', () => {

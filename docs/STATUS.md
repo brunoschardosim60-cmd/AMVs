@@ -7,9 +7,9 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Item | Estado | Como foi verificado |
 |---|---|---|
 | Monorepo (pnpm), TS strict, Vitest, pytest | feito | `pnpm typecheck`, `pnpm test` |
-| Modelo do projeto: schema v2, µs inteiros, FPS racional | feito | testes `packages/project`, incluindo migração v1 → v2 |
+| Modelo do projeto: schema v9, µs inteiros, FPS racional | feito | testes `packages/project`, incluindo migrações v1 → v9 |
 | Comandos com inverso, histórico undo/redo, transações | feito | testes: todo comando + inverso = original; batch atômico; projeto nunca mutado |
-| Salvar/abrir com round-trip idêntico, migrações, erros claros | feito | testes de serialização |
+| Salvar/abrir transacional, round-trip idêntico, migrações, erros claros | feito | testes de serialização, escrita interrompida e recuperação de backup |
 | FFmpeg/FFprobe como sidecar do Tauri | feito | app real rodando no Linux (Xvfb) processou mídia pelo sidecar; Windows: CI baixa build GPL do BtbN com checksum |
 | Probe: MP4/MOV/MKV/WEBM/MP3/WAV/FLAC/PNG/JPG, VFR, 10-bit, capa de MP3, idiomas | feito | testes com FFmpeg real em fixtures sintéticas |
 | Proxy H.264 8-bit CFR, GOP ~0,5 s, progresso real, cancelamento | feito | teste mede intervalo de keyframes; cancelar não deixa arquivo pela metade |
@@ -19,7 +19,11 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Tela inicial: novo, abrir, continuar, recentes, favoritos | feito | captura de tela do app real |
 | Importação (botão, Ctrl+I, arrastar e soltar) com metadados e avisos | feito | captura de tela do app real; testes de sessão |
 | Mídia ausente: aviso, localizar arquivo (confere hash), procurar numa pasta | feito | testes de sessão + captura de tela |
-| Autosave a cada 30 s e recuperação após queda | feito | teste de sessão |
+| Autosave a cada 30 s, recuperação após queda e gravação atômica recuperável | feito | testes de autosave, promoção interrompida, falha de escrita/ENOSPC e preservação do arquivo anterior |
+| Backups locais rotativos, histórico de versões e restauração com undo | feito | backups antes de sobrescrever, restauração transacional e projeto completo (settings, áudio, mídias, trilhas, clipes, keyframes, efeitos, legendas e marcadores) |
+| Registro de mídias, dependências, arquivos ausentes e relink por hash | feito | validação de assets/referências/snapshots e testes de remoção e relocalização |
+| Duplicar e arquivar projetos sem nuvem | feito | cópia integral de snapshots/backups e arquivamento para destino local escolhido; originais de mídia permanecem no lugar |
+| Verificação de gerenciamento de projetos | passou | desktop 36/36, project 72/72; typechecks e build do desktop passaram. Testes incluem ENOSPC, queda entre rename e promoção, restore com undo, cópia, arquivo e relink. |
 | Atalhos: Ctrl+N/O/S/Shift+S/I/Z/Shift+Z/Y; bloqueio de atalhos do navegador | feito | código; verificação manual pendente no Windows |
 | Aviso ao fechar com alterações não salvas | feito | código; verificação manual pendente no Windows |
 | Sidecar Python opcional (esqueleto: saúde, módulos, token) | feito | pytest |
@@ -46,7 +50,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Seleção retangular de clipes, adição e reordenação de trilhas por tipo | feito | testes da seleção; comando de reordenação com inverso testado; validação visual pendente |
 | Keyframes de posição X/Y com easing no preview, texto e FFmpeg | feito | testes da curva e teste de render com pixels em dois instantes; WebView2 pendente |
 | Preset de glitch editável e exclusão do runtime SAM2 do bundle | feito | componentes reutilizam efeitos com paridade existente; bundle Windows atualizado ainda não medido |
-| Preview: player sincronizado com proxies, composição em canvas (posição, escala, rotação, opacidade, recorte, texto) | feito | Chromium headless com vídeo de tempo gravado: quadro certo em 3 posições, incluindo tocando |
+| Preview: player sincronizado com proxies, composição em canvas (posição, escala, rotação, opacidade, recorte, máscaras, blend modes, texto e imagem) | feito | Chromium headless com vídeo de tempo gravado; paridade dos efeitos adicionais ainda requer conferência visual no WebView2 |
 | Revisão manual de cenas: prévia do trecho, ajuste de entrada/saída e montagem de vários em sequência | feito | painel Cenas usa proxy mudo; cada trecho entra como clipe separado, numa única ação de undo; typecheck/build |
 | Painel de propriedades: tempo, velocidade, deslizar origem, transformar, volume e fades | feito | app real |
 | Atalhos: Espaço, S, Delete (Shift = fechar buraco), Ctrl+C/X/V/D/A, setas (Shift = 10 quadros), Home/End, +/− | feito | app real (parcial) |
@@ -59,8 +63,13 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Render por janelas + concat sem recodificar, a partir dos originais | feito | 10 testes em `packages/render` conferindo pixels/volume do arquivo final |
 | Efeitos e transições com a mesma fórmula no preview e no render | feito | testes de `evalClipLook`/rampas + render |
 | Textos desenhados pelo mesmo código no preview e na exportação | feito | app real: exportação 1080p com texto conferida quadro a quadro |
-| Mixagem: ganho, fades, faixa de áudio, ducking por keyframes, limitador | feito | teste de volume (−30 dB → −50 dB) |
+| Mixagem: múltiplas trilhas, ganho/fades/keyframes, áudio original do vídeo, ducking de voz, EBU R128, limitador e medição | feito | testes de render com FFmpeg real: áudio original e ducking, loudness alvo, pico verdadeiro/clipping; migração v4 → v5 |
+| Mixer visual e pré-escuta WAV fiel à exportação | feito | controles por trilha (função, ganho, mute/solo), ducking/masterização e WAV renderizado pela mesma cadeia; validação manual do player no WebView2 pendente |
 | Diálogo de exportação: formato, resolução, qualidade, progresso, cancelar, mostrar na pasta | feito | app real (Linux) |
+| Exportação configurável: MP4/MKV/MOV, H.264/H.265/ProRes, FPS racional, CRF/bitrate e estimativa de tamanho | implementado; validação automatizada | typecheck e testes com FFmpeg sidecar; tamanho é estimativa e encoder varia por build |
+| Hardware detectado por teste, fallback automático para CPU, log persistente e publicação transacional | implementado; validação automatizada | executa teste curto do encoder, valida temporário antes de substituir saída e preserva backup em falha |
+| Validação final: duração, resolução, FPS, codec, frames decodificados, áudio mixado, sincronização A/V, decode integral e avisos de preto | implementado; validação automatizada | gaps/fades intencionais são excluídos dos avisos de preto; conteúdo preto continua como aviso revisável |
+| Verificação desta etapa | passou com ressalva | Typechecks render/project/desktop, build desktop, 25/26 testes render com FFmpeg real (falha conhecida na asserção de cor do color grading) e 2/2 testes do estimador/FPS passaram; testes de black warning/gap, fallback, rollback, cancelamento e MKV passaram |
 
 ### Limitações da Fase 2
 - O preview aplica ganho acima de 0 dB com Web Audio e compressão de pico; a seleção de faixa ainda não é respeitada, pois o proxy inclui a primeira faixa de áudio. O comportamento de áudio precisa ser confirmado no WebView2.
@@ -87,6 +96,10 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Selecionar vários episódios e identificar cenas/lutas por episódio para a montagem | feito | geração usa os episódios marcados; seleção Todos/Nenhum e contagem de cenas/lutas visíveis |
 | Direção narrativa musical aplicada às escolhas de cena | primeira fatia feita | seções, energia e drops existentes geram papéis narrativos que alteram o score e aparecem nas justificativas/resumo; testes cobrem faixa parcial, offset, seção sem dados e alinhamento entre tempo local e absoluto. Heurística ainda requer validação visual em mídia real e não entende semanticamente a história. |
 | Cenas escuras preservadas na seleção | feito | cena marcada como escura continua elegível; baixa luminosidade isolada não é motivo para removê-la. Teste de geração em `packages/automv`. |
+| Pontuação contextual e decomposição dos motivos | primeira fatia feita | sinais existentes foram separados em música, ação, emoção, narrativa, transição, diversidade e letra opcional. Justificativas dos clipes mostram sinais selecionados; visão granular só influencia com confiança ≥0,55. Rótulos legados `fight` sem confiança mantêm comportamento compatível. Nitidez, enquadramento, câmera e cor não são medidos e não recebem score inventado. |
+| Planejamento global de cenas e direções editoriais | primeira fatia implementada | busca beam limitada avalia o caminho completo dos slots; modos Cronológico, Narrativo e Livre impõem regras distintas. Cinema, Balanceado e Hype alteram duração/ritmo, transição, peso visual e efeitos. 85 testes focados passaram; typecheck do Auto AMV/desktop e build do frontend passaram. Falta validar o resultado audiovisual em mídia real. |
+| Confiança de clipe gerado | corrigido | removido o reaproveitamento do score de ranking como `Clip.confidence`; pontuação não é probabilidade de adequação. |
+| Análise da mídia de referência local | feita como diagnóstico, não como aceitação visual | FFmpeg/algoritmos existentes analisaram música de 223,4 s e episódio de 1.430,08 s (508 planos em 35,6 s). A classificação musical tem seções longas/coarse; arquivo, streams, métricas e limites estão em `docs/AMV_ENGINE_REFERENCE_VALIDATION.md`. Não foi renderizada nem aprovada uma montagem real. |
 
 ## Fase 6 — Assistente (primeira versão)
 | Item | Estado | Como foi verificado |
@@ -111,12 +124,13 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 ## Fase 8 — Legendas (primeira versão)
 | Item | Estado | Como foi verificado |
 |---|---|---|
-| Importar SRT/ASS/VTT/LRC com detecção de codificação; LRC alinha com a música | feito | testes |
+| Importar SRT/ASS/VTT/LRC com detecção de codificação; LRC alinha com a música | feito | testes; parser ASS também preserva sílabas de karaokê com origem e confiança |
 | Puxar falas do episódio para os clipes (considera velocidade) | feito | testes |
 | Editar texto, ajustar tempo (±), estilos, avisos de leitura, exportar SRT/VTT/LRC | feito | testes + app real |
 | Transcrição local faster-whisper, tradução de legendas | parcial | Transcrição vira clipes editáveis e permite selecionar o stream de áudio; progresso de extração/segmentos e cancelamento cooperativo, com término forçado do sidecar após 5 s. Modelo small carregou offline e decodificou um M4A real de 223,4 s; com VAD, não encontrou falas. Sem VAD, gerou segmentos com confiança de idioma baixa (0,492), então a qualidade de diálogo segue sem validação. PyAV está limitado a <19; smoke test e CI da Release v0.6.3 passaram. Tradução de legendas já funciona. |
 | Alinhamento automático de letra sem tempo | feito | Importa TXT com uma linha por verso, transcreve o arquivo local da música com faster-whisper e associa linhas às palavras reconhecidas em ordem. Reporta versos incertos/não encontrados e cria clipes editáveis. Testes cobrem erros de reconhecimento, versos repetidos, japonês e ausência de correspondência; typecheck passou. Falta validação humana com música real no Windows. |
 | Frases e letras com animação e espaço nos impactos | feito | Falas são divididas em frases curtas animadas; letras recebem destaque e aproximam o início à batida quando cabe, sendo omitidas sobre falas e impactos principais. Testes Auto AMV cobrem batida, drop, animação, cor e quebra de frases; typecheck/build passaram. Falta conferir visualmente no WebView2 com vídeo real. |
+| Editor de tipografia cinética: presets por seção, gradientes, glow, entrada/saída, keyframes e animação confiável por palavra/sílaba | implementado; validação visual pendente | Schema v7 migra projetos sem criar tempos; ASS preserva sílabas, pontuação e runs sem espaços; Inspector permite editar estilo/timestamps e alternar original, traduções e texto manual sem perder variantes. Preview e exportação rasterizada compartilham `drawTextLayer`. Testes focados e typechecks; falta validar renderização no WebView2 com mídia autorizada. |
 
 ## Pós-0.5.5 (0.6.0, em andamento)
 | Item | Estado | Como foi verificado |
@@ -206,3 +220,123 @@ Relatório: `docs/ALTERNATIVE_ANIME_SEGMENTATION_BENCHMARK.md`.
 | Consistência temporal | não testada; recorte automático em espera | sem vídeo, sem CUTIE, sem integração ao produto; não avançar tracking sem novas máscaras iniciais confiáveis |
 
 Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Videos\AMV-SAM2-Quality\resultados\skytnt_isnetis_pytorch_validation`. A conclusão é limitada a esses cinco quadros. Sem UI, timeline, instalador ou dependências do app alterados.
+
+## Correções P0 de montagem e assistente (2026-11-09)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Idioma do áudio e das legendas | implementado | Título explícito da faixa tem precedência sobre tags conflitantes; idioma acompanha as legendas embutidas e o cache de análise mudou de e2 para e3. Geração não usa legenda incompatível nem troca silenciosamente para uma faixa de dublagem não identificada. Testes de análise e montagem. |
+| Cronologia e cenas coerentes | implementado | Seleção comum avança pela origem do episódio; em slots intensos/drops a busca futura é limitada, sem misturar sequências no foco de luta. Testes de continuidade, foco e compatibilidade musical. |
+| Resiliência do Gemini | implementado | Timeout de 45 s, até 3 tentativas transitórias com jitter/Retry-After e circuit breaker de 30 s; fallback local é identificado na interface e só cobre falhas transitórias. Testes com provedor simulado. |
+| Verificação desta rodada | concluída | Auto AMV: 72 testes focados; typecheck de automv, analysis, assistant e desktop. Não houve teste com chave Gemini real ou aceitação visual em mídia real. |
+
+## Inteligência visual local e biblioteca de personagens (2026-11-10)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Análise visual local incremental | implementada | FFmpeg extrai 1–3 quadros reduzidos por cena; descritores de luminância espacial, bordas, histograma de cor, composição, entropia, movimento e deslocamento são salvos no cache do hash do asset. Cena concluída não é extraída de novo; botão permite retomar localmente. Testes unitários RGB e seleção incremental. |
+| Classificação visual e repetição | primeira fatia implementada | categorias heurísticas ação/diálogo/contemplação/tensão/reação/ambiente e similaridade estrutural/temporal por cena; cena semelhante afeta o score do Auto AMV. Não é reconhecimento de identidade nem classificador de câmera com modelo treinado. |
+| Rostos, expressão e enquadramento | complemento opcional | respostas do modelo visual podem trazer quantidade de rostos, expressão com confiança e escala do plano; rótulos incompletos/ambíguos são descartados. Não há detector facial local no build atual. |
+| Biblioteca de personagens por projeto | implementada | schema `.amvproj` v3, migração v2→v3, nomes/aliases, evidências de cenas e confiança; renomear/corrigir no diálogo de geração muda as etiquetas usadas pelo filtro de personagem e pode ser desfeito. |
+| Validação desta etapa | parcial, testes sintéticos locais concluídos | 88 testes Auto AMV, 50 de projeto, 34 de analysis (sem os testes que invocam FFmpeg) e 38 do assistant passaram; typecheck dos pacotes afetados e build desktop passaram. A suíte de integração desktop teve 7 falhas em importação/processamento de mídia porque o FFmpeg não está no PATH do NodeRunner. Extração de vídeo codificado e qualidade/identidade em anime autorizado continuam sem validação visual. |
+
+## Linguagem de câmera e análise de movimento (2026-11-10)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Fluxo óptico local | implementado | Correspondência esparsa de patches em quadros 32×18, processada em CPU; saída por intervalo com direção, velocidade normalizada, confiança, movimento localizado e reframe abrupto. Amostragem adaptativa de até 5 quadros por cena. |
+| Movimentos e confiança | primeira versão | Classifica pan horizontal/vertical, zoom aparente, rotação, travelling, estático ou desconhecido; zoom registra aproximação/afastamento aparente sem afirmar se câmera ou objeto se moveu. |
+| Uso no Auto AMV e interface | implementado | Score favorece continuidade direcional e permite contraste explícito em acento/mudança de energia. O diálogo mostra eventos com confiança ≥60%; sinais abaixo disso não influenciam essa regra. |
+| Cache e processamento | incremental | Nova versão local `v2` invalida apenas descritores antigos; eventos são persistidos por cena no cache existente do hash do asset. O processamento não usa CUDA nem exige GPU. |
+| Testes | passou em fixtures de movimento com ground truth | 8 testes locais verificam pan, inclinação vertical, zoom in/out, rotação, cena estática, baixa textura e movimento localizado; 10 testes do score verificam continuidade, contraste e rejeição de baixa confiança. Auto AMV: 106 testes passaram. Analysis: 40 testes passaram; duas suítes FFmpeg não iniciaram (`spawn ffmpeg ENOENT`). Typechecks de analysis/Auto AMV/desktop e build desktop passaram. Falta validação com filmagem real autorizada e benchmark na RX 580. |
+
+## Diretor Musical (2026-11-10)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Eventos musicais locais | primeira fatia implementada | Cache de análise m4 registra ataques e acentos graves por banda espectral, crescimentos graduais, pausas, drops, mudanças de seção e variações de ritmo, cada evento com suporte heurístico. |
+| Direção dos cortes | implementada no Auto AMV | Perfis por estilo variam agrupamento/densidade; crescimentos aceleram, pausas e finais alongam planos, preparação do drop adensa cortes e acentos fortes podem criar corte seletivo. O plano mantém a grade de batidas/seções quando possível. |
+| Visualização e ajuste | implementados | Mapa de energia, compassos, ataques e eventos no diálogo de geração; offset manual existente continua disponível. Baixa confiança no BPM gera aviso para revisão. |
+| Limites e testes | testes sintéticos concluídos; validação musical real pendente | Analysis: 37 testes; Auto AMV: 91; projeto: 50; assistant: 38. Typecheck de analysis/automv e build desktop passaram; `git diff --check` passou. Os testes de episódio/frames que dependem de FFmpeg foram excluídos porque FFmpeg não está no PATH do NodeRunner; a compilação Tauri e a validação auditiva/editorial com música real autorizada não foram executadas. Instrumentos específicos e vocais não são classificados; eventos usam suporte heurístico, não probabilidade calibrada. |
+
+## Color grading (2026-11-10)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Ajustes por cena e presets | implementados | Um efeito undoável oferece exposição, contraste, saturação, temperatura, matiz, sombras, médios, realces e vinheta; presets Cinema quente, Frio, Anime vibrante e Preto e branco. O botão do efeito alterna antes/depois. |
+| Aplicação por sequência | implementada | Selecionar vários clipes de vídeo e aplicar um preset atualiza todos numa única transação, mantendo os demais efeitos. |
+| Continuidade automática | primeira versão | O Auto AMV limita compensação de exposição a ±0,3 EV usando luminância por plano; se houver histogramas locais RGB com amostras suficientes, aplica balanço cromático leve. Motivos ficam no clipe e o comportamento preserva a intenção entre cenas. |
+| Preview e exportação | caminho comum de LUT | A transformação pura alimenta lookup 3D 17³ em WebGL2 quando disponível (RX 580 pode usar o caminho gráfico) e cai para Canvas2D/CPU; gera `.cube` temporário para `lut3d` do FFmpeg na exportação. A avaliação FFmpeg foi bloqueada porque `ffmpeg` não está no PATH do NodeRunner; equivalência com material real ainda não foi verificada. |
+| Hardware, LUTs externas e validação visual | parciais | Sem CUDA/dependências novas; WebGL2 é opcional no preview e FFmpeg continua renderizando por CPU. Ainda não há interface para importar LUT `.cube` de usuário. Testes automatizados usam cores sintéticas; falta validar cenas reais autorizadas e medir desempenho na RX 580. |
+| Testes disponíveis | passou parcialmente | Projeto: 53 testes; Auto AMV focado: 28; teste de filtergraph LUT: 1; typechecks do projeto/Auto AMV/render/desktop, build desktop e `git diff --check` passaram. O teste de render com pixels não iniciou: `spawn ffmpeg ENOENT`. |
+
+## Avaliador audiovisual (2026-11-10)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Análise da timeline e cobertura | primeira versão implementada | Pacote puro `@amv/automv`: continuidade temporal/visual, cortes curtos, repetição de planos identificados, justificativas de sincronização, combinações de efeitos, sobreposição de textos e fontes de áudio. O relatório separa cobertura completa, parcial e indisponível e não gera nota geral. |
+| Relatório no editor | implementado | Ação na barra da timeline lista gravidade, timestamp, evidências, motivo e sugestão; “Ver trecho” seleciona os clipes e busca o preview. |
+| Correção local | implementada para sobreposição de textos | A correção oferecida é um comando de projeto undoável; não há correções automáticas especulativas para outros achados. |
+| Testes e build | passou | Auto AMV: 96 testes; typechecks de Auto AMV e desktop; build de produção do frontend. A build avisou que o bundle principal excede 500 kB. |
+| Validação editorial e de exportação | pendente | Nenhuma montagem real foi julgada e preview/exportação não foram comparados por quadros. Análises ausentes ou não carregadas aparecem na cobertura como indisponíveis/parciais. |
+
+## Regeneração localizada não destrutiva (2026-11-10)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Seleção de intervalo | implementada | Selecione clipes de vídeo na trilha principal e use “Melhorar seleção”; início/fim podem ser ajustados antes de gerar. |
+| Alternativas e comparação | implementada | Gera propostas sem alterar o projeto, permite guardar várias alternativas na sessão e comparar previews A/B em três pontos do intervalo. |
+| Preservação e transação | implementadas | Só clipes selecionados da trilha-alvo são substituídos; clipes não selecionados são âncoras. Áudio, textos/legendas, demais trilhas e trechos sem cena gerada permanecem. Efeitos, keyframes, transformações, ajustes de áudio do clipe, transições e color grade existentes acompanham a substituição quando os tempos se sobrepõem. |
+| Histórico e restauração | implementados | Confirmação guarda snapshot anterior e aplica snapshot + alterações em uma transação única; Undo/Redo e menu Versões restauram a timeline. Alternativas obsoletas são recusadas se o projeto mudou. |
+| Testes e build | passou | Suíte Auto AMV: 105 testes; typechecks de Auto AMV e desktop; build de produção do frontend; `git diff --check`. O build ainda avisa que o bundle principal excede 500 kB. |
+
+## Transições por conteúdo (2026-11-10)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Escolha por par de cenas | implementada | A geração usa confiança de movimento, direção, personagem/ação, composição, enquadramento, luminosidade, energia/drop, direção editorial e duração. Sem evidência suficiente, mantém corte seco. |
+| Catálogo e controles | primeira versão implementada | Dissolve, dip, flash e whip pan têm parâmetros de duração/curva/intensidade/direção; match cut e corte em ação são decisões editoriais secas, sem sobreposição artificial. |
+| Preview e exportação | fórmulas compartilhadas | Preview usa os helpers de transição; FFmpeg usa expressões de alfa com curvas equivalentes e desloca/desfoca as duas camadas do whip pan. |
+| Testes | passou parcialmente | Auto AMV: 115 testes; projeto: 54 testes; render: 2 testes de grafo e render real sintético de dissolve/whip pan passaram; typechecks de Auto AMV, projeto, render e desktop passaram. Na suíte completa de render, 13/14 passaram; a falha foi uma asserção de color grading fora do teste de transições. Mídia real e comparação visual continuam pendentes. |
+
+## Laboratório de Cenas (2026-11-10)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Biblioteca por projeto | implementada | Tela dedicada lista cenas já cacheadas de todos os vídeos, com miniaturas, arquivo/episódio, timestamps e posição na timeline original. |
+| Metadados pesquisáveis | implementados | Filtros de ação, emoção, enquadramento, contexto, personagens, intensidade, confiança e tags; atributos ausentes não viram correspondências. Busca em linguagem natural converte somente em filtros locais de metadados existentes. |
+| Prévia e inserção | implementadas | Prévia salta ao timestamp de origem no proxy; seleção múltipla insere clipes comuns e editáveis numa transação undoável. |
+| Marcações e Auto AMV | implementados | Favorito, marcação, tags pessoais, direitos de assets e exclusão persistem no schema v9; cenas excluídas são retiradas da seleção automática. |
+| Análise incremental | implementada | A tela reutiliza as análises existentes, permite completar visão local ou rotular cenas com modelo configurado, mostra progresso/cancelamento e mantém resultados concluídos no cache. |
+| Testes | passou | Projeto: 56; análise: 53 (com FFmpeg sidecar); Auto AMV: 116; busca estruturada: 2. Typecheck desktop passou. Falta validação visual com mídia real autorizada no Windows. |
+
+## Sound design local (2026-11-10)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Biblioteca local | implementada | Importa arquivos/pastas de áudio por referência, deduplica por hash e persiste categoria, tags, origem, licença, atribuição e observações em JSON local. Remover da biblioteca não apaga o arquivo original. |
+| Pré-escuta e organização | implementadas | Player local, busca por metadados/tags e filtro por categoria; metadados são editáveis pelo usuário. |
+| Inserção no projeto | implementada | Importa/reutiliza o asset, preserva direitos no projeto e insere no playhead numa transação única de undo, sem sobrescrever efeitos sobrepostos. Ganho e fades permanecem editáveis pelo Inspector. |
+| Sugestões | limitadas e explícitas | Sugestões derivam de marcadores de drop/downbeat/corte já existentes, mostram confiança/evidência e aguardam aprovação. Ainda não inferem oportunidades de sound design a partir de acontecimentos visuais. |
+| Testes e validação | parcial | Testes unitários da biblioteca/sugestões e migração v5→v6; typecheck/build desktop. Importação e reprodução em WebView2 e teste manual com arquivos licenciados continuam pendentes. |
+
+## Controle de velocidade (schema v8)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Curvas e presets | implementados | Curvas lineares, hold e ease integram a velocidade para mapear tempo da timeline e origem; Inspector mostra o gráfico, permite adicionar/remover pontos, editar fatores/interpolação e aplicar presets. |
+| Reverse e freeze | implementados com limitações | Reverse exporta vídeo invertido; freeze usa o quadro correspondente. O preview busca quadros para reverse e pausa durante freeze; áudio reverso é silenciado no preview e excluído da exportação. |
+| Mixagem com velocidade | implementada por segmentos | A exportação segmenta ramps para variar o tempo e respeitar pitch conforme a opção do clipe. A aproximação é por blocos e precisa de validação auditiva em áudio real. |
+| Edição não destrutiva | implementada | Split, trim e clear-range preservam o mapeamento de origem e recortam keyframes; testes cobrem ramp, reverse, freeze, migração e continuidade nos limites. |
+| Verificação desta etapa | parcial | Projeto: 69 testes; Auto AMV: 117; legendas: 17; assistente: 38 — todos passaram. Typechecks dos seis pacotes e build desktop passaram. Render: 22/23 testes passaram com FFmpeg sidecar; o único teste falho é a asserção de cor já conhecida. O render real de speed ramp, freeze e reverse passou, incluindo duração de 96 quadros a 24000/1001. Comparação visual preview/export e validação no WebView2 continuam pendentes. |
+
+## Composição multicamadas (schema v9)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| PIP, enquadramento dividido, recorte, máscaras e blend modes | implementados | Inspector altera clipes reais; exportação usa máscaras alpha e blend em RGB, além de teste FFmpeg com máscara, multiply e pixels. |
+| Transformações animadas e alças no preview | implementadas | Keyframes de posição, escala, rotação e opacidade alimentam preview e exportação; render real testa escala/opacidade animadas. |
+| Agrupamento e cópia | implementados | Grupos movem juntos na timeline; cópias de grupos recebem ids independentes e cópia isolada não mantém grupo órfão; teste em `packages/project/test/edit.test.ts`. |
+| Migração e validação | implementadas | Migração v8→v9 adiciona blend normal, máscara nenhuma e grupo nulo; teste de serialização. |
+| Limites e verificação manual | pendentes | Máscaras disponíveis são formas/metades sem feather. Paridade visual geral e interação de alças precisam de validação no WebView2; não há material visual real no teste automatizado. |
+| Verificação automatizada | passou com ressalva | Projeto: 71/71; desktop: 27/27; typechecks de project/render/desktop e build desktop passaram. O teste de composição FFmpeg passou; a suíte render completa teve 23/24, com falha na asserção de cor do color grading, fora deste caminho. |

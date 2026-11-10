@@ -2,7 +2,8 @@
  * Comando do FFmpeg para UMA janela do plano. Usa os arquivos ORIGINAIS.
  * As fórmulas espelham `evalClipLook` / `clipRamps` de @amv/project.
  */
-import { clipRamps, orderedKeyframes, param, type Clip, type Keyframe, type Project, type Rational, type Ramp } from '@amv/project';
+import { clipRamps, hasSpeedCurve, orderedKeyframes, param, sourceTimeAt, speedProgressAt, timelineLocalAtProgress, type Clip, type Keyframe, type Project, type Rational, type Ramp, type TransitionCurve } from '@amv/project';
+import type { ProcessRunner } from '@amv/media';
 import type { Layer, Window } from './plan.js';
 
 export interface AssetSource {
@@ -16,6 +17,67 @@ export interface VideoEncoding {
   codec: 'h264' | 'h265' | 'prores';
   /** 0 = rascunho rápido, 1 = alta, 2 = máxima. */
   quality: 0 | 1 | 2;
+  encoder?: 'auto' | 'cpu' | 'amf' | 'nvenc' | 'qsv';
+  rateControl?: 'crf' | 'bitrate';
+  crf?: number;
+  bitrateK?: number;
+  container?: 'mp4' | 'mkv' | 'mov';
+}
+
+export type HardwareEncoder = Exclude<NonNullable<VideoEncoding['encoder']>, 'auto' | 'cpu'>;
+export type ResolvedVideoEncoder = 'cpu' | HardwareEncoder;
+
+const HARDWARE_ENCODERS: Record<HardwareEncoder, { h264: string; h265: string }> = {
+  amf: { h264: 'h264_amf', h265: 'hevc_amf' },
+  nvenc: { h264: 'h264_nvenc', h265: 'hevc_nvenc' },
+  qsv: { h264: 'h264_qsv', h265: 'hevc_qsv' },
+};
+
+function cpuEncoder(codec: VideoEncoding['codec']): string {
+  return codec === 'h265' ? 'libx265' : codec === 'prores' ? 'prores_ks' : 'libx264';
+}
+
+function hardwareEncoder(encoder: HardwareEncoder, codec: Exclude<VideoEncoding['codec'], 'prores'>): string {
+  return HARDWARE_ENCODERS[encoder][codec];
+}
+
+async function testEncoder(runner: ProcessRunner, name: string, rateControl: VideoEncoding['rateControl'] = 'crf'): Promise<boolean> {
+  const args = ['-hide_banner', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=1', '-frames:v', '1', '-c:v', name];
+  if (name.endsWith('_amf')) args.push('-rc', rateControl === 'bitrate' ? 'cbr' : 'cqp', ...(rateControl === 'bitrate' ? ['-b:v', '500k'] : ['-qp_i', '28', '-qp_p', '28']));
+  else if (name.endsWith('_nvenc')) args.push('-preset', 'p1', ...(rateControl === 'bitrate' ? ['-b:v', '500k'] : ['-rc', 'vbr', '-cq', '28', '-b:v', '0']));
+  else if (name.endsWith('_qsv')) args.push('-preset', 'veryfast', ...(rateControl === 'bitrate' ? ['-b:v', '500k'] : ['-global_quality', '28']));
+  args.push('-f', 'null', '-');
+  const result = await runner.run('ffmpeg', args);
+  return result.code === 0;
+}
+
+/** Reporta somente encoders que existem no build e passam por uma codificação real curta. */
+export async function availableHardwareEncoders(
+  runner: ProcessRunner,
+  codec: Exclude<VideoEncoding['codec'], 'prores'>,
+  rateControl: VideoEncoding['rateControl'] = 'crf',
+): Promise<HardwareEncoder[]> {
+  const listed = await runner.run('ffmpeg', ['-hide_banner', '-encoders']);
+  if (listed.code !== 0) throw new Error(`Não foi possível consultar os encoders do FFmpeg: ${listed.stderr.trim()}`);
+  const available: HardwareEncoder[] = [];
+  for (const candidate of ['amf', 'nvenc', 'qsv'] as const) {
+    const encoder = hardwareEncoder(candidate, codec);
+    if (!new RegExp(`\\b${encoder}\\b`).test(`${listed.stdout}\n${listed.stderr}`)) continue;
+    if (await testEncoder(runner, encoder, rateControl)) available.push(candidate);
+  }
+  return available;
+}
+
+export async function resolveVideoEncoder(runner: ProcessRunner, encoding: VideoEncoding): Promise<ResolvedVideoEncoder> {
+  if (encoding.codec === 'prores') return 'cpu';
+  const target = encoding.encoder ?? 'cpu';
+  if (target === 'cpu') return 'cpu';
+  const available = await availableHardwareEncoders(runner, encoding.codec, encoding.rateControl);
+  if (target === 'auto') return available[0] ?? 'cpu';
+  if (!available.includes(target)) {
+    throw new Error(`O encoder ${target.toUpperCase()} não está disponível ou falhou no teste do FFmpeg. Escolha CPU ou outro encoder disponível.`);
+  }
+  return target;
 }
 
 export interface WindowJob {
@@ -49,19 +111,67 @@ function keyframeExpr(keyframes: Keyframe[] | undefined, fallback: number, T: st
   return `if(lt(${T},${n(first.atUs / 1e6)}),${n(first.value)},${expression})`;
 }
 
+function maskExpr(mask: Clip['mask']): string | null {
+  switch (mask) {
+    case 'circle': return 'if(lt(pow((X-W/2)/(W/2),2)+pow((Y-H/2)/(H/2),2),1),1,0)';
+    case 'left': return 'if(lt(X,W/2),1,0)';
+    case 'right': return 'if(gte(X,W/2),1,0)';
+    case 'top': return 'if(lt(Y,H/2),1,0)';
+    case 'bottom': return 'if(gte(Y,H/2),1,0)';
+    default: return null;
+  }
+}
+
+function speedCurveSetptsExpr(clip: Clip, localStartS: number, durationS: number, sourceSpanS: number): string {
+  const steps = 64;
+  const startUs = Math.round(localStartS * 1e6);
+  const endUs = Math.round((localStartS + durationS) * 1e6);
+  const startProgress = speedProgressAt(clip, startUs);
+  const endProgress = speedProgressAt(clip, endUs);
+  const values = Array.from({ length: steps + 1 }, (_, index) => {
+    const progress = startProgress + (endProgress - startProgress) * index / steps;
+    return timelineLocalAtProgress(clip, progress) / 1e6 - localStartS;
+  });
+  let expression = n(values[steps]!);
+  for (let index = steps - 1; index >= 0; index--) {
+    const from = index * sourceSpanS / steps;
+    const to = (index + 1) * sourceSpanS / steps;
+    const fraction = `clip((T-${n(from)})/${n(to - from)},0,1)`;
+    const value = `(${n(values[index]!)}+(${n(values[index + 1]! - values[index]!)}*${fraction}))`;
+    expression = `if(lt(T,${n(to)}),${value},${expression})`;
+  }
+  return expression;
+}
+
 export function encodingArgs(enc: VideoEncoding, fps: Rational): string[] {
   const g = String(Math.max(1, Math.round((2 * fps.num) / fps.den)));
   if (enc.codec === 'prores') {
     return ['-c:v', 'prores_ks', '-profile:v', enc.quality === 2 ? '4' : '3', '-pix_fmt', enc.quality === 2 ? 'yuva444p10le' : 'yuv422p10le', '-vendor', 'apl0'];
   }
-  if (enc.codec === 'h265') {
-    const crf = ['26', '20', '17'][enc.quality]!;
-    const preset = ['veryfast', 'medium', 'slow'][enc.quality]!;
-    return ['-c:v', 'libx265', '-preset', preset, '-crf', crf, '-pix_fmt', 'yuv420p', '-g', g, '-x265-params', 'log-level=error', '-tag:v', 'hvc1'];
+  const target = enc.encoder && enc.encoder !== 'auto' ? enc.encoder : 'cpu';
+  const crf = enc.crf ?? (enc.codec === 'h265' ? [26, 20, 17][enc.quality]! : [23, 18, 15][enc.quality]!);
+  const rate = enc.rateControl ?? 'crf';
+  const bitrate = enc.bitrateK ?? 8000;
+  const rateArgs = rate === 'bitrate' ? ['-b:v', `${bitrate}k`, '-maxrate', `${Math.round(bitrate * 1.15)}k`, '-bufsize', `${bitrate * 2}k`] : [];
+  if (target !== 'cpu') {
+    const name = hardwareEncoder(target, enc.codec);
+    const quality = ['speed', 'balanced', 'quality'][enc.quality]!;
+    if (target === 'amf') {
+      return ['-c:v', name, '-quality', quality, ...(rate === 'bitrate' ? rateArgs : ['-rc', 'cqp', '-qp_i', String(crf), '-qp_p', String(crf)]), '-pix_fmt', 'yuv420p', '-g', g];
+    }
+    if (target === 'nvenc') {
+      return ['-c:v', name, '-preset', `p${enc.quality === 0 ? 1 : enc.quality === 1 ? 4 : 7}`, ...(rate === 'bitrate' ? rateArgs : ['-rc', 'vbr', '-cq', String(crf), '-b:v', '0']), '-pix_fmt', 'yuv420p', '-g', g, ...(enc.codec === 'h265' && (enc.container ?? 'mp4') === 'mp4' ? ['-tag:v', 'hvc1'] : [])];
+    }
+    return ['-c:v', name, '-preset', ['veryfast', 'medium', 'veryslow'][enc.quality]!, ...(rate === 'bitrate' ? rateArgs : ['-global_quality', String(crf)]), '-pix_fmt', 'yuv420p', '-g', g, ...(enc.codec === 'h265' && (enc.container ?? 'mp4') === 'mp4' ? ['-tag:v', 'hvc1'] : [])];
   }
-  const crf = ['23', '18', '15'][enc.quality]!;
   const preset = ['veryfast', 'medium', 'slow'][enc.quality]!;
-  return ['-c:v', 'libx264', '-preset', preset, '-crf', crf, '-pix_fmt', 'yuv420p', '-profile:v', 'high', '-g', g];
+  return [
+    '-c:v', cpuEncoder(enc.codec), '-preset', preset,
+    ...(rate === 'bitrate' ? rateArgs : ['-crf', String(crf)]),
+    '-pix_fmt', 'yuv420p', ...(enc.codec === 'h264' ? ['-profile:v', 'high'] : (enc.container ?? 'mp4') === 'mp4' ? ['-tag:v', 'hvc1'] : []),
+    '-g', g,
+    ...(enc.codec === 'h265' ? ['-x265-params', 'log-level=error'] : []),
+  ];
 }
 
 /** Expressão do FFmpeg para o zoom no tempo local T (mesma fórmula de zoomAt). */
@@ -96,8 +206,43 @@ function shakeExpr(clip: Clip, T: string, axis: 'x' | 'y'): string {
 function sum(clip: Clip, effect: string, key: string): number {
   return clip.effects.filter((f) => f.enabled && f.effect === effect).reduce((a, f) => a + param(f, key), 0);
 }
-function prod(clip: Clip, effect: string, key: string): number {
-  return clip.effects.filter((f) => f.enabled && f.effect === effect).reduce((a, f) => a * param(f, key), 1);
+
+function transitionCurve(value: unknown): TransitionCurve {
+  return value === 'ease-in' || value === 'ease-out' || value === 'ease-in-out' ? value : 'linear';
+}
+
+function transitionNumber(transition: Clip['transitionIn'], key: string, fallback: number): number {
+  const value = transition?.params[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function curveExpr(x: string, curve: TransitionCurve): string {
+  const c = `clip(${x},0,1)`;
+  if (curve === 'ease-in') return `((${c})*(${c}))`;
+  if (curve === 'ease-out') return `(1-(1-(${c}))*(1-(${c})))`;
+  if (curve === 'ease-in-out') return `(0.5-0.5*cos(PI*(${c})))`;
+  return c;
+}
+
+function rampValueExpr(ramp: Ramp, startS: number, peak = 1): string {
+  const curve = curveExpr(`(T-${n(startS)})/${n(ramp.durS)}`, ramp.curve ?? 'linear');
+  const intensity = ramp.intensity === undefined ? 1 : Math.max(0, Math.min(1, ramp.intensity));
+  const x = intensity < 1 ? `pow(${curve},${n(1 + (1 - intensity) * 3)})` : curve;
+  return `(${n(ramp.from)}+(${n(ramp.to - ramp.from)})*${x})/${n(peak)}`;
+}
+
+function whipOffsetExpr(layer: Layer, windowStartUs: number, scale: number, width: number): string {
+  const transition = layer.transition;
+  if (!transition || transition.transition !== 'whip_pan' || transition.durationUs <= 0) return '0';
+  const durationS = transition.durationUs / 1e6;
+  const phaseStartS = (windowStartUs - layer.transitionStartUs) / 1e6;
+  const progress = curveExpr(`(t+${n(phaseStartS)})/${n(durationS)}`, transitionCurve(transition.params.curve));
+  const intensity = Math.min(1, Math.max(0.1, transitionNumber(transition, 'intensity', 0.65)));
+  const direction = transition.params.direction === -1 ? -1 : 1;
+  const distance = n(width * scale * intensity);
+  return layer.underlay
+    ? `${direction}*${distance}*${progress}`
+    : `${-direction}*${distance}*(1-${progress})`;
 }
 
 /**
@@ -119,6 +264,7 @@ export interface WindowInput {
   enc: VideoEncoding;
   output: string;
   source(assetId: string): AssetSource | null;
+  colorLutPath?(clip: Clip): string | null;
   /**
    * Texto já desenhado (mesmo desenho do preview), do tamanho do quadro.
    * `sequence`: um PNG por quadro do clipe (`%05d`, quadro 0 = início do clipe), já com
@@ -140,10 +286,34 @@ export function windowArgs(o: WindowInput): WindowJob {
   filters.push(`color=c=${P.background.replace('#', '0x')}:s=${W}x${H}:r=${FPS}:d=${n(Dw + 1, 3)},format=yuv420p[base]`);
   let layerCount = 0;
 
-  const overlayOnto = (label: string, x: string, y: string, enable?: string) => {
-    const out = `v${filters.length}`;
-    filters.push(`[${cur}][${label}]overlay=x='${x}':y='${y}':eval=frame:eof_action=pass:format=yuv420${enable ? `:enable='${enable}'` : ''}[${out}]`);
-    cur = out;
+  const overlayOnto = (label: string, x: string, y: string, enable?: string, blendMode: Clip['blendMode'] = 'normal') => {
+    if (blendMode === 'normal') {
+      const out = `v${filters.length}`;
+      filters.push(`[${cur}][${label}]overlay=x='${x}':y='${y}':eval=frame:eof_action=pass:format=yuv420${enable ? `:enable='${enable}'` : ''}[${out}]`);
+      cur = out;
+      return;
+    }
+
+    const transparent = `transparent${filters.length}`;
+    const fullLayer = `full${filters.length}`;
+    const topLayer = `toplayer${filters.length}`;
+    const alphaLayer = `alphalayer${filters.length}`;
+    const alpha = `alpha${filters.length}`;
+    const topRgb = `toprgb${filters.length}`;
+    const bottomRgb = `bottomrgb${filters.length}`;
+    const blendedRgb = `blendrgb${filters.length}`;
+    const blended = `blend${filters.length}`;
+    const next = `v${filters.length}`;
+    filters.push(`color=c=black@0:s=${W}x${H}:r=${FPS}:d=${n(Dw + 1, 3)},format=yuva420p[${transparent}]`);
+    filters.push(`[${transparent}][${label}]overlay=x='${x}':y='${y}':eval=frame:eof_action=pass:format=auto${enable ? `:enable='${enable}'` : ''}[${fullLayer}]`);
+    filters.push(`[${fullLayer}]split=2[${topLayer}][${alphaLayer}]`);
+    filters.push(`[${topLayer}]format=gbrp[${topRgb}]`);
+    filters.push(`[${cur}]format=gbrp[${bottomRgb}]`);
+    filters.push(`[${topRgb}][${bottomRgb}]blend=all_mode=${blendMode}[${blendedRgb}]`);
+    filters.push(`[${alphaLayer}]alphaextract[${alpha}]`);
+    filters.push(`[${blendedRgb}][${alpha}]alphamerge[${blended}]`);
+    filters.push(`[${cur}][${blended}]overlay=x=0:y=0:eval=frame:eof_action=pass:format=yuv420[${next}]`);
+    cur = next;
   };
 
   for (const layer of w.layers) {
@@ -181,6 +351,33 @@ export function windowArgs(o: WindowInput): WindowJob {
       if (src.kind === 'image') {
         inputs.push('-loop', '1', '-framerate', FPS, '-t', n(chainLen + 0.1, 3), '-i', src.path);
         chain.push(`[${inputIdx}:v]setpts=PTS-STARTPTS`);
+      } else if (hasSpeedCurve(c) || c.reverse) {
+        const sourceAtStart = sourceTimeAt(c, Math.round(Ls * 1e6));
+        const sourceAtEnd = sourceTimeAt(c, Math.round((Ls + chainLen) * 1e6));
+        const sourceStart = Math.min(sourceAtStart, sourceAtEnd) / 1e6;
+        const sourceSpan = Math.abs(sourceAtEnd - sourceAtStart) / 1e6;
+        const frameDuration = fps.den / fps.num;
+        inputs.push(
+          '-ss', n(Math.max(0, sourceStart), 6),
+          '-t', n(Math.max(frameDuration, sourceSpan) + frameDuration, 6),
+          '-i', src.path,
+        );
+        if (sourceSpan < frameDuration / 2) {
+          chain.push(
+            `[${inputIdx}:v:0]trim=end_frame=1`,
+            'setpts=PTS-STARTPTS',
+            `tpad=stop_mode=clone:stop_duration=${n(chainLen + frameDuration)}`,
+          );
+        } else {
+          chain.push(`[${inputIdx}:v:0]trim=duration=${n(sourceSpan + frameDuration)}`, 'setpts=PTS-STARTPTS');
+          if (c.reverse) chain.push('reverse', 'setpts=PTS-STARTPTS');
+          if (hasSpeedCurve(c)) {
+            const expression = speedCurveSetptsExpr(c, Ls, chainLen, sourceSpan);
+            chain.push(`setpts='(${expression})/TB'`);
+          } else {
+            chain.push(`setpts=(PTS-STARTPTS)/${n(c.speed)}`);
+          }
+        }
       } else {
         const srcStart = (c.sourceInUs + Ls * 1e6 * c.speed) / 1e6;
         inputs.push('-ss', n(Math.max(0, srcStart), 6), '-t', n(chainLen * c.speed + 0.5, 3), '-i', src.path);
@@ -194,11 +391,6 @@ export function windowArgs(o: WindowInput): WindowJob {
       if (cr.left || cr.right || cr.top || cr.bottom) {
         chain.push(`crop=${even(cw)}:${even(ch)}:${Math.round(srcW * cr.left)}:${Math.round(srcH * cr.top)}`);
       }
-      // cor antes de mexer em alfa
-      const b = sum(c, 'color', 'brightness');
-      const ct = prod(c, 'color', 'contrast');
-      const sat = prod(c, 'color', 'saturation');
-      if (c.effects.some((f) => f.enabled && f.effect === 'color')) chain.push(`eq=brightness=${n(b)}:contrast=${n(ct)}:saturation=${n(sat)}`);
       // encaixa (contain) no quadro do projeto e aplica a escala
       const fit = Math.min(P.width / cw, P.height / ch);
       const LW = even(cw * fit * tr.scale * kx);
@@ -206,30 +398,61 @@ export function windowArgs(o: WindowInput): WindowJob {
       chain.push(`scale=${LW}:${LH}:flags=bicubic`, 'setsar=1');
       const z = zoomExpr(c, `it+${n(Ls)}`);
       if (z) chain.push(`zoompan=z='${z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${LW}x${LH}:fps=${FPS}`);
-      const blur = sum(c, 'blur', 'amount');
+      const lutPath = o.colorLutPath?.(c);
+      if (lutPath) {
+        const escapedPath = lutPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+        chain.push(`format=rgb24,lut3d=file='${escapedPath}':interp=trilinear`);
+      }
+      const whipBlur = layer.transition?.transition === 'whip_pan'
+        ? Math.max(0, Math.min(32, transitionNumber(layer.transition, 'blur', 8)))
+        : 0;
+      const blur = sum(c, 'blur', 'amount') + whipBlur;
       if (blur > 0) chain.push(`gblur=sigma=${n(blur * kx, 3)}`);
       const rgb = Math.round(sum(c, 'rgb_split', 'amount') * kx);
       if (rgb > 0) chain.push('format=gbrp', `rgbashift=rh=${-rgb}:bh=${rgb}`);
-      const vig = Math.max(0, ...c.effects.filter((f) => f.enabled && f.effect === 'vignette').map((f) => param(f, 'strength')));
+      const vig = Math.max(
+        0,
+        ...c.effects.filter((f) => f.enabled && f.effect === 'color').map((f) => param(f, 'vignette')),
+        ...c.effects.filter((f) => f.enabled && f.effect === 'vignette').map((f) => param(f, 'strength')),
+      );
       if (vig > 0) chain.push(`vignette=angle=${n((vig * Math.PI) / 2.5, 4)}`);
       chain.push('format=yuva420p');
+      const alphaMask = maskExpr(c.mask);
+      if (alphaMask) chain.push(`geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='alpha(X,Y)*(${alphaMask})'`);
+      const opacityFrames = c.keyframes['transform.opacity'];
+      if (tr.opacity < 1 || opacityFrames?.length) {
+        const opacity = keyframeExpr(opacityFrames, tr.opacity, `T+${n(Ls)}`);
+        chain.push(`geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='alpha(X,Y)*clip(${opacity},0,1)'`);
+      }
+      for (const r of ramps) {
+        if (r.target !== 'alpha' || textBaked) continue;
+        const st = r.startS - Ls;
+        if (st + r.durS <= 1e-6 || st >= chainLen) continue;
+        const expression = rampValueExpr(r, st);
+        chain.push(`geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='if(between(T,${n(st)},${n(st + r.durS)}),alpha(X,Y)*(${expression}),alpha(X,Y))'`);
+      }
     }
-    if (tr.rotation) {
-      const a = n((tr.rotation * Math.PI) / 180, 6);
-      chain.push(`rotate=a=${a}:ow=rotw(${a}):oh=roth(${a}):c=none`);
+    const rotationFrames = c.text ? undefined : c.keyframes['transform.rotation'];
+    if (tr.rotation || rotationFrames?.length) {
+      const maxRotation = Math.max(Math.abs(tr.rotation), ...(rotationFrames ?? []).map((keyframe) => Math.abs(keyframe.value)));
+      const maxAngle = n((maxRotation * Math.PI) / 180, 6);
+      const angle = rotationFrames?.length
+        ? `(${keyframeExpr(rotationFrames, tr.rotation, `n*${fps.den}/${fps.num}+${n(Ls)}`)})*PI/180`
+        : n((tr.rotation * Math.PI) / 180, 6);
+      chain.push(`rotate=a='${angle}':ow=rotw(${maxAngle}):oh=roth(${maxAngle}):c=none`);
     }
-    if (tr.opacity < 1 && !c.text) chain.push(`colorchannelmixer=aa=${n(tr.opacity, 4)}`);
-    // texto parado: a imagem é desenhada opaca e a opacidade/rampas/tremida são aplicadas aqui
-    if (c.text && !textBaked && tr.opacity < 1) chain.push(`colorchannelmixer=aa=${n(tr.opacity, 4)}`);
-    // rampas de opacidade do próprio clipe (dissolver / mergulho); em sequência já vêm no desenho
-    for (const r of ramps) {
-      if (r.target !== 'alpha' || textBaked) continue;
-      const st = r.startS - Ls;
-      if (st + r.durS <= 1e-6 || st >= chainLen) continue;
-      // todas as rampas de alfa começam em 0: antes do fim ficam invisíveis/subindo
-      if (r.to > r.from) chain.push(`fade=t=in:st=${n(Math.max(0, st))}:d=${n(r.durS)}:alpha=1`);
-      else chain.push(`fade=t=in:st=${n(Math.max(0, st + r.durS))}:d=${n(1 / (2 * (fps.num / fps.den)))}:alpha=1`);
+    const scaleFrames = c.text ? undefined : c.keyframes['transform.scale'];
+    if (scaleFrames?.length) {
+      const scale = keyframeExpr(scaleFrames, tr.scale, `n*${fps.den}/${fps.num}+${n(Ls)}`);
+      chain.push(`scale=w='max(2,trunc(iw*(${scale})/${n(tr.scale)}/2)*2)':h='max(2,trunc(ih*(${scale})/${n(tr.scale)}/2)*2)':eval=frame:flags=bicubic`, 'setsar=1');
     }
+    const opacityFrames = c.keyframes['transform.opacity'];
+    if (c.text && !textBaked && (tr.opacity < 1 || opacityFrames?.length)) {
+      const opacity = keyframeExpr(opacityFrames, tr.opacity, `T+${n(Ls)}`);
+      chain.push(`geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='alpha(X,Y)*clip(${opacity},0,1)'`);
+    }
+    const alphaMask = maskExpr(c.mask);
+    if (alphaMask && c.text) chain.push(`geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='alpha(X,Y)*(${alphaMask})'`);
     if (p > 0) chain.push(`trim=start=${n(p)}`, 'setpts=PTS-STARTPTS');
     filters.push(`${chain.join(',')}[${lbl}]`);
     inputIdx++;
@@ -240,9 +463,10 @@ export function windowArgs(o: WindowInput): WindowJob {
     // texto: a imagem já tem o quadro inteiro com a posição desenhada
     const animatedX = keyframeExpr(c.keyframes['transform.x'], tr.x, T);
     const animatedY = keyframeExpr(c.keyframes['transform.y'], tr.y, T);
-    const x = c.text ? (textBaked ? '0' : `(${shakeExpr(c, T, 'x')})*${n(kx)}`) : `(W-w)/2+(${animatedX})*${n(kx)}+(${shakeExpr(c, T, 'x')})*${n(kx)}`;
+    const whipX = whipOffsetExpr(layer, w.startUs, kx, W);
+    const x = c.text ? (textBaked ? whipX : `(${shakeExpr(c, T, 'x')})*${n(kx)}+(${whipX})`) : `(W-w)/2+(${animatedX})*${n(kx)}+(${shakeExpr(c, T, 'x')})*${n(kx)}+(${whipX})`;
     const y = c.text ? (textBaked ? '0' : `(${shakeExpr(c, T, 'y')})*${n(kx)}`) : `(H-h)/2+(${animatedY})*${n(kx)}+(${shakeExpr(c, T, 'y')})*${n(kx)}`;
-    overlayOnto(lbl, x, y);
+    overlayOnto(lbl, x, y, undefined, c.blendMode);
 
     // camadas de cor (clarão, fades, mergulho) por cima do clipe
     for (const r of ramps) {
@@ -250,10 +474,10 @@ export function windowArgs(o: WindowInput): WindowJob {
       const st = r.startS - Ls;
       if (st + r.durS <= 1e-6 || st >= chainLen) continue;
       const peak = Math.max(r.from, r.to);
-      const fade = r.to > r.from ? `fade=t=in:st=${n(Math.max(0, st))}:d=${n(r.durS)}:alpha=1` : `fade=t=out:st=${n(Math.max(0, st))}:d=${n(r.durS)}:alpha=1`;
+      const expression = rampValueExpr(r, st, peak);
       const cl = `c${filters.length}`;
       filters.push(
-        `color=c=${r.white ? 'white' : 'black'}:s=${W}x${H}:r=${FPS}:d=${n(chainLen + 0.1, 3)},format=yuva420p,colorchannelmixer=aa=${n(peak, 4)},${fade}${p > 0 ? `,trim=start=${n(p)},setpts=PTS-STARTPTS` : ''}[${cl}]`,
+        `color=c=${r.white ? 'white' : 'black'}:s=${W}x${H}:r=${FPS}:d=${n(chainLen + 0.1, 3)},format=yuva420p,colorchannelmixer=aa=${n(peak, 4)},geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='if(between(T,${n(st)},${n(st + r.durS)}),alpha(X,Y)*(${expression}),0)'${p > 0 ? `,trim=start=${n(p)},setpts=PTS-STARTPTS` : ''}[${cl}]`,
       );
       const a = Math.max(0, r.startS - L0);
       const b = r.startS + r.durS - L0;

@@ -163,6 +163,20 @@ describe('rotular cenas', () => {
     const p = parseSceneLabels('[{"i":1,"fight":true,"action":"hack","emotion":"feliz","visualIntensity":2,"confidence":-1}]', 1);
     expect(p.get(1)).toEqual({ characters: [], fight: true, note: '', visualIntensity: 1, confidence: 0 });
   });
+
+  it('parse: conserva enquadramento, rostos e expressões com confiança válida', () => {
+    const p = parseSceneLabels(
+      '[{"i":1,"fight":false,"sceneType":"dialogue","framing":"close-up","framingConfidence":0.84,"faceCount":2,"expressions":[{"label":"tristeza","confidence":0.9},{"label":"raiva","confidence":0.2}]}]',
+      1,
+    );
+    expect(p.get(1)).toMatchObject({
+      sceneType: 'dialogue',
+      framing: 'close-up',
+      framingConfidence: 0.84,
+      faceCount: 2,
+      expressions: [{ label: 'tristeza', confidence: 0.9 }],
+    });
+  });
 });
 
 describe('contagem de personagens', () => {

@@ -2,12 +2,18 @@ import {
   AssetSchema,
   ClipSchema,
   MarkerSchema,
+  ProjectCharacterSchema,
+  ProjectSchema,
+  AudioMixSettingsSchema,
+  SceneAnnotationSchema,
   ProjectSettingsSchema,
   TrackSchema,
   type Asset,
   type Clip,
   type Marker,
   type Project,
+  type ProjectCharacter,
+  type SceneAnnotation,
   type ProjectSettings,
   type Track,
 } from './schema.js';
@@ -18,8 +24,12 @@ import {
  * estado anterior. Undo/redo, autosave, ChangeSets da IA e testes usam isso.
  */
 export type Command =
+  | { type: 'project.replace'; project: Project }
   | { type: 'project.rename'; name: string }
+  | { type: 'project.characterLibrary.update'; characters: ProjectCharacter[] }
+  | { type: 'project.sceneAnnotation.update'; annotation: SceneAnnotation | null; assetId: string; sceneKey: string; index?: number }
   | { type: 'settings.update'; patch: Partial<ProjectSettings> }
+  | { type: 'audioMix.update'; patch: Partial<Project['audioMix']> }
   | { type: 'asset.add'; asset: Asset; index?: number }
   | { type: 'asset.remove'; assetId: string }
   | { type: 'asset.update'; assetId: string; patch: Partial<Omit<Asset, 'id'>> }
@@ -93,6 +103,11 @@ function assertClipFitsTrack(project: Project, clip: Clip, track: Track): void {
 
 export function applyCommand(project: Project, command: Command): ApplyResult {
   switch (command.type) {
+    case 'project.replace': {
+      const replacement = ProjectSchema.parse(command.project);
+      return { project: replacement, inverse: { type: 'project.replace', project } };
+    }
+
     case 'project.rename': {
       const name = command.name.trim();
       if (!name) throw new CommandError('o nome do projeto não pode ficar vazio');
@@ -102,11 +117,43 @@ export function applyCommand(project: Project, command: Command): ApplyResult {
       };
     }
 
+    case 'project.characterLibrary.update': {
+      const characters = ProjectCharacterSchema.array().parse(command.characters);
+      return {
+        project: { ...project, characterLibrary: characters },
+        inverse: { type: 'project.characterLibrary.update', characters: project.characterLibrary },
+      };
+    }
+
+    case 'project.sceneAnnotation.update': {
+      const currentIndex = project.sceneAnnotations.findIndex((item) => item.assetId === command.assetId && item.sceneKey === command.sceneKey);
+      const current = currentIndex < 0 ? null : project.sceneAnnotations[currentIndex]!;
+      const annotation = command.annotation === null ? null : SceneAnnotationSchema.parse(command.annotation);
+      if (annotation && (annotation.assetId !== command.assetId || annotation.sceneKey !== command.sceneKey)) {
+        throw new CommandError('a anotação não corresponde à cena informada');
+      }
+      const sceneAnnotations = project.sceneAnnotations.slice();
+      if (currentIndex >= 0) sceneAnnotations.splice(currentIndex, 1);
+      if (annotation) sceneAnnotations.splice(currentIndex < 0 ? Math.max(0, Math.min(command.index ?? sceneAnnotations.length, sceneAnnotations.length)) : currentIndex, 0, annotation);
+      return {
+        project: { ...project, sceneAnnotations },
+        inverse: { type: 'project.sceneAnnotation.update', assetId: command.assetId, sceneKey: command.sceneKey, annotation: current, index: currentIndex < 0 ? undefined : currentIndex },
+      };
+    }
+
     case 'settings.update': {
       const settings = ProjectSettingsSchema.parse({ ...project.settings, ...command.patch });
       return {
         project: { ...project, settings },
         inverse: { type: 'settings.update', patch: pickPrevious(project.settings, command.patch) },
+      };
+    }
+
+    case 'audioMix.update': {
+      const audioMix = AudioMixSettingsSchema.parse({ ...project.audioMix, ...command.patch });
+      return {
+        project: { ...project, audioMix },
+        inverse: { type: 'audioMix.update', patch: pickPrevious(project.audioMix, command.patch) },
       };
     }
 
@@ -137,10 +184,26 @@ export function applyCommand(project: Project, command: Command): ApplyResult {
           ...project,
           assets: project.assets.filter((a) => a.id !== asset.id),
           clips: project.clips.filter((c) => c.assetId !== asset.id),
+          characterLibrary: project.characterLibrary.map((character) => ({
+            ...character,
+            evidence: character.evidence.filter((evidence) => evidence.assetId !== asset.id),
+          })),
+          sceneAnnotations: project.sceneAnnotations.filter((annotation) => annotation.assetId !== asset.id),
         },
         inverse: {
           type: 'batch',
-          commands: [{ type: 'asset.add', asset, index }, ...removedClips],
+          commands: [
+            { type: 'asset.add', asset, index },
+            { type: 'project.characterLibrary.update', characters: project.characterLibrary },
+            ...project.sceneAnnotations.flatMap((annotation, index) => annotation.assetId === asset.id ? [{ annotation, index }] : []).map(({ annotation, index }) => ({
+              type: 'project.sceneAnnotation.update' as const,
+              assetId: annotation.assetId,
+              sceneKey: annotation.sceneKey,
+              annotation,
+                index,
+              })),
+            ...removedClips,
+          ],
         },
       };
     }
@@ -320,10 +383,18 @@ export function applyCommand(project: Project, command: Command): ApplyResult {
 /** Descrição curta em português, usada no histórico e no menu Editar. */
 export function describeCommand(command: Command): string {
   switch (command.type) {
+    case 'project.replace':
+      return 'Restaurar projeto';
     case 'project.rename':
       return 'Renomear projeto';
+    case 'project.characterLibrary.update':
+      return 'Atualizar biblioteca de personagens';
+    case 'project.sceneAnnotation.update':
+      return 'Atualizar anotação de cena';
     case 'settings.update':
       return 'Alterar configurações';
+    case 'audioMix.update':
+      return 'Configurar mixagem de áudio';
     case 'asset.add':
       return `Importar ${command.asset.name}`;
     case 'asset.remove':

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyCommand, clipEndUs, createProject, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
-import { alignUntimedLyrics, applyTranslation, langLabel, originalText, restoreOriginals, SUBTITLE_LANGS, cuesForClip, normalizeCues, placeCues, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, toLrc, toVtt, trackCues } from '../src/index.js';
+import { alignUntimedLyrics, applyTranslation, editSubtitleTextManually, langLabel, originalText, restoreOriginals, selectSubtitleTextVariant, SUBTITLE_LANGS, cuesForClip, normalizeCues, placeCues, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, toLrc, toVtt, trackCues } from '../src/index.js';
 
 const S = 1_000_000;
 function project(): Project {
@@ -98,6 +98,36 @@ describe('legendas na timeline', () => {
     ]);
   });
 
+  it('preserva tempos silábicos confiáveis ASS e mantém a evidência de origem', () => {
+    let p = project();
+    p = apply(p, placeCues(p, [{
+      startS: 2,
+      endS: 3,
+      text: 'vencer',
+      words: [{
+        startS: 2,
+        endS: 2.5,
+        text: 'vencer',
+        source: 'ass',
+        confidence: 1,
+        syllables: [
+          { text: 'ven', startS: 2, endS: 2.2, source: 'ass', confidence: 1 },
+          { text: 'cer', startS: 2.2, endS: 2.5, source: 'ass', confidence: 1 },
+        ],
+      }],
+    }], { trackId: textTrack(p), offsetUs: S, look: 'section-chorus' }));
+    const created = subtitleClips(p, textTrack(p))[0]!;
+    expect(created.text?.section).toBe('chorus');
+    expect(created.text?.wordTimings[0]).toMatchObject({
+      source: 'ass',
+      confidence: 1,
+      syllables: [
+        { text: 'ven', startUs: 0, endUs: 200_000, source: 'ass', confidence: 1 },
+        { text: 'cer', startUs: 200_000, endUs: 500_000, source: 'ass', confidence: 1 },
+      ],
+    });
+  });
+
   it('falas do episódio caem no lugar certo do clipe, inclusive em câmera lenta', () => {
     const clip = { timelineStartUs: 10 * S, sourceInUs: 100 * S, sourceOutUs: 104 * S, speed: 0.5 } as Clip;
     const cues = cuesForClip(clip, [
@@ -115,9 +145,9 @@ describe('legendas na timeline', () => {
     let p = project();
     const v1 = p.tracks.find((t) => t.name === 'V1')!.id;
     const mk = (id: string, at: number, src: number): Clip => ({
-      id, trackId: v1, assetId: 'ep', timelineStartUs: at * S, durationUs: 2 * S, sourceInUs: src * S, sourceOutUs: (src + 2) * S, speed: 1,
-      transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
-      audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, streamIndex: null }, effects: [], transitionIn: null, keyframes: {}, text: null, origin: 'user', reason: null, confidence: null, label: null,
+      id, trackId: v1, assetId: 'ep', timelineStartUs: at * S, durationUs: 2 * S, sourceInUs: src * S, sourceOutUs: (src + 2) * S, speed: 1, reverse: false,
+      transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } }, blendMode: 'normal', mask: 'none', groupId: null,
+      audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null }, effects: [], transitionIn: null, keyframes: {}, text: null, origin: 'user', reason: null, confidence: null, label: null,
     });
     p = apply(p, [{ type: 'clip.add', clip: mk('a', 0, 50) }, { type: 'clip.add', clip: mk('b', 2, 20) }]);
     const cues = new Map([['ep', [{ startS: 20.5, endS: 21.5, text: 'Eu não vou perder!' }, { startS: 51, endS: 53, text: 'Agora!' }]]]);
@@ -178,7 +208,41 @@ describe('idioma das legendas', () => {
     let out = apply(p, applyTranslation(subtitleClips(p, tr), ['I will win!', 'x'], 'en'));
     out = apply(out, applyTranslation(subtitleClips(out, tr), ['¡Voy a ganar!', 'y'], 'es'));
     const c = subtitleClips(out, tr)[0]!;
-    expect(c.text).toMatchObject({ text: '¡Voy a ganar!', original: 'Eu vou vencer!', lang: 'es' });
+    expect(c.text).toMatchObject({
+      text: '¡Voy a ganar!',
+      original: 'Eu vou vencer!',
+      lang: 'es',
+      textSource: 'translation',
+      translations: { en: 'I will win!', es: '¡Voy a ganar!' },
+    });
+  });
+
+  it('mantém original, traduções e edição manual como variantes independentes', () => {
+    const { p, tr } = setup();
+    let out = apply(p, applyTranslation(subtitleClips(p, tr), ['I will win!', null], 'en'));
+    let clip = subtitleClips(out, tr)[0]!;
+    const manual = editSubtitleTextManually({
+      ...clip.text!,
+      wordTimings: [{ text: 'I', startUs: 0, endUs: 100_000, source: 'manual', confidence: 1, uncertain: false, syllables: [] }],
+      timingPrecision: 'word',
+    }, 'Eu vou vencer!');
+    expect(manual.wordTimings).toEqual([]);
+    expect(manual.timingPrecision).toBe('segment');
+    out = apply(out, [{ type: 'clip.update', clipId: clip.id, patch: { text: manual } }]);
+    clip = subtitleClips(out, tr)[0]!;
+    expect(clip.text).toMatchObject({
+      text: 'Eu vou vencer!',
+      original: 'Eu vou vencer!',
+      manualText: 'Eu vou vencer!',
+      translations: { en: 'I will win!' },
+      textSource: 'manual',
+    });
+    const english = selectSubtitleTextVariant(clip.text!, { type: 'translation', lang: 'en' });
+    expect(english).toMatchObject({ text: 'I will win!', textSource: 'translation', lang: 'en' });
+    const original = selectSubtitleTextVariant(english, { type: 'original' });
+    expect(original).toMatchObject({ text: 'Eu vou vencer!', textSource: 'original' });
+    const manualAgain = selectSubtitleTextVariant(original, { type: 'manual' });
+    expect(manualAgain).toMatchObject({ text: 'Eu vou vencer!', textSource: 'manual' });
   });
 
   it('linha que falhou (null) ou vazia mantém o texto', () => {
@@ -188,14 +252,16 @@ describe('idioma das legendas', () => {
     expect(applyTranslation(subtitleClips(p, tr), [null, null], 'en')).toEqual([]);
   });
 
-  it('voltar ao original restaura o texto e limpa os campos de tradução', () => {
+  it('voltar ao original preserva as variantes traduzidas', () => {
     const { p, tr } = setup();
     const t = apply(p, applyTranslation(subtitleClips(p, tr), ['a', 'b'], 'en'));
     const back = apply(t, restoreOriginals(subtitleClips(t, tr)));
     const c = subtitleClips(back, tr)[0]!;
     expect(c.text!.text).toBe('Eu vou vencer!');
-    expect(c.text!.original).toBeUndefined();
+    expect(c.text!.original).toBe('Eu vou vencer!');
     expect(c.text!.lang).toBeUndefined();
+    expect(c.text!.translations).toEqual({ en: 'a' });
+    expect(c.text!.textSource).toBe('original');
     expect(restoreOriginals(subtitleClips(p, tr))).toEqual([]); // nada traduzido: nada a fazer
   });
 

@@ -77,4 +77,37 @@ describe('selectVisionTargets', () => {
     expect(targets[0]?.startS).toBe(0);
     expect(targets.some((target) => target.startS === 100)).toBe(false);
   });
+
+  it('mantém cenas analisadas localmente disponíveis para complemento semântico opcional', () => {
+    const ep = episode([shot(10, 11)], [{ id: 'fight', startS: 10, endS: 11, kind: 'luta', intensity: 0.8, peak: 0.9, shotCount: 1 }]);
+    const labels = {
+      [shotKey(10)]: {
+        characters: [],
+        fight: true,
+        note: '',
+        local: {
+          version: 3 as const,
+          samples: 1,
+          lumaGrid: [],
+          edgeGrid: [],
+          colorHistogram: [],
+          brightness: 0.5,
+          saturation: 0.5,
+          entropy: 0.5,
+          edgeDensity: 0.5,
+          centerOfVisualMass: [0.5, 0.5] as [number, number],
+          temporalMotion: 0.4,
+          globalShift: [0, 0] as [number, number],
+          globalMotion: 0.2,
+          motionEvents: [],
+          motionConfidence: 0,
+          fingerprint: 'lv1-test',
+          sceneType: 'action' as const,
+          sceneTypeConfidence: 0.6,
+        },
+      },
+    };
+
+    expect(selectVisionTargets(ep, labels, 'fights').map((target) => target.startS)).toEqual([10]);
+  });
 });

@@ -6,7 +6,7 @@
 import { mean, movingAverage, percentile, rmsFrames, stft, toDb } from './dsp.js';
 import { impactScore, type Cue } from './subtitles.js';
 
-export const EPISODE_ANALYSIS_VERSION = 'e2';
+export const EPISODE_ANALYSIS_VERSION = 'e3';
 
 export interface FrameStat {
   t: number;
@@ -62,6 +62,7 @@ export interface SpeechSegment {
   kind: 'fala' | 'grito';
   confidence: number;
   text: string | null;
+  language?: string | null;
   /** 0..1 — quão "marcante" (curta, exclamação, grito). */
   impact: number;
 }
@@ -139,7 +140,7 @@ export function detectSpeech(feat: { t: number[]; db: number[]; voiceRatio: numb
     const shoutLevel = percentile(louds, 88);
     subtitles.forEach((c, i) => {
       const shout = louds[i]! >= shoutLevel && louds[i]! > -25;
-      out.push({ startS: c.startS, endS: c.endS, kind: shout ? 'grito' : 'fala', confidence: 0.9, text: c.text, impact: Math.min(1, impactScore(c.text) + (shout ? 0.25 : 0)) });
+      out.push({ startS: c.startS, endS: c.endS, kind: shout ? 'grito' : 'fala', confidence: 0.9, text: c.text, ...(c.language ? { language: c.language } : {}), impact: Math.min(1, impactScore(c.text) + (shout ? 0.25 : 0)) });
     });
     return out;
   }

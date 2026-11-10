@@ -188,7 +188,17 @@ export function AssistantPanel({ session, onClose }: { session: ProjectSession; 
       void saveAiSettings(platform, next);
     } catch (e) {
       if ((e as Error).name === 'AbortError') return;
-      setEntries((x) => [...x, { id: ++seq, role: 'error', text: e instanceof ProviderError ? e.message : `Erro: ${(e as Error).message}` }]);
+      if (settings.provider.kind === 'gemini' && e instanceof ProviderError && e.retryable) {
+        const fallback = localTurn(ctx, q);
+        setEntries((x) => [...x, {
+          id: ++seq,
+          role: 'assistant',
+          text: `Gemini indisponível (${e.message}). Resposta do modo local, sem modelo: ${fallback.reply}`,
+          proposals: fallback.proposals,
+        }]);
+      } else {
+        setEntries((x) => [...x, { id: ++seq, role: 'error', text: e instanceof ProviderError ? e.message : `Erro: ${(e as Error).message}` }]);
+      }
     } finally {
       setBusy(false);
       abort.current = null;

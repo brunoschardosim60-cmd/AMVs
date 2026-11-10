@@ -1,5 +1,5 @@
 import { isSfxAsset, type Asset } from '@amv/project';
-import { AlertTriangle, AudioLines, Download, Film, FolderSearch, Image as ImageIcon, Plus, Redo2, Save, Search, Undo2, Wand2, History, Bot } from 'lucide-react';
+import { AlertTriangle, Archive, AudioLines, Copy, Download, Film, FolderSearch, Image as ImageIcon, Plus, Redo2, Save, Search, ShieldCheck, Undo2, Wand2, History, Bot } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { duration, fpsLabel, mainCodec, resolution, bytes } from '../../format';
 import { useApp, useSessionVersion } from '../../store';
@@ -117,6 +117,54 @@ export function ProjectScreen() {
     );
   };
 
+  const duplicateProject = async () => {
+    const target = await platform!.dialogs.saveProjectAs(`${project.name} - Cópia`);
+    if (!target) return;
+    try {
+      const duplicate = await s.duplicateTo(target);
+      s.dispose();
+      useApp.setState({ session: duplicate, screen: 'project', selectedAssetId: null });
+      await useApp.getState().refreshRecents();
+      toast({ tone: 'ok', title: 'Cópia do projeto criada', body: duplicate.path });
+    } catch (error) {
+      toast({ tone: 'error', title: 'Não foi possível duplicar o projeto', body: (error as Error).message });
+    }
+  };
+
+  const archiveProject = async () => {
+    const confirmed = await platform!.dialogs.confirm(
+      'O projeto será salvo e movido para o local escolhido. As mídias originais não serão movidas.',
+      'Arquivar projeto',
+    );
+    if (!confirmed) return;
+    const target = await platform!.dialogs.saveProjectAs(`${project.name} - Arquivado`);
+    if (!target) return;
+    try {
+      await s.archiveTo(target);
+      await useApp.getState().refreshRecents();
+      toast({ tone: 'ok', title: 'Projeto arquivado', body: s.path });
+    } catch (error) {
+      toast({ tone: 'error', title: 'Não foi possível arquivar o projeto', body: (error as Error).message });
+    }
+  };
+
+  const validateProject = async () => {
+    try {
+      const report = await s.validateDependencies();
+      const problems = [
+        ...report.missingAssets.map((item) => `Mídia ausente: ${item.path}`),
+        ...report.missingVersions.map((item) => `Versão ausente: ${item.path}`),
+        ...report.invalidVersions.map((item) => `Versão inválida: ${item.path}`),
+        ...report.invalidReferences.map((item) => `Clipe ${item.clipId}: referência inválida (${item.reference})`),
+      ];
+      toast(report.valid
+        ? { tone: 'ok', title: 'Dependências do projeto verificadas', body: `${report.mediaUsage.length} mídias registradas.` }
+        : { tone: 'warn', title: 'O projeto tem dependências pendentes', body: problems.slice(0, 4).join('\n') });
+    } catch (error) {
+      toast({ tone: 'error', title: 'Falha ao validar o projeto', body: (error as Error).message });
+    }
+  };
+
   const onListKey = (e: React.KeyboardEvent) => {
     const i = assets.findIndex((a) => a.id === selectedAssetId);
     if (e.key === 'ArrowDown') {
@@ -187,6 +235,15 @@ export function ProjectScreen() {
             <Redo2 size={16} />
           </IconButton>
           <span className="mx-2 h-5 w-px bg-line" />
+          <IconButton label="Validar mídias, versões e referências do projeto" onClick={() => void validateProject()}>
+            <ShieldCheck size={15} />
+          </IconButton>
+          <IconButton label="Criar cópia completa do projeto" onClick={() => void duplicateProject()}>
+            <Copy size={15} />
+          </IconButton>
+          <IconButton label="Arquivar projeto em outro local" onClick={() => void archiveProject()}>
+            <Archive size={15} />
+          </IconButton>
           <Button icon={<Save size={15} />} onClick={save} disabled={!s.dirty} title="Salvar (Ctrl+S)">
             Salvar
           </Button>

@@ -1,4 +1,5 @@
 import type { EpisodeAnalysis, Shot } from './episode.js';
+import type { LocalVisualFeatures } from './local-vision.js';
 
 /**
  * Visão por cena (opcional, feita por um modelo de IA com visão): quem aparece e se é luta.
@@ -8,10 +9,11 @@ import type { EpisodeAnalysis, Shot } from './episode.js';
 export const VISION_VERSION = 'v2';
 
 export const SCENE_EMOTIONS = ['determinação', 'raiva', 'medo', 'tristeza', 'alegria', 'calma', 'surpresa', 'neutro'] as const;
-export const SCENE_ACTIONS = ['combate', 'perseguição', 'preparação', 'reação', 'diálogo', 'ambiente', 'outro'] as const;
+export const SCENE_ACTIONS = ['combate', 'perseguição', 'preparação', 'reação', 'diálogo', 'contemplação', 'tensão', 'ambiente', 'outro'] as const;
 
 export type SceneEmotion = (typeof SCENE_EMOTIONS)[number];
 export type SceneAction = (typeof SCENE_ACTIONS)[number];
+export type LocalSceneType = 'action' | 'dialogue' | 'contemplation' | 'tension' | 'reaction' | 'environment';
 
 export interface ShotVision {
   /** Personagens vistos: nome (se o modelo reconheceu) ou descrição curta e estável. */
@@ -30,6 +32,16 @@ export interface ShotVision {
   action?: SceneAction;
   /** Confiança do rótulo visual (0..1). */
   confidence?: number;
+  /** Metadados locais derivados de estrutura espacial e amostras temporais. */
+  local?: LocalVisualFeatures;
+  /** Categoria visual local/semântica; não representa reconhecimento de personagem. */
+  sceneType?: LocalSceneType;
+  sceneTypeConfidence?: number;
+  /** Escala do enquadramento e detecção facial, quando um modelo compatível estiver disponível. */
+  framing?: 'extreme-close-up' | 'close-up' | 'medium' | 'wide' | 'unknown';
+  framingConfidence?: number;
+  faceCount?: number;
+  expressions?: { label: string; confidence: number }[];
 }
 
 export type VisionScope = 'fights' | 'all';
@@ -38,6 +50,8 @@ export interface EpisodeVision {
   version: typeof VISION_VERSION;
   /** Modelo que rotulou (para saber o que foi usado). */
   model: string;
+  /** Implementação local que gerou os descritores semântico-visuais, se disponível. */
+  localModel?: string;
   /** Por cena, pela chave de {@link shotKey}. */
   shots: Record<string, ShotVision>;
 }
@@ -72,7 +86,8 @@ export function selectVisionTargets(
   const add = (shot: Shot) => {
     const key = shotKey(shot.startS);
     const previous = labeled[key];
-    if (seen.has(key) || (previous !== undefined && (scope === 'fights' || (previous.samples ?? 1) >= 3))) return false;
+    const hasSemanticLabel = previous !== undefined && (!previous.local || previous.samples !== undefined);
+    if (seen.has(key) || (hasSemanticLabel && (scope === 'fights' || (previous?.samples ?? 1) >= 3))) return false;
     seen.add(key);
     targets.push({ startS: shot.startS, endS: shot.endS, midS: (shot.startS + shot.endS) / 2 });
     return targets.length >= max;
@@ -104,11 +119,33 @@ export function mergeShotVision(samples: ShotVision[]): ShotVision {
   const actions = new Map<SceneAction, number>();
   const intensities: number[] = [];
   const confidences: number[] = [];
+  const sceneTypeCounts = new Map<LocalSceneType, number>();
+  const sceneTypeConfidences: number[] = [];
+  const framingCounts = new Map<NonNullable<ShotVision['framing']>, number>();
+  const framingConfidences: number[] = [];
+  const expressionConfidences = new Map<string, number[]>();
+  const faceCounts: number[] = [];
+  let faceSamples = 0;
+  const local = samples.find((sample) => sample.local)?.local;
   let fights = 0;
   for (const sample of samples) {
     if (sample.fight) fights++;
     if (sample.emotion) emotions.set(sample.emotion, (emotions.get(sample.emotion) ?? 0) + 1);
     if (sample.action) actions.set(sample.action, (actions.get(sample.action) ?? 0) + 1);
+    if (sample.sceneType) sceneTypeCounts.set(sample.sceneType, (sceneTypeCounts.get(sample.sceneType) ?? 0) + 1);
+    if (Number.isFinite(sample.sceneTypeConfidence)) sceneTypeConfidences.push(Math.max(0, Math.min(1, sample.sceneTypeConfidence!)));
+    if (sample.framing) framingCounts.set(sample.framing, (framingCounts.get(sample.framing) ?? 0) + 1);
+    if (Number.isFinite(sample.framingConfidence)) framingConfidences.push(Math.max(0, Math.min(1, sample.framingConfidence!)));
+    if (Number.isFinite(sample.faceCount)) {
+      faceCounts.push(Math.max(0, Math.round(sample.faceCount!)));
+      faceSamples++;
+    }
+    for (const expression of sample.expressions ?? []) {
+      const key = normLabel(expression.label);
+      if (key && Number.isFinite(expression.confidence) && expression.confidence >= 0.55) {
+        expressionConfidences.set(key, [...(expressionConfidences.get(key) ?? []), expression.confidence]);
+      }
+    }
     if (Number.isFinite(sample.visualIntensity)) intensities.push(Math.max(0, Math.min(1, sample.visualIntensity!)));
     if (Number.isFinite(sample.confidence)) confidences.push(Math.max(0, Math.min(1, sample.confidence!)));
     for (const character of sample.characters) {
@@ -130,6 +167,15 @@ export function mergeShotVision(samples: ShotVision[]): ShotVision {
     ...(emotions.size ? { emotion: majority(emotions) } : {}),
     ...(actions.size ? { action: majority(actions) } : {}),
     ...(confidences.length ? { confidence: average(confidences) } : {}),
+    ...(sceneTypeCounts.size ? { sceneType: majority(sceneTypeCounts) } : {}),
+    ...(sceneTypeConfidences.length ? { sceneTypeConfidence: average(sceneTypeConfidences) } : {}),
+    ...(framingCounts.size ? { framing: majority(framingCounts) } : {}),
+    ...(framingConfidences.length ? { framingConfidence: average(framingConfidences) } : {}),
+    ...(faceSamples ? { faceCount: Math.round(average(faceCounts)) } : {}),
+    ...(expressionConfidences.size ? {
+      expressions: [...expressionConfidences].map(([label, values]) => ({ label, confidence: average(values) })),
+    } : {}),
+    ...(local ? { local } : {}),
   };
 }
 

@@ -39,6 +39,46 @@ export async function grabFrameJpeg(runner: ProcessRunner, path: string, timeS: 
   return all;
 }
 
+/** Extrai um quadro RGB reduzido para análise local sem carregar ou reamostrar o vídeo inteiro. */
+export async function grabFrameRgb(
+  runner: ProcessRunner,
+  path: string,
+  timeS: number,
+  width = 160,
+  signal?: AbortSignal,
+): Promise<{ width: number; height: number; data: Uint8Array }> {
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const r = await runner.run(
+    'ffmpeg',
+    [
+      '-hide_banner', '-nostdin', '-loglevel', 'error', '-ss', Math.max(0, timeS).toFixed(3),
+      '-i', path, '-frames:v', '1', '-an', '-vf', `scale=${width}:-2`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1',
+    ],
+    {
+      signal,
+      onStdoutBytes: (bytes) => {
+        chunks.push(bytes.slice());
+        total += bytes.length;
+      },
+    },
+  );
+  if (signal?.aborted) throw new CancelledError();
+  if (r.code !== 0) throw new ToolError('ffmpeg', r.code, r.stderr);
+  if (!total) throw new Error(`nenhum quadro em ${timeS.toFixed(2)} s (o instante passa do fim do vídeo?)`);
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  const height = total / (width * 3);
+  if (!Number.isInteger(height) || height < 1 || bytes.length !== width * height * 3) {
+    throw new Error(`quadro RGB inválido em ${timeS.toFixed(2)} s`);
+  }
+  return { width, height, data: bytes };
+}
+
 export const toBase64 = (u: Uint8Array): string => {
   let s = '';
   for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000));

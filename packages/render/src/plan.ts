@@ -22,6 +22,10 @@ export interface Layer {
   underlay: boolean;
   /** Tempo local do clipe (µs desde o início dele na timeline) no começo da janela. */
   localStartUs: number;
+  /** Transição do clipe de entrada que sincroniza as duas camadas. */
+  transition: Clip['transitionIn'];
+  /** Início na timeline da transição sincronizada. */
+  transitionStartUs: number;
 }
 
 export interface Window {
@@ -63,6 +67,9 @@ export function planWindows(project: Project, fps: Rational = project.settings.f
   for (const c of clips) {
     addUs(c.timelineStartUs);
     addUs(clipEndUs(c));
+    if (c.transitionIn && c.transitionIn.durationUs > 0) {
+      addUs(c.timelineStartUs + c.transitionIn.durationUs);
+    }
     for (const r of clipRamps(c, c.durationUs / 1e6)) {
       addUs(c.timelineStartUs + r.startS * 1e6);
       addUs(c.timelineStartUs + (r.startS + r.durS) * 1e6);
@@ -84,9 +91,23 @@ export function planWindows(project: Project, fps: Rational = project.settings.f
       // anterior continuando por baixo durante a transição de entrada
       const under = transitionUnderlay(clips, active);
       if (under && midUs < active.timelineStartUs + (active.transitionIn?.durationUs ?? 0)) {
-        layers.push({ clip: under, track, underlay: true, localStartUs: startUs - under.timelineStartUs });
+        layers.push({
+          clip: under,
+          track,
+          underlay: true,
+          localStartUs: startUs - under.timelineStartUs,
+          transition: active.transitionIn,
+          transitionStartUs: active.timelineStartUs,
+        });
       }
-      layers.push({ clip: active, track, underlay: false, localStartUs: Math.max(0, startUs - active.timelineStartUs) });
+      layers.push({
+        clip: active,
+        track,
+        underlay: false,
+        localStartUs: Math.max(0, startUs - active.timelineStartUs),
+        transition: active.transitionIn,
+        transitionStartUs: active.timelineStartUs,
+      });
     }
     windows.push({ index: windows.length, startFrame: a, frames: b - a, startUs, durUs: usAtFrame(b, fps) - startUs, layers });
   }

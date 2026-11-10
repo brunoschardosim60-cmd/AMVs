@@ -16,6 +16,7 @@ import {
   snapPoints,
   splitAllAt,
   splitClip,
+  sourceTimeAt,
   trimBounds,
   trimClip,
   type Command,
@@ -104,8 +105,35 @@ describe('dividir', () => {
     ]);
     const [l, r] = clipsOnTrack(q, v1);
     expect(l!.sourceOutUs).toBe(101 * S);
-    expect(l!.keyframes['transform.scale']).toHaveLength(1);
-    expect(r!.keyframes['transform.scale']).toEqual([{ atUs: 2 * S, value: 2, easing: 'linear' }]);
+    expect(l!.keyframes['transform.scale']).toEqual([
+      { atUs: 0, value: 1, easing: 'linear' },
+      { atUs: S, value: 4 / 3, easing: 'linear' },
+    ]);
+    expect(r!.keyframes['transform.scale']).toEqual([
+      { atUs: 0, value: 4 / 3, easing: 'linear' },
+      { atUs: 2 * S, value: 2, easing: 'linear' },
+      { atUs: 3 * S, value: 2, easing: 'linear' },
+    ]);
+  });
+
+  it('divide uma curva de velocidade sem alterar o mapeamento de origem', () => {
+    const { p, v1 } = setup();
+    let q = place(p, v1, 0, 4 * S, 100 * S, 'ramp');
+    q = apply(q, [{ type: 'clip.update', clipId: 'ramp', patch: { keyframes: { speed: [
+      { atUs: 0, value: 0.5, easing: 'linear' },
+      { atUs: 4 * S, value: 1.5, easing: 'linear' },
+    ] } } }]);
+    const original = q.clips[0]!;
+    q = apply(q, splitClip(q, 'ramp', 2 * S, 'ramp-right'));
+    const [left, right] = clipsOnTrack(q, v1);
+    expect(left).toBeDefined();
+    expect(right).toBeDefined();
+    for (const localUs of [0, S / 2, S, 3 * S / 2]) {
+      expect(sourceTimeAt(left!, localUs)).toBeCloseTo(sourceTimeAt(original, localUs), -2);
+    }
+    for (const localUs of [0, S / 2, S, 2 * S - 1]) {
+      expect(sourceTimeAt(right!, localUs)).toBeCloseTo(sourceTimeAt(original, 2 * S + localUs), -2);
+    }
   });
 
   it('respeita velocidade: a 2x, 1 s de timeline = 2 s de origem', () => {
@@ -252,6 +280,27 @@ describe('excluir, copiar, colar e duplicar', () => {
     expect(layout(q, v2).at(-1)).toEqual([11, 1, 5]);
   });
 
+  it('colar um grupo cria uma associação independente e não herda grupo ao copiar um único membro', () => {
+    const { p, v1, v2 } = setup();
+    let q = place(p, v1, 0, S, 0, 'a');
+    q = place(q, v2, S, S, 5 * S, 'b');
+    q = apply(q, [
+      { type: 'clip.update', clipId: 'a', patch: { groupId: 'original-group' } },
+      { type: 'clip.update', clipId: 'b', patch: { groupId: 'original-group' } },
+    ]);
+
+    const copy = pasteClips(q, copyClips(q, ['a', 'b']), 10 * S);
+    q = apply(q, copy.commands);
+    const groupedCopies = copy.newIds.map((id) => q.clips.find((clip) => clip.id === id)!);
+    expect(groupedCopies[0]!.groupId).not.toBe('original-group');
+    expect(groupedCopies[0]!.groupId).toBe(groupedCopies[1]!.groupId);
+    expect(q.clips.find((clip) => clip.id === 'a')!.groupId).toBe('original-group');
+
+    const singleCopy = pasteClips(q, copyClips(q, ['a']), 20 * S);
+    const afterSingleCopy = apply(q, singleCopy.commands);
+    expect(afterSingleCopy.clips.find((clip) => clip.id === singleCopy.newIds[0])!.groupId).toBeNull();
+  });
+
   it('duplicar coloca logo depois da seleção', () => {
     const { p, v1 } = setup();
     let q = place(p, v1, 0, 2 * S, 0, 'a');
@@ -273,6 +322,29 @@ describe('excluir, copiar, colar e duplicar', () => {
       [0, 3, 0],
       [5, 5, 5],
     ]);
+  });
+
+  it('clearRange preserva origem, reverse e keyframes de velocidade nas partes restantes', () => {
+    const { p, v1 } = setup();
+    let q = place(p, v1, 0, 4 * S, 100 * S, 'reverse-ramp');
+    q = apply(q, [{ type: 'clip.update', clipId: 'reverse-ramp', patch: {
+      reverse: true,
+      keyframes: { speed: [
+        { atUs: 0, value: 1, easing: 'linear' },
+        { atUs: 2 * S, value: 0, easing: 'hold' },
+        { atUs: 3 * S, value: 0, easing: 'linear' },
+        { atUs: 4 * S, value: 1, easing: 'linear' },
+      ] },
+    } }]);
+    const original = q.clips[0]!;
+    q = apply(q, clearRange(q, v1, S, 3 * S));
+    const [head, tail] = clipsOnTrack(q, v1);
+    expect(head).toMatchObject({ sourceInUs: 102.4 * S, sourceOutUs: 104 * S, reverse: true });
+    expect(tail).toMatchObject({ timelineStartUs: 3 * S, sourceInUs: 100 * S, sourceOutUs: 100.8 * S, reverse: true });
+    expect(head!.keyframes.speed).toHaveLength(2);
+    expect(tail!.keyframes.speed).toHaveLength(2);
+    expect(sourceTimeAt(head!, S / 2)).toBeCloseTo(sourceTimeAt(original, S / 2), -2);
+    expect(sourceTimeAt(tail!, S / 2)).toBeCloseTo(sourceTimeAt(original, 3 * S + S / 2), -2);
   });
 });
 

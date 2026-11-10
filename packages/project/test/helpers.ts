@@ -38,7 +38,10 @@ export function clip(trackId: string, assetId: string, overrides: Partial<Clip> 
     sourceOutUs: 12_000_000,
     speed: 1,
     transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
-    audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, streamIndex: null },
+    blendMode: 'normal',
+    mask: 'none',
+    groupId: null,
+    audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null },
     effects: [],
     transitionIn: null,
     keyframes: {},
@@ -48,6 +51,7 @@ export function clip(trackId: string, assetId: string, overrides: Partial<Clip> 
     confidence: null,
     label: null,
     ...overrides,
+    reverse: overrides.reverse ?? false,
   };
 }
 

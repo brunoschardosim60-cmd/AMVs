@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -90,6 +90,28 @@ describe('sessão do projeto', () => {
     expect(s.project.assets[0]!.status).toBe('ok');
   });
 
+  it('adiciona efeitos sobrepostos com direitos e desfaz cada inserção sem apagar o original', async () => {
+    const s = await ProjectSession.create(nodePlatform(root), join(root, 'sound-design'), 'Sound design', {});
+    const path = join(media, 'tom.flac');
+    const rights = { origin: 'Biblioteca de testes', license: 'CC BY 4.0', attribution: 'Artista de teste' };
+
+    await s.addSoundToTimeline({ path, name: 'Impacto', rights, startUs: 0 });
+    await s.addSoundToTimeline({ path, name: 'Impacto', rights, startUs: 250_000 });
+
+    expect(s.project.assets).toHaveLength(1);
+    expect(s.project.assets[0]?.rights).toEqual(rights);
+    expect(s.project.clips).toHaveLength(2);
+    expect(s.project.clips.every((clip) => clip.trackId === s.project.tracks.find((track) => track.role === 'sfx')?.id)).toBe(true);
+
+    s.undo();
+    expect(s.project.clips).toHaveLength(1);
+    s.undo();
+    expect(s.project.clips).toHaveLength(0);
+    expect(s.project.assets).toHaveLength(0);
+    expect(await nodePlatform(root).fs.exists(path)).toBe(true);
+    s.dispose();
+  });
+
   it('autosave e recuperação', async () => {
     const p = nodePlatform(root);
     const s = await ProjectSession.create(p, join(root, 'b'), 'B', {});
@@ -110,6 +132,143 @@ describe('sessão do projeto', () => {
     expect(await ProjectSession.hasRecovery(p, s.path)).toBe(false);
   });
 
+  it('cria backup antes de substituir e restaura a versão anterior', async () => {
+    const p = nodePlatform(root);
+    const s = await ProjectSession.create(p, join(root, 'backup'), 'Original', {});
+    const original = readFileSync(s.path, 'utf8');
+    s.execute({ type: 'project.rename', name: 'Atualizado' });
+    await s.save();
+
+    const backups = await s.listBackups();
+    expect(backups).toHaveLength(1);
+    expect(backups[0]).toMatchObject({ valid: true });
+    expect(Number.isNaN(Date.parse(backups[0]!.createdAt))).toBe(false);
+    expect(readFileSync(backups[0]!.path, 'utf8')).toBe(original);
+    await s.save();
+    expect(await s.listBackups()).toHaveLength(1);
+
+    await s.restoreBackup(backups[0]!.path);
+    expect(s.project.name).toBe('Original');
+    expect(s.dirty).toBe(true);
+    s.undo();
+    expect(s.project.name).toBe('Atualizado');
+    s.redo();
+    expect(s.project.name).toBe('Original');
+    await s.save();
+    expect((await ProjectSession.open(p, s.path)).session?.project.name).toBe('Original');
+    s.dispose();
+  });
+
+  it('preserva o projeto anterior se faltar espaço durante a gravação', async () => {
+    const p = nodePlatform(root);
+    const s = await ProjectSession.create(p, join(root, 'no-space'), 'Antes', {});
+    const original = readFileSync(s.path, 'utf8');
+    s.execute({ type: 'project.rename', name: 'Depois' });
+    const fs = p.fs;
+    p.fs = {
+      ...fs,
+      async writeFile(path, data) {
+        if (path === `${s.path}.transaction.tmp`) throw new Error('ENOSPC: no space left on device');
+        await fs.writeFile(path, data);
+      },
+    };
+
+    await expect(s.save()).rejects.toThrow(/ENOSPC/);
+    expect(readFileSync(s.path, 'utf8')).toBe(original);
+    expect(s.dirty).toBe(true);
+    p.fs = fs;
+    s.dispose();
+  });
+
+  it('recupera o arquivo íntegro se o app encerrar entre renomear e promover o temporário', async () => {
+    const p = nodePlatform(root);
+    const path = join(root, 'crash.amvproj');
+    const s = await ProjectSession.create(p, path, 'Seguro', {});
+    const original = readFileSync(path);
+    s.dispose();
+    rmSync(path);
+    writeFileSync(`${path}.transaction.old`, original);
+    writeFileSync(`${path}.transaction.tmp`, '{"partial":');
+
+    const { session, result } = await ProjectSession.open(p, path);
+    expect(result).toMatchObject({ ok: true, recovered: false });
+    expect(session?.project.name).toBe('Seguro');
+    expect(await p.fs.exists(`${path}.transaction.old`)).toBe(false);
+    expect(await p.fs.exists(`${path}.transaction.tmp`)).toBe(false);
+    session?.dispose();
+  });
+
+  it('duplica um projeto sem alterar o original', async () => {
+    const p = nodePlatform(root);
+    const original = await ProjectSession.create(p, join(root, 'original'), 'Original', { width: 1920, height: 1080 });
+    const originalId = original.project.id;
+    original.execute({ type: 'project.rename', name: 'Original atualizado' });
+    await original.save();
+    const duplicate = await original.duplicateTo(join(root, 'copia'), 'Cópia');
+
+    expect(await p.fs.exists(original.path)).toBe(true);
+    expect(duplicate.project).toMatchObject({
+      name: 'Cópia',
+      settings: { width: 1920, height: 1080 },
+      schemaVersion: original.project.schemaVersion,
+    });
+    expect(duplicate.project.id).not.toBe(originalId);
+    expect(await duplicate.listBackups()).toHaveLength(1);
+    original.dispose();
+    duplicate.dispose();
+  });
+
+  it('arquiva movendo o projeto e mantendo-o íntegro no destino', async () => {
+    const p = nodePlatform(root);
+    const session = await ProjectSession.create(p, join(root, 'ativo'), 'Para arquivar', { width: 1080, height: 1920 });
+    session.execute({ type: 'project.rename', name: 'Para arquivar atualizado' });
+    await session.save();
+    const projectId = session.project.id;
+    await session.archiveTo(join(root, 'arquivado'));
+
+    expect(session.path).toBe(join(root, 'arquivado.amvproj'));
+    expect(await p.fs.exists(join(root, 'ativo.amvproj'))).toBe(false);
+    expect(await session.listBackups()).toHaveLength(1);
+    const opened = await ProjectSession.open(p, session.path);
+    expect(opened.result).toMatchObject({ ok: true, missing: 0 });
+    expect(opened.session?.project).toMatchObject({ id: projectId, name: 'Para arquivar atualizado' });
+    opened.session?.dispose();
+    session.dispose();
+  });
+
+  it('cancela arquivamento se o destino ficar sem espaço, sem alterar a origem', async () => {
+    const p = nodePlatform(root);
+    const session = await ProjectSession.create(p, join(root, 'seguro'), 'Seguro', {});
+    const destination = join(root, 'sem-espaco');
+    const fs = p.fs;
+    p.fs = {
+      ...fs,
+      async writeFile(path, data) {
+        if (path === `${destination}.amvproj.transaction.tmp`) throw new Error('ENOSPC: no space left on device');
+        await fs.writeFile(path, data);
+      },
+    };
+
+    await expect(session.archiveTo(destination)).rejects.toThrow(/ENOSPC/);
+    expect(await p.fs.exists(session.path)).toBe(true);
+    expect(JSON.parse(new TextDecoder().decode(await p.fs.readFile(session.path))).name).toBe('Seguro');
+    expect(session.path).toBe(join(root, 'seguro.amvproj'));
+    expect(await p.fs.exists(`${destination}.amvproj`)).toBe(false);
+    p.fs = fs;
+    session.dispose();
+  });
+
+  it('valida dependências e lista as mídias registradas no projeto', async () => {
+    const p = nodePlatform(root);
+    const s = await ProjectSession.create(p, join(root, 'deps'), 'Dependências', {});
+    await s.importFiles([join(media, 'tom.flac')]);
+    const report = await s.validateDependencies();
+    expect(report.valid).toBe(true);
+    expect(report.mediaUsage).toHaveLength(1);
+    expect(report.mediaUsage[0]).toMatchObject({ path: join(media, 'tom.flac'), missing: false, clipIds: [] });
+    s.dispose();
+  });
+
   it('mídia movida aparece como ausente e é relocalizada pela pasta', async () => {
     const p = nodePlatform(root);
     const s = await ProjectSession.create(p, join(root, 'c'), 'C', {});
@@ -128,6 +287,9 @@ describe('sessão do projeto', () => {
     const reopened = session!;
     expect(reopened.project.assets.map((a) => a.status)).toEqual(['missing', 'missing']);
     expect(reopened.dirty).toBe(false);
+    const dependencyReport = await reopened.validateDependencies();
+    expect(dependencyReport.valid).toBe(false);
+    expect(dependencyReport.missingAssets).toHaveLength(2);
 
     const r = await reopened.relocateFromFolder(join(root, 'HD externo'));
     expect(r).toEqual({ found: 2, stillMissing: 0 });
@@ -232,12 +394,21 @@ describe('gerar AMV e versões', () => {
     const first = s.project.clips.map((c) => c.id).sort();
     const vid = await s.saveVersion('Primeira');
     expect(vid).toBeTruthy();
+    s.execute({ type: 'project.rename', name: 'Alterado depois do snapshot' });
+    s.execute({ type: 'settings.update', patch: { width: 640, height: 360 } });
+    s.execute({ type: 'audioMix.update', patch: { targetLufs: -9 } });
     s.history.transaction('Gerar 2', run(2).commands);
     expect(s.project.clips.map((c) => c.id).sort()).not.toEqual(first);
     await s.restoreVersion(vid!);
     expect(s.project.clips.map((c) => c.id).sort()).toEqual(first);
+    expect(s.project.name).toBe('Gen');
+    expect(s.project.settings.width).toBe(1920);
+    expect(s.project.audioMix.targetLufs).toBe(-14);
     s.undo();
     expect(s.project.clips.map((c) => c.id).sort()).not.toEqual(first);
+    expect(s.project.name).toBe('Alterado depois do snapshot');
+    expect(s.project.settings.width).toBe(640);
+    expect(s.project.audioMix.targetLufs).toBe(-9);
     s.dispose();
   });
 });
