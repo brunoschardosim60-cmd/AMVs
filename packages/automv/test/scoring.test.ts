@@ -129,6 +129,23 @@ describe('pontuação contextual de cenas', () => {
     expect(withLocal.action).toBeGreaterThan(withoutLocal.action);
   });
 
+  it('aplica a ênfase emocional do perfil a emoções visuais confiáveis', () => {
+    const emotionalShot = { ...shot, tags: ['calma'] as Shot['tags'] };
+    const emotionalVision = vision({ fight: false, emotion: 'tristeza' });
+    const balanced = scoreSceneCandidate({ ...base, shot: emotionalShot, style: styleDef('emocional'), vision: emotionalVision });
+    const emotionFocused = scoreSceneCandidate({
+      ...base,
+      shot: emotionalShot,
+      style: styleDef('emocional'),
+      vision: emotionalVision,
+      creativeEmphasis: { action: 0, emotion: 100, preferredEmotion: 'tristeza' },
+    });
+
+    expect(emotionFocused.total).toBeGreaterThan(balanced.total);
+    expect(emotionFocused.reasons).toContain('peso emocional do perfil (100%) aplicado às evidências disponíveis');
+    expect(emotionFocused.reasons).toContain('emoção principal do perfil identificada com confiança (tristeza)');
+  });
+
   it('direções editoriais aplicam parâmetros de montagem diferentes', () => {
     const baseStyle = styleDef('hype');
     const cinematic = editorialStyle(baseStyle, 'cinematic');

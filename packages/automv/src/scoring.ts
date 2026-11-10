@@ -3,6 +3,7 @@ import type { NarrativeRole } from './narrative.js';
 import type { OrganizationMode } from './sequence-planner.js';
 import type { EditorialDirection } from './styles.js';
 import type { StyleDef } from './styles.js';
+import type { CreativeEmphasis } from './creative-profiles.js';
 
 type VisualEvidence = Pick<ShotVision, 'action' | 'characters' | 'confidence' | 'emotion' | 'fight' | 'framing' | 'framingConfidence' | 'expressions' | 'sceneType' | 'sceneTypeConfidence'>;
 
@@ -23,12 +24,15 @@ export interface SceneScoringInput {
   editorialDirection?: EditorialDirection;
   transitionCue?: string | null;
   sourceJumpS?: number | null;
+  creativeEmphasis?: CreativeEmphasis;
 }
 
 export interface SceneScoreBreakdown {
   music: number;
   action: number;
+  actionWeight: number;
   emotion: number;
+  emotionWeight: number;
   narrative: number;
   transition: number;
   diversity: number;
@@ -272,16 +276,29 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
   if (lyric > 0) reasons.push('correspondência opcional entre letra e cena');
   else if (lyric < 0) reasons.push('correspondência opcional letra/cena abaixo do ponto neutro');
 
+  const actionEmphasis = input.creativeEmphasis?.action ?? 50;
+  const emotionEmphasis = input.creativeEmphasis?.emotion ?? 50;
+  const actionWeight = 0.5 + Math.max(0, Math.min(100, actionEmphasis)) / 100;
+  const emotionWeight = 0.5 + Math.max(0, Math.min(100, emotionEmphasis)) / 100;
+  if (input.creativeEmphasis?.preferredEmotion && trusted(vision) && vision.emotion === input.creativeEmphasis.preferredEmotion) {
+    emotion += 0.18;
+    reasons.push(`emoção principal do perfil identificada com confiança (${vision.emotion})`);
+  }
+  if (action !== 0 && actionWeight !== 1) reasons.push(`peso de ação do perfil (${Math.round(actionEmphasis)}%) aplicado às evidências disponíveis`);
+  if (emotion !== 0 && emotionWeight !== 1) reasons.push(`peso emocional do perfil (${Math.round(emotionEmphasis)}%) aplicado às evidências disponíveis`);
+
   return {
     music,
     action,
+    actionWeight,
     emotion,
+    emotionWeight,
     narrative,
     transition,
     diversity,
     lyric,
     visual,
-    total: music + action + emotion + narrative + transition + diversity + lyric + visual,
+    total: music + action * actionWeight + emotion * emotionWeight + narrative + transition + diversity + lyric + visual,
     reasons,
   };
 }

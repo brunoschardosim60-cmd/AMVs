@@ -54,8 +54,7 @@ function project(): Project {
 // testes legados rodam no modo misturar (o comportamento de antes das lutas)
 const base: GenerateOptions = { style: 'hype', intensity: 2, durationS: 60, musicStartS: null, useSpeech: true, useEffects: true, showText: true, seed: 1, focus: 'mix', hitSync: false };
 
-function run(opts: Partial<GenerateOptions> = {}) {
-  const p = project();
+function run(opts: Partial<GenerateOptions> = {}, p = project()) {
   const r = generateAmv(p, music(), [episode('ep1', 150, 3), episode('ep2', 150, 51)], { ...base, ...opts });
   const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
   const track = (name: string) => out.tracks.find((t) => t.name === name)!.id;
@@ -276,9 +275,25 @@ describe('gerar AMV — hype', () => {
     expect(pic.sourceInUs).toBe(21 * S);
     expect(pic.assetId).toBe(voice[0]!.assetId);
     const m = on('Música')[0]!;
-    expect(m.keyframes['audio.gainDb']!.map((k) => k.value)).toEqual([0, -16, -16, 0]);
+    expect(m.keyframes['audio.gainDb']!.map((k) => k.value)).toEqual([0, -4, -4, 0]);
     expect(on('Legendas').map((c) => c.text?.text).join(' ')).toContain('Eu não vou desistir!');
     expect(r.summary.speech).toBe('Eu não vou desistir!');
+  });
+
+  it('compensa o ducking global sem somar duas reduções completas na fala', () => {
+    const configuredProject = applyCommand(project(), {
+      type: 'audioMix.update',
+      patch: { duckingAmountDb: 6 },
+    }).project;
+    const { on } = run({}, configuredProject);
+    expect(on('Música')[0]!.keyframes['audio.gainDb']!.map((keyframe) => keyframe.value)).toEqual([0, -10, -10, 0]);
+
+    const duckingDisabledProject = applyCommand(project(), {
+      type: 'audioMix.update',
+      patch: { duckingEnabled: false },
+    }).project;
+    expect(run({}, duckingDisabledProject).on('Música')[0]!.keyframes['audio.gainDb']!.map((keyframe) => keyframe.value))
+      .toEqual([0, -16, -16, 0]);
   });
 
   it('mesma semente = mesma montagem; outra semente = outra montagem', () => {
@@ -462,5 +477,51 @@ describe('formato do projeto', () => {
     const v1 = out.tracks.find((t) => t.name === 'V1')!.id;
     const scales = new Set(out.clips.filter((c) => c.trackId === v1).map((c) => c.transform.scale));
     expect([...scales]).toEqual([Math.round(((1920 / 1080) / (1080 / 1920)) * 10000) / 10000]);
+  });
+});
+
+describe('ênfase de perfil criativo', () => {
+  it('inclui a preferência emocional no motivo do clipe somente com análise confiável', () => {
+    const p = project();
+    const videoTrackId = p.tracks.find((track) => track.name === 'V1')!.id;
+    const ep = episode('ep1', 1, 21);
+    const key = shotKey(ep.analysis.shots[0]!.startS);
+    const evidence = {
+      characters: [],
+      fight: false,
+      note: '',
+      confidence: 0.9,
+      emotion: 'tristeza' as const,
+    };
+    ep.vision = { version: 'v2', model: 'test', shots: { [key]: evidence } };
+    const options: GenerateOptions = {
+      ...base,
+      style: 'emocional',
+      durationS: 2,
+      musicStartS: 40,
+      useSpeech: false,
+      focus: 'mix',
+      organizationMode: 'free',
+      creativeEmphasis: { action: 50, emotion: 100, preferredEmotion: 'tristeza' },
+    };
+    const result = generateAmv(p, music(), [ep], options);
+    const videoClip = result.commands.find((command) =>
+      command.type === 'clip.add' && command.clip.trackId === videoTrackId,
+    );
+
+    expect(videoClip?.type).toBe('clip.add');
+    if (videoClip?.type === 'clip.add') {
+      expect(videoClip.clip.reason).toContain('emoção principal do perfil identificada com confiança (tristeza)');
+    }
+
+    ep.vision = { ...ep.vision, shots: { [key]: { ...evidence, confidence: 0.4 } } };
+    const lowConfidenceResult = generateAmv(p, music(), [ep], options);
+    const lowConfidenceClip = lowConfidenceResult.commands.find((command) =>
+      command.type === 'clip.add' && command.clip.trackId === videoTrackId,
+    );
+    expect(lowConfidenceClip?.type).toBe('clip.add');
+    if (lowConfidenceClip?.type === 'clip.add') {
+      expect(lowConfidenceClip.clip.reason).not.toContain('emoção principal do perfil identificada');
+    }
   });
 });

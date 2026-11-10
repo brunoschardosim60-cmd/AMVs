@@ -1,7 +1,9 @@
-import { impactScore, parseSubtitles, decodeSubtitleBytes, shotKey, type CameraMotionType, type Cue } from '@amv/analysis';
-import { canonicalizeEpisodeVision, chooseMusicRange, generateAmv, lyricCueKey, planFootage, prepareLocalizedRegeneration, recommendStyle, STYLES, suggestMusicRanges, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
+import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type CameraMotionType, type Cue, type SceneEmotion } from '@amv/analysis';
+import { canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, prepareLocalizedRegeneration, recommendStyle, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
 import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
+import { loadCreativeProfiles, saveCreativeProfiles } from '../../core/creativeProfiles';
+import { getAnalysisReadiness } from './analysis-readiness';
 import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2, Zap } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectSession } from '../../core/session';
@@ -102,10 +104,56 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [candidateMode, setCandidateMode] = useState(false);
   const [compareFraction, setCompareFraction] = useState(0.5);
   const [busy, setBusy] = useState(false);
+  const [creativeProfiles, setCreativeProfiles] = useState<CreativeProfile[]>([...DEFAULT_CREATIVE_PROFILES]);
+  const [profilesLoaded, setProfilesLoaded] = useState(false);
+  const [profileStorageError, setProfileStorageError] = useState(false);
+  const [activeProfileId, setActiveProfileId] = useState('');
+  const [profileNameDraft, setProfileNameDraft] = useState('');
+  const [actionEmphasis, setActionEmphasis] = useState(50);
+  const [emotionEmphasis, setEmotionEmphasis] = useState(50);
+  const [preferredEmotion, setPreferredEmotion] = useState<SceneEmotion | ''>('');
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!platform) return;
+    void loadCreativeProfiles(platform).then((profiles) => {
+      if (cancelled) return;
+      setCreativeProfiles(profiles);
+      setProfilesLoaded(true);
+    }).catch((error: unknown) => {
+      if (cancelled) return;
+      setProfileStorageError(true);
+      setProfilesLoaded(true);
+      toast({ tone: 'error', title: 'Não foi possível carregar perfis criativos', body: (error as Error).message });
+    });
+    return () => { cancelled = true; };
+  }, [platform, toast]);
 
   const music = session.assetRuntime(musicId).music;
   const ready = episodes.filter((e) => epIds.includes(e.id) && session.assetRuntime(e.id).episode);
-  const waiting = epIds.filter((id) => !session.assetRuntime(id).episode).length + (musicId && !music ? 1 : 0);
+  const selectedEpisodes = episodes.filter((episode) => epIds.includes(episode.id));
+  const selectedMusic = musics.find((asset) => asset.id === musicId);
+  const selectedAnalysis = selectedEpisodes.map((episode) => {
+    const runtime = session.assetRuntime(episode.id);
+    return {
+      id: episode.id,
+      name: episode.name,
+      ready: !!runtime.episode,
+      error: runtime.analysis === 'error' ? runtime.analysisError ?? 'falha desconhecida' : undefined,
+    };
+  });
+  if (selectedMusic) {
+    const runtime = session.assetRuntime(selectedMusic.id);
+    selectedAnalysis.push({
+      id: selectedMusic.id,
+      name: selectedMusic.name,
+      ready: !!runtime.music,
+      error: runtime.analysis === 'error' ? runtime.analysisError ?? 'falha desconhecida' : undefined,
+    });
+  }
+  const analysisReadiness = getAnalysisReadiness(selectedAnalysis);
+  const analysisFailures = analysisReadiness.failed;
+  const waiting = analysisReadiness.pending.length;
   // muda quando a visão de algum episódio ganha cenas (para refazer o plano)
   const visionVersion = ready.map((e) => {
     const shots = Object.values(session.assetRuntime(e.id).vision?.shots ?? {});
@@ -131,6 +179,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     [inputs, music, lyrics],
   );
   const selectedStyle = styleMode === 'auto' ? recommendation?.style ?? style : style;
+  const activeCreativeProfile = creativeProfiles.find((profile) => profile.id === activeProfileId);
+  const activeProfileIsCustom = !!activeCreativeProfile && !isBuiltInCreativeProfile(activeCreativeProfile);
   const excluded = useMemo(() => episodes.filter((e) => !epIds.includes(e.id)).map((e) => e.id), [episodes, epIds]);
   const fights = useMemo(
     () =>
@@ -345,8 +395,107 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     setLyricSceneMatches({});
   };
 
+  const applyCreativeProfile = (profile: CreativeProfile) => {
+    setActiveProfileId(profile.id);
+    setProfileNameDraft(profile.name);
+    setStyle(profile.style);
+    setStyleMode('manual');
+    setIntensity(profile.intensity);
+    setEditorialDirection(profile.editorialDirection);
+    setOrganizationMode(profile.organizationMode);
+    setFocus(profile.focus);
+    setActionEmphasis(profile.actionEmphasis);
+    setEmotionEmphasis(profile.emotionEmphasis);
+    setPreferredEmotion(profile.preferredEmotion ?? '');
+    setVoiceMoments(profile.voiceMoments);
+    setShowText(profile.showText);
+    setUseEffects(profile.useEffects);
+    setHitSync(profile.hitSync);
+  };
+
+  const persistCreativeProfiles = async (next: CreativeProfile[], selectedId: string, message: string): Promise<boolean> => {
+    if (!platform || profileStorageError) return false;
+    try {
+      await saveCreativeProfiles(platform, next);
+      setCreativeProfiles(next);
+      setActiveProfileId(selectedId);
+      toast({ tone: 'ok', title: message });
+      return true;
+    } catch (error) {
+      toast({ tone: 'error', title: 'Não foi possível salvar perfis criativos', body: (error as Error).message });
+      return false;
+    }
+  };
+
+  const profileFromCurrentOptions = (id: string, name: string): CreativeProfile => ({
+    id,
+    name,
+    style: selectedStyle,
+    intensity,
+    editorialDirection,
+    organizationMode,
+    focus,
+    actionEmphasis,
+    emotionEmphasis,
+    preferredEmotion: preferredEmotion || null,
+    voiceMoments: voiceMoments as CreativeProfile['voiceMoments'],
+    showText,
+    useEffects,
+    hitSync,
+  });
+
+  const saveNewCreativeProfile = async () => {
+    const name = profileNameDraft.trim();
+    if (!name) {
+      toast({ tone: 'warn', title: 'Dê um nome ao perfil criativo' });
+      return;
+    }
+    const profile = profileFromCurrentOptions(newId('creative'), name);
+    if (await persistCreativeProfiles([...creativeProfiles, profile], profile.id, 'Perfil criativo salvo')) {
+      setStyle(profile.style);
+      setStyleMode('manual');
+      setProfileNameDraft('');
+    }
+  };
+
+  const updateCreativeProfile = async () => {
+    const profile = creativeProfiles.find((item) => item.id === activeProfileId);
+    if (!profile || isBuiltInCreativeProfile(profile)) return;
+    const updated = profileFromCurrentOptions(profile.id, profileNameDraft.trim() || profile.name);
+    if (await persistCreativeProfiles(
+      creativeProfiles.map((item) => item.id === updated.id ? updated : item),
+      updated.id,
+      'Perfil criativo atualizado',
+    )) {
+      setStyle(updated.style);
+      setStyleMode('manual');
+      setProfileNameDraft(updated.name);
+    }
+  };
+
+  const deleteCreativeProfile = async () => {
+    const profile = creativeProfiles.find((item) => item.id === activeProfileId);
+    if (!profile || isBuiltInCreativeProfile(profile) || !platform) return;
+    if (!(await platform.dialogs.confirm(`Excluir o perfil "${profile.name}"?`, 'Excluir perfil criativo'))) return;
+    await persistCreativeProfiles(
+      creativeProfiles.filter((item) => item.id !== profile.id),
+      '',
+      'Perfil criativo excluído',
+    );
+  };
+
   const generate = async (nextSeed = seed) => {
     if (!music) return;
+    if (waiting > 0 || analysisFailures.length > 0) {
+      toast({
+        tone: 'warn',
+        title: 'A análise ainda não está completa',
+        body: analysisFailures.length
+          ? 'Tente novamente as análises com falha ou desmarque os arquivos antes de gerar.'
+          : 'Aguarde a análise dos arquivos selecionados; nenhum episódio será omitido silenciosamente.',
+      });
+      return;
+    }
     setBusy(true);
     try {
       if (localizedRange) {
@@ -387,6 +536,11 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           characters,
           organizationMode,
           editorialDirection,
+          creativeEmphasis: creativeEmphasis({
+            actionEmphasis,
+            emotionEmphasis,
+            preferredEmotion: preferredEmotion || null,
+          }),
         };
         const generated = generateAmv({ ...baseProject, clips: [] }, { assetId: musicId, name: musics.find((asset) => asset.id === musicId)?.name ?? musicId, analysis: music }, inputs, opts);
         const generatedClips = generated.commands.flatMap((command) =>
@@ -444,7 +598,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           sfxError = (e as Error).message;
         }
       }
-      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, beatOffsetMs, characters, organizationMode, editorialDirection };
+      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
       const m = musics.find((a) => a.id === musicId)!;
       const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
       if (sfxError) r.warnings.push(`Não consegui preparar os efeitos sonoros (${sfxError}): o vídeo saiu sem eles.`);
@@ -658,7 +812,24 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       width="w-[1020px]"
       footer={
         <>
-          <span className="mr-auto self-center text-xs text-muted">{waiting > 0 ? `Esperando a análise de ${waiting} arquivo(s)…` : `${sceneCount} cenas analisadas · ${ready.length} episódio(s) selecionado(s)`}</span>
+          <span className={`mr-auto self-center text-xs ${analysisFailures.length ? 'text-warn' : 'text-muted'}`}>
+            {analysisFailures.length
+              ? `${analysisFailures.length} análise(s) falharam; tente novamente ou desmarque o arquivo.`
+              : waiting > 0
+                ? `Analisando ${waiting} arquivo(s) selecionado(s)…`
+                : `${sceneCount} cenas analisadas · ${ready.length} episódio(s) selecionado(s)`}
+          </span>
+          {analysisFailures.length > 0 && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              title={analysisFailures.map((failure) => `${failure.name}: ${failure.error}`).join('\n')}
+              onClick={() => analysisFailures.forEach((failure) => session.retry(failure.id))}
+            >
+              Tentar análise novamente
+            </Button>
+          )}
           {localizedRange && localizedCandidates.length > 0 && (
             <Button variant="ghost" disabled={busy} onClick={() => setCandidateMode(true)}>
               Comparar alternativas ({localizedCandidates.length})
@@ -667,7 +838,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           <Button variant="ghost" onClick={onClose}>
             Cancelar
           </Button>
-          <Button variant="primary" icon={<Wand2 size={15} />} disabled={!music || ready.length === 0 || busy || (localizedRange !== undefined && localizedRange.clipIds.length === 0)} onClick={() => void generate(seed)}>
+          <Button variant="primary" icon={<Wand2 size={15} />} disabled={!music || ready.length === 0 || !analysisReadiness.canGenerate || busy || (localizedRange !== undefined && localizedRange.clipIds.length === 0)} onClick={() => void generate(seed)}>
             {localizedRange ? 'Gerar alternativa' : 'Gerar'}
           </Button>
         </>
@@ -716,6 +887,47 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       ) : (
         <div className="grid max-h-[calc(100vh-210px)] grid-cols-[1.05fr_1fr_0.8fr] gap-5 overflow-y-auto pr-1">
           <div>
+            <p className="mb-2 text-xs font-medium text-ink-soft">Perfil criativo</p>
+            <select
+              aria-label="Perfil criativo"
+              className="h-9 w-full rounded-control border border-line bg-base px-2 text-sm"
+              value={activeProfileId}
+              onChange={(event) => {
+                const profile = creativeProfiles.find((item) => item.id === event.currentTarget.value);
+                if (profile) applyCreativeProfile(profile);
+                else {
+                  setActiveProfileId('');
+                  setProfileNameDraft('');
+                }
+              }}
+            >
+              <option value="">Opções atuais</option>
+              {creativeProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+            </select>
+            <div className="mt-2 space-y-1.5 rounded-control border border-line-soft p-2">
+              <input
+                aria-label="Nome do novo perfil criativo"
+                className="h-7 w-full rounded-control border border-line bg-base px-2 text-xs"
+                placeholder="Nome do perfil para salvar"
+                value={profileNameDraft}
+                onChange={(event) => setProfileNameDraft(event.currentTarget.value)}
+                disabled={!profilesLoaded || profileStorageError}
+              />
+              <div className="flex flex-wrap gap-1">
+                <Button size="sm" onClick={saveNewCreativeProfile} disabled={!profilesLoaded || profileStorageError || !profileNameDraft.trim()}>
+                  Salvar como novo
+                </Button>
+                {activeProfileIsCustom && (
+                  <>
+                    <Button size="sm" onClick={updateCreativeProfile} disabled={!profilesLoaded || profileStorageError}>Atualizar</Button>
+                    <Button size="sm" variant="ghost" onClick={() => void deleteCreativeProfile()} disabled={!profilesLoaded || profileStorageError}>Excluir</Button>
+                  </>
+                )}
+              </div>
+              <p className="text-2xs text-muted">Perfis ficam neste computador. Ao aplicar um, você ainda pode ajustar as opções antes de gerar.</p>
+              {profileStorageError && <p className="text-2xs text-danger">Armazenamento inválido; perfis padrão ficam disponíveis, mas salvar está desativado para preservar o arquivo.</p>}
+            </div>
+
             <p className="mb-2 text-xs font-medium text-ink-soft">Estilo</p>
             <div className="mb-2 flex gap-1 rounded-control bg-base p-1">
               <button type="button" aria-pressed={styleMode === 'auto'} onClick={() => setStyleMode('auto')} className={`flex-1 rounded-[4px] px-2 py-1.5 text-xs ${styleMode === 'auto' ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
@@ -784,6 +996,43 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                 </button>
               ))}
             </div>
+            <label className="mt-3 block text-xs text-ink-soft">
+              Ênfase em ação <span className="tnum text-muted">{actionEmphasis}%</span>
+              <input
+                aria-label="Ênfase em ação"
+                className="mt-1 block w-full accent-violet"
+                type="range"
+                min={0}
+                max={100}
+                value={actionEmphasis}
+                onChange={(event) => setActionEmphasis(Number(event.currentTarget.value))}
+              />
+            </label>
+            <label className="mt-2 block text-xs text-ink-soft">
+              Ênfase emocional <span className="tnum text-muted">{emotionEmphasis}%</span>
+              <input
+                aria-label="Ênfase emocional"
+                className="mt-1 block w-full accent-violet"
+                type="range"
+                min={0}
+                max={100}
+                value={emotionEmphasis}
+                onChange={(event) => setEmotionEmphasis(Number(event.currentTarget.value))}
+              />
+            </label>
+            <p className="mt-1 text-2xs text-muted">Esses pesos só alteram a seleção quando há tags locais ou sinais visuais confiáveis; não são notas nem probabilidades.</p>
+            <label className="mt-2 block text-xs text-ink-soft">
+              Emoção principal
+              <select
+                aria-label="Emoção principal do perfil"
+                className="mt-1 h-8 w-full rounded-control border border-line bg-base px-2"
+                value={preferredEmotion}
+                onChange={(event) => setPreferredEmotion(event.currentTarget.value as SceneEmotion | '')}
+              >
+                <option value="">Sem preferência</option>
+                {SCENE_EMOTIONS.map((emotion) => <option key={emotion} value={emotion}>{emotion}</option>)}
+              </select>
+            </label>
             <p className="mt-3 mb-1 text-xs font-medium text-ink-soft">Organização temporal</p>
             <div className="grid grid-cols-3 gap-1 rounded-control bg-base p-1">
               {([

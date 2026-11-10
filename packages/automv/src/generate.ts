@@ -12,6 +12,7 @@ import { scoreSceneCandidate, type SceneScoreBreakdown } from './scoring.js';
 import { chooseSceneTransition } from './transitions.js';
 import { planSequence, type OrganizationMode, type SequencePlanCandidate } from './sequence-planner.js';
 import { editorialStyle, styleDef, type EditorialDirection, type StyleDef, type StyleId } from './styles.js';
+import type { CreativeEmphasis } from './creative-profiles.js';
 
 export interface EpisodeInput {
   assetId: string;
@@ -76,6 +77,8 @@ export interface GenerateOptions {
   characters?: string[];
   /** Onde estão os efeitos (id do asset de cada um). Sem isso, não coloca efeito sonoro. */
   sfxAssets?: Partial<Record<SfxKind, string>>;
+  /** Pesos de preferência para sinais visuais analisados; 50/50 preserva o comportamento anterior. */
+  creativeEmphasis?: CreativeEmphasis;
 }
 
 export interface GenerateResult {
@@ -533,6 +536,22 @@ function findTracks(p: Project) {
   return { v1, text, music, voice, sfx };
 }
 
+function generatedVoiceDuckCompensationDb(project: Project, musicTrack: Track, voiceTrack: Track | undefined): number {
+  const mixTracks = project.tracks.filter((track) =>
+    track.kind === 'audio' || (track.kind === 'video' && project.audioMix.includeVideoAudio),
+  );
+  const anySolo = mixTracks.some((track) => track.solo);
+  const musicAudible = !musicTrack.muted && (!anySolo || musicTrack.solo);
+  const voiceAudible = !!voiceTrack && voiceTrack.role === 'voice' && !voiceTrack.muted && (!anySolo || voiceTrack.solo);
+  const automaticDuckDb = project.audioMix.duckingEnabled
+    && (musicTrack.role === 'music' || musicTrack.role === 'music2')
+    && musicAudible
+    && voiceAudible
+    ? project.audioMix.duckingAmountDb
+    : 0;
+  return automaticDuckDb;
+}
+
 function baseClip(trackId: string, assetId: string | null, startS: number, durS: number, srcIn: number, reason: string, extra: Partial<Clip> = {}): Clip {
   return {
     id: newId('clp'),
@@ -779,13 +798,14 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   blocks.sort((a, b) => a.atS - b.atS);
   // a música abaixa durante cada fala e volta depois (no drop, rampa curta para o golpe entrar forte)
   if (blocks.length) {
+    const musicDuckDb = DUCK_DB + generatedVoiceDuckCompensationDb(project, musicTrack, voice);
     const kf: { atUs: number; value: number; easing: 'linear' }[] = [];
     for (const b of blocks) {
       const a = b.atS;
       const end = b.preDrop ? dropT! : b.atS + b.len;
-      kf.push({ atUs: us(Math.max(0, a - 0.35)), value: 0, easing: 'linear' }, { atUs: us(a), value: DUCK_DB, easing: 'linear' });
-      if (b.preDrop) kf.push({ atUs: us(end - 0.06), value: DUCK_DB, easing: 'linear' }, { atUs: us(end), value: 0, easing: 'linear' });
-      else kf.push({ atUs: us(end), value: DUCK_DB, easing: 'linear' }, { atUs: us(end + 0.4), value: 0, easing: 'linear' });
+      kf.push({ atUs: us(Math.max(0, a - 0.35)), value: 0, easing: 'linear' }, { atUs: us(a), value: musicDuckDb, easing: 'linear' });
+      if (b.preDrop) kf.push({ atUs: us(end - 0.06), value: musicDuckDb, easing: 'linear' }, { atUs: us(end), value: 0, easing: 'linear' });
+      else kf.push({ atUs: us(end), value: musicDuckDb, easing: 'linear' }, { atUs: us(end + 0.4), value: 0, easing: 'linear' });
     }
     musicClip.keyframes['audio.gainDb'] = kf;
   }
@@ -947,6 +967,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       editorialDirection,
       transitionCue,
       sourceJumpS: previous?.ep.assetId === c.ep.assetId ? c.shot.startS - previous.shot.endS : null,
+      creativeEmphasis: opts.creativeEmphasis,
     });
     const dropSequenceBonus = sl.isDrop && opts.focus === 'mix' && previous?.ep.assetId === c.ep.assetId && c.sequenceOrder > previous.sequenceOrder
       ? MIX_SEQUENCE_DROP_BONUS

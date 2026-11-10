@@ -63,7 +63,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Render por janelas + concat sem recodificar, a partir dos originais | feito | 10 testes em `packages/render` conferindo pixels/volume do arquivo final |
 | Efeitos e transições com a mesma fórmula no preview e no render | feito | testes de `evalClipLook`/rampas + render |
 | Textos desenhados pelo mesmo código no preview e na exportação | feito | app real: exportação 1080p com texto conferida quadro a quadro |
-| Mixagem: múltiplas trilhas, ganho/fades/keyframes, áudio original do vídeo, ducking de voz, EBU R128, limitador e medição | feito | testes de render com FFmpeg real: áudio original e ducking, loudness alvo, pico verdadeiro/clipping; migração v4 → v5 |
+| Mixagem: múltiplas trilhas, ganho/fades/keyframes, áudio original do vídeo, ducking de voz, EBU R128, limitador e medição | feito | testes de render com FFmpeg real: áudio original e ducking, loudness alvo, pico verdadeiro/clipping; Auto AMV: 123/123 testes e typecheck aprovados para compensação dos ganhos. Teste de integração renderizado dessa compensação foi adicionado, mas não executado localmente (`ffmpeg` ausente no PATH); migração v4 → v5 |
 | Mixer visual e pré-escuta WAV fiel à exportação | feito | controles por trilha (função, ganho, mute/solo), ducking/masterização e WAV renderizado pela mesma cadeia; validação manual do player no WebView2 pendente |
 | Diálogo de exportação: formato, resolução, qualidade, progresso, cancelar, mostrar na pasta | feito | app real (Linux) |
 | Exportação configurável: MP4/MKV/MOV, H.264/H.265/ProRes, FPS racional, CRF/bitrate e estimativa de tamanho | implementado; validação automatizada | typecheck e testes com FFmpeg sidecar; tamanho é estimativa e encoder varia por build |
@@ -95,11 +95,13 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Gerar outra versão, versões guardadas e voltar | feito | teste de sessão + app real |
 | Selecionar vários episódios e identificar cenas/lutas por episódio para a montagem | feito | geração usa os episódios marcados; seleção Todos/Nenhum e contagem de cenas/lutas visíveis |
 | Direção narrativa musical aplicada às escolhas de cena | primeira fatia feita | seções, energia e drops existentes geram papéis narrativos que alteram o score e aparecem nas justificativas/resumo; testes cobrem faixa parcial, offset, seção sem dados e alinhamento entre tempo local e absoluto. Heurística ainda requer validação visual em mídia real e não entende semanticamente a história. |
+| Gate das análises selecionadas | implementado | O botão aguarda a análise de todos os episódios selecionados e da música, não omite episódios pendentes quando outros já estão prontos; erros permitem retry ou desmarcação explícita. Testes unitários da prontidão e typecheck/build desktop. |
 | Cenas escuras preservadas na seleção | feito | cena marcada como escura continua elegível; baixa luminosidade isolada não é motivo para removê-la. Teste de geração em `packages/automv`. |
 | Pontuação contextual e decomposição dos motivos | primeira fatia feita | sinais existentes foram separados em música, ação, emoção, narrativa, transição, diversidade e letra opcional. Justificativas dos clipes mostram sinais selecionados; visão granular só influencia com confiança ≥0,55. Rótulos legados `fight` sem confiança mantêm comportamento compatível. Nitidez, enquadramento, câmera e cor não são medidos e não recebem score inventado. |
 | Planejamento global de cenas e direções editoriais | primeira fatia implementada | busca beam limitada avalia o caminho completo dos slots; modos Cronológico, Narrativo e Livre impõem regras distintas. Cinema, Balanceado e Hype alteram duração/ritmo, transição, peso visual e efeitos. 85 testes focados passaram; typecheck do Auto AMV/desktop e build do frontend passaram. Falta validar o resultado audiovisual em mídia real. |
 | Confiança de clipe gerado | corrigido | removido o reaproveitamento do score de ranking como `Clip.confidence`; pontuação não é probabilidade de adequação. |
 | Análise da mídia de referência local | feita como diagnóstico, não como aceitação visual | FFmpeg/algoritmos existentes analisaram música de 223,4 s e episódio de 1.430,08 s (508 planos em 35,6 s). A classificação musical tem seções longas/coarse; arquivo, streams, métricas e limites estão em `docs/AMV_ENGINE_REFERENCE_VALIDATION.md`. Não foi renderizada nem aprovada uma montagem real. |
+| Auditoria do clique Gerar | fluxo rastreado; instrumentação pendente | Análise de vídeo/música é iniciada após importação e lida do cache por hash/versão; `generateAmv` apenas planeja e emite comandos em memória. O clique sub-segundo não mede nem representa a duração anterior de análise. O gate agora impede omissão parcial silenciosa; não há ainda métricas por etapa nem perfil de profundidade. |
 
 ## Fase 6 — Assistente (primeira versão)
 | Item | Estado | Como foi verificado |
@@ -340,3 +342,12 @@ Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Video
 | Migração e validação | implementadas | Migração v8→v9 adiciona blend normal, máscara nenhuma e grupo nulo; teste de serialização. |
 | Limites e verificação manual | pendentes | Máscaras disponíveis são formas/metades sem feather. Paridade visual geral e interação de alças precisam de validação no WebView2; não há material visual real no teste automatizado. |
 | Verificação automatizada | passou com ressalva | Projeto: 71/71; desktop: 27/27; typechecks de project/render/desktop e build desktop passaram. O teste de composição FFmpeg passou; a suíte render completa teve 23/24, com falha na asserção de cor do color grading, fora deste caminho. |
+
+## Perfis criativos reutilizáveis (2026-11-10)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Modelos e perfis editáveis | primeira fatia implementada | Três modelos iniciais combinam estilo, intensidade, foco de cenas, direção editorial, organização temporal, falas, texto e efeitos. O usuário pode salvar, renomear, atualizar, reutilizar e excluir perfis próprios. |
+| Influência na montagem | implementada | Ênfases de ação/emoção alteram o peso de sinais já existentes; emoção principal só recebe bônus quando a análise visual tem confiança suficiente. A justificativa do clipe explicita o sinal usado. |
+| Persistência e compatibilidade | implementadas | Perfis personalizados são validados e gravados atomicamente em `perfis-criativos.json` na pasta local do app; perfis padrão ficam no código. Nenhuma migração de `.amvproj` é necessária. Arquivo inválido não é sobrescrito silenciosamente. |
+| Testes | passou | Auto AMV: 122/122; desktop: 2/2 testes de persistência; typechecks de Auto AMV e desktop e build de produção Vite passaram. O bundle principal segue acima de 500 kB. Falta validação visual em WebView2, montagem editorial com mídia real autorizada e benchmark no hardware-alvo. |

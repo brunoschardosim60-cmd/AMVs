@@ -308,3 +308,14 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - A saída é renderizada em `.part`, decodificada e validada antes da promoção. Um destino anterior é guardado como `.backup` e restaurado se a promoção falhar; o log detalhado fica em `.log`. Cancelamento/falha não publica arquivo parcial.
 - A validação verifica duração, dimensões, FPS, codec, contagem integral de frames, um stream de áudio mixado, sincronização A/V e decodificação completa. `blackdetect` gera avisos apenas para trechos não explicados por gaps ou fades pretos da timeline; conteúdo visualmente escuro pode continuar exigindo revisão humana.
 - Motivo: não declarar sucesso para um arquivo que não passou por probe/decode e preservar o destino anterior, sem presumir suporte real a encoder de hardware só pela listagem do FFmpeg.
+
+## 2026-11-10 · Perfis criativos locais
+- Os perfis reutilizáveis ficam em `perfis-criativos.json` na pasta de dados do app, separados do `.amvproj`; três perfis padrão são imutáveis como modelos, e o usuário pode salvar cópias editáveis.
+- O arquivo é validado no carregamento e salvo por temporário + rename. Se estiver inválido, a UI informa o erro e desativa gravação para não destruir o arquivo.
+- Preferências de ação/emoção ajustam apenas sinais que o analisador já produziu. A emoção principal só pontua quando a visão tem confiança ≥0,55; 50/50 preserva o peso neutro de ação/emoção.
+- Motivo: perfis precisam ser reutilizáveis entre projetos sem inflar nem alterar o schema do projeto; não criar métricas ou afirmações sem evidência. Os perfis não substituem a seleção contextual de episódios, personagens, música e intervalo.
+
+## 2026-11-10 · Compensação do ducking na montagem automática
+- A montagem automática mantém a meta de atenuação de música em −16 dB durante falas escolhidas. Quando o ducking global está ativo e as trilhas de música/voz estão audíveis, os keyframes da música compensam o ducking global configurado; os dois ganhos em série não devem reduzir o sinal duas vezes.
+- Com ducking global desativado, os keyframes continuam fornecendo a atenuação de −16 dB. Trilhas mutadas ou isoladas (solo) respeitam o estado do mixer e não recebem compensação indevida.
+- Motivo: o render aplica os keyframes de volume e o ducking automático em filtros separados; sem compensação, o padrão de −16 dB mais −12 dB resultava em −28 dB durante a fala, enfraquecendo diálogos. A política permanece não destrutiva e usa a cadeia compartilhada de render.

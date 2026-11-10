@@ -8,3 +8,4 @@ export * from './transitions.js';
 export * from './sequence-planner.js';
 export * from './quality.js';
 export * from './regenerate.js';
+export * from './creative-profiles.js';

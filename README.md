@@ -36,10 +36,12 @@ packages/project    modelo do projeto, comandos, undo/redo, serialização
 packages/media      FFmpeg: probe, proxy, miniaturas, waveform, fila de jobs
 packages/render     projeto → FFmpeg (exportação), mesma matemática dos efeitos do preview
 packages/analysis   análise de música e de episódio, legendas (parse)
-packages/automv     Gerar meu AMV (montagem determinística por estilo)
+packages/automv     Gerar meu AMV (montagem por evidências, perfis criativos e qualidade)
 packages/subtitles  legendas na timeline (importar, puxar do episódio, exportar)
 packages/music      biblioteca de músicas e recomendação
 packages/assistant  assistente: provedores de IA, ferramentas, propostas (ChangeSet)
+packages/sfx        geração local de efeitos sonoros sintéticos
+packages/sound-design biblioteca e sugestões locais de sound design
 services/analyzer   sidecar Python de análise (opcional)
 scripts             fixtures sintéticas e download do FFmpeg
 ```
