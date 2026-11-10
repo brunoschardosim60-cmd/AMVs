@@ -6,7 +6,7 @@
  * usa os originais e é exata. O tempo do projeto é sempre a fonte da verdade.
  */
 import { drawTextLayer } from './textLayer';
-import { clipEndUs, evalClipLook, projectDurationUs, transitionUnderlay, type Clip, type ClipLook, type Project, type Track } from '@amv/project';
+import { clipEndUs, evalClipLook, evaluateKeyframes, projectDurationUs, transitionUnderlay, type Clip, type ClipLook, type Project, type Track } from '@amv/project';
 
 export interface MediaSource {
   /** URL do proxy de vídeo (vídeos) ou do arquivo/proxy de áudio. */
@@ -441,6 +441,7 @@ export class Player {
   /** Sincroniza (ou pré-carrega) e desenha um clipe de vídeo/imagem. */
   private drawClip(ctx: CanvasRenderingContext2D, c: Clip, t: number, look: ClipLook, k: number, used: Set<string>, active: boolean): void {
     if (!c.assetId) return;
+    const localS = (t - c.timelineStartUs) / 1e6;
     const asset = this.project.assets.find((a) => a.id === c.assetId);
     if (!asset) return;
     const kind = asset.kind === 'image' ? 'image' : 'video';
@@ -458,17 +459,20 @@ export class Player {
         const first = c.sourceInUs / 1e6;
         if (Math.abs(v.currentTime - first) > 0.05 && v.readyState >= 1 && !v.seeking) v.currentTime = first;
       }
-      if (active && v.readyState >= 2) this.drawMedia(ctx, v, v.videoWidth, v.videoHeight, c, k, look);
+      if (active && v.readyState >= 2) this.drawMedia(ctx, v, v.videoWidth, v.videoHeight, c, k, look, localS);
     } else if (active) {
       const img = slot.el as HTMLImageElement;
-      if (img.complete && img.naturalWidth) this.drawMedia(ctx, img, img.naturalWidth, img.naturalHeight, c, k, look);
+      if (img.complete && img.naturalWidth) this.drawMedia(ctx, img, img.naturalWidth, img.naturalHeight, c, k, look, localS);
     }
   }
 
-  private drawMedia(ctx: CanvasRenderingContext2D, src: CanvasImageSource, sw: number, sh: number, c: Clip, k: number, look: ClipLook): void {
+  private drawMedia(ctx: CanvasRenderingContext2D, src: CanvasImageSource, sw: number, sh: number, c: Clip, k: number, look: ClipLook, localS: number): void {
     if (!sw || !sh || look.alpha <= 0) return;
     const P = this.project.settings;
     const tr = c.transform;
+    const localUs = Math.round(localS * 1e6);
+    const x = evaluateKeyframes(c.keyframes['transform.x'], localUs, tr.x);
+    const y = evaluateKeyframes(c.keyframes['transform.y'], localUs, tr.y);
     const crop = tr.crop;
     let cw = sw * (1 - crop.left - crop.right);
     let ch = sh * (1 - crop.top - crop.bottom);
@@ -496,7 +500,7 @@ export class Player {
     if (look.contrast !== 1) filters.push(`contrast(${look.contrast})`);
     if (look.saturation !== 1) filters.push(`saturate(${look.saturation})`);
     if (filters.length) ctx.filter = filters.join(' ');
-    ctx.translate((P.width / 2 + tr.x + look.dx) * k, (P.height / 2 + tr.y + look.dy) * k);
+    ctx.translate((P.width / 2 + x + look.dx) * k, (P.height / 2 + y + look.dy) * k);
     if (tr.rotation) ctx.rotate((tr.rotation * Math.PI) / 180);
     if (look.rgbSplit > 0) {
       // canais deslocados: vermelho para um lado, azul para o outro

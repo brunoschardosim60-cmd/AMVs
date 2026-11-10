@@ -74,6 +74,13 @@ async function pixel(file: string, t: number): Promise<[number, number, number]>
   return [b[0]!, b[1]!, b[2]!];
 }
 
+async function pixelAt(file: string, t: number, x: number, y: number): Promise<[number, number, number]> {
+  const chunks: Uint8Array[] = [];
+  await runner.run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-ss', String(t), '-i', file, '-frames:v', '1', '-vf', `crop=8:8:${x}:${y},scale=1:1`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { onStdoutBytes: (b) => chunks.push(b) });
+  const b = Buffer.concat(chunks);
+  return [b[0]!, b[1]!, b[2]!];
+}
+
 async function rmsDb(file: string, start: number, dur: number): Promise<number> {
   const r = await runner.run('ffmpeg', ['-hide_banner', '-ss', String(start), '-t', String(dur), '-i', file, '-af', 'volumedetect', '-vn', '-f', 'null', '-']);
   const m = r.stderr.match(/mean_volume: (-?[\d.]+|-inf) dB/);
@@ -139,6 +146,24 @@ describe('exportação', () => {
     await renderProject(p, out, { width: 320, height: 180, enc: { codec: 'h264', quality: 0 }, audioBitrateK: 128 }, env(p, 'b'), () => undefined);
     // centro: branco 50% sobre vermelho ≈ (255,128,128)
     expect(near(await pixel(out, 0.5), [255, 128, 128], 45)).toBe(true);
+  });
+
+  it('anima posição entre keyframes no vídeo exportado', async () => {
+    const p = await project((p) => [
+      clip(track(p, 'V1'), 'rg', 0, 1 * S, 0, {
+        keyframes: {
+          'transform.x': [
+            { atUs: 0, value: -80, easing: 'linear' },
+            { atUs: 1 * S, value: 80, easing: 'ease-in' },
+          ],
+        },
+      }),
+    ]);
+    const out = join(dir, 'posicao-keyframe.mp4');
+    await renderProject(p, out, { width: 320, height: 180, enc: { codec: 'h264', quality: 0 }, audioBitrateK: 128 }, env(p, 'keyframes'), () => undefined);
+    expect(near(await pixelAt(out, 0.05, 16, 86), RED)).toBe(true);
+    expect(near(await pixelAt(out, 0.5, 300, 86), BLACK)).toBe(true);
+    expect(near(await pixelAt(out, 0.95, 16, 86), BLACK)).toBe(true);
   });
 
   it('clarão, dissolver e velocidade', async () => {

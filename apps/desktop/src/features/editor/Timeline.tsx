@@ -18,7 +18,7 @@ import {
   type Project,
   type Track,
 } from '@amv/project';
-import { Eye, EyeOff, Lock, LockOpen, Magnet, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronDown, ChevronUp, Eye, EyeOff, Lock, LockOpen, Magnet, Plus, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
@@ -26,6 +26,7 @@ import { IconButton } from '../../ui/controls';
 import { ignoreEditorKey, pxToUs, useEditor, usToPx, ZOOM_MAX, ZOOM_MIN } from './editorStore';
 import { useStrip, useWaveform } from './mediaCache';
 import { pickLevel } from '@amv/media';
+import { selectClipsInMarquee } from './timelineSelection';
 
 const HEADER_W = 168;
 const RULER_H = 26;
@@ -36,6 +37,7 @@ const EDGE_PX = 6;
 type Gesture =
   | { kind: 'move'; ids: string[]; startX: number; startY: number; originTrackIdx: number; deltaUs: number; trackShift: number; snapAt: number | null; moved: boolean }
   | { kind: 'trim'; id: string; edge: 'start' | 'end'; startX: number; toUs: number; snapAt: number | null }
+  | { kind: 'marquee'; startX: number; startY: number; endX: number; endY: number; initialSelection: string[]; moved: boolean }
   | { kind: 'scrub' }
   | null;
 
@@ -289,6 +291,27 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
       setPlayhead(Math.max(0, xToUs(e.clientX)));
       return;
     }
+    if (g.kind === 'marquee') {
+      const moved = g.moved || Math.abs(e.clientX - g.startX) > 3 || Math.abs(e.clientY - g.startY) > 3;
+      if (moved) {
+        const firstTrack = trackAtY(g.startY);
+        const lastTrack = trackAtY(e.clientY);
+        if (firstTrack >= 0 && lastTrack >= 0) {
+          select(
+            selectClipsInMarquee(
+              project,
+              Math.max(0, xToUs(g.startX)),
+              Math.max(0, xToUs(e.clientX)),
+              firstTrack,
+              lastTrack,
+              g.initialSelection,
+            ),
+          );
+        }
+      }
+      setGesture({ ...g, endX: e.clientX, endY: e.clientY, moved });
+      return;
+    }
     if (g.kind === 'trim') {
       const c = project.clips.find((x) => x.id === g.id)!;
       const base = g.edge === 'start' ? c.timelineStartUs : clipEndUs(c);
@@ -330,6 +353,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
     const g = gestureRef.current;
     setGesture(null);
     if (!g || g.kind === 'scrub') return;
+    if (g.kind === 'marquee') return;
     if (g.kind === 'trim') {
       try {
         run(g.edge === 'start' ? 'Aparar início' : 'Aparar fim', trimClip(project, g.id, g.edge, g.toUs));
@@ -460,6 +484,27 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
     select([id]);
   };
 
+  const addTrack = (kind: Track['kind']) => {
+    const sameKind = tracks.filter((track) => track.kind === kind);
+    const name = kind === 'video' ? `V${sameKind.length + 1}` : kind === 'text' ? `Texto ${sameKind.length + 1}` : `Áudio ${sameKind.length + 1}`;
+    const insertIndex = kind === 'video'
+      ? tracks.findIndex((track) => track.kind === 'video') >= 0 ? tracks.findIndex((track) => track.kind === 'video') : tracks.findIndex((track) => track.kind === 'text')
+      : tracks.findIndex((track) => track.kind === kind);
+    const index = insertIndex < 0 ? tracks.length : insertIndex;
+    run(`Adicionar trilha ${name}`, [{
+      type: 'track.add',
+      index,
+      track: { id: newId('trk'), kind, name, role: kind === 'audio' ? 'other' : null, locked: false, hidden: false, muted: false, solo: false, gainDb: 0 },
+    }]);
+  };
+
+  const moveTrack = (track: Track, direction: -1 | 1) => {
+    const ordered = tracks.map((item, index) => ({ item, index })).filter(({ item }) => item.kind === track.kind);
+    const position = ordered.findIndex(({ item }) => item.id === track.id);
+    const target = ordered[position + direction];
+    if (target) run('Reordenar trilha', [{ type: 'track.move', trackId: track.id, index: target.index }]);
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (ignoreEditorKey(e)) return;
@@ -480,7 +525,18 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
 
   // ---------------------------------------------------------------- render
   const preview = gesture?.kind === 'move' && gesture.moved ? moveTargets(gesture) : null;
-  const snapLine = gesture && gesture.kind !== 'scrub' ? gesture.snapAt : null;
+  const snapLine = gesture?.kind === 'move' || gesture?.kind === 'trim' ? gesture.snapAt : null;
+  const marqueeBox = (() => {
+    if (!gesture || gesture.kind !== 'marquee' || !gesture.moved) return null;
+    const el = scrollRef.current;
+    if (!el) return null;
+    const left = Math.max(0, usToPx(Math.max(0, xToUs(gesture.startX)), zoom));
+    const right = Math.max(0, usToPx(Math.max(0, xToUs(gesture.endX)), zoom));
+    const y = (clientY: number) => clientY - el.getBoundingClientRect().top + el.scrollTop - RULER_H;
+    const top = Math.max(0, Math.min(y(gesture.startY), y(gesture.endY)));
+    const bottom = Math.min(trackTops.total, Math.max(y(gesture.startY), y(gesture.endY)));
+    return { left: Math.min(left, right), top, width: Math.abs(right - left), height: Math.max(0, bottom - top) };
+  })();
 
   const clipBox = (c: Clip) => {
     let start = c.timelineStartUs;
@@ -530,6 +586,15 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
         <button type="button" className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-ink-soft hover:bg-raised hover:text-ink" onClick={addText} title="Adicionar texto no playhead (T)">
           <Type size={14} /> Texto
         </button>
+        <button type="button" className="flex items-center gap-1 rounded px-2 py-1 text-xs text-ink-soft hover:bg-raised hover:text-ink" onClick={() => addTrack('text')} title="Adicionar trilha de texto">
+          <Plus size={13} /> Faixa de texto
+        </button>
+        <button type="button" className="flex items-center gap-1 rounded px-2 py-1 text-xs text-ink-soft hover:bg-raised hover:text-ink" onClick={() => addTrack('video')} title="Adicionar camada de vídeo">
+          <Plus size={13} /> Vídeo
+        </button>
+        <button type="button" className="flex items-center gap-1 rounded px-2 py-1 text-xs text-ink-soft hover:bg-raised hover:text-ink" onClick={() => addTrack('audio')} title="Adicionar faixa de áudio">
+          <Plus size={13} /> Áudio
+        </button>
         <span className="tnum ml-auto pr-2 text-xs text-muted">
           {selection.length ? `${selection.length} selecionado(s) · ` : ''}duração {formatTimecode(durationUs, project.settings.fps)}
         </span>
@@ -541,6 +606,11 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
         onWheel={onWheel}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={() => {
+          const current = gestureRef.current;
+          if (current?.kind === 'marquee') select(current.initialSelection);
+          setGesture(null);
+        }}
         onPointerDown={(e) => {
           if (e.target === e.currentTarget) select([]);
         }}
@@ -555,10 +625,21 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
           {/* trilhas */}
           {tracks.map((t) => {
             const h = TRACK_H[t.kind];
+            const sameKind = tracks.filter((item) => item.kind === t.kind);
+            const trackPosition = sameKind.findIndex((item) => item.id === t.id);
             return (
               <div key={t.id} className="flex border-b border-line-soft" style={{ height: h }}>
                 <div className="sticky left-0 z-10 flex shrink-0 items-center gap-0.5 border-r border-line bg-panel px-2" style={{ width: HEADER_W }}>
                   <span className={`mr-auto truncate text-xs font-medium ${t.hidden || t.muted ? 'text-faint' : 'text-ink-soft'}`}>{t.name}</span>
+                  <IconButton label="Mover trilha para cima" className="size-6" disabled={trackPosition === 0} onClick={() => moveTrack(t, -1)}>
+                    <ChevronUp size={13} />
+                  </IconButton>
+                  <IconButton label="Mover trilha para baixo" className="size-6" disabled={trackPosition === sameKind.length - 1} onClick={() => moveTrack(t, 1)}>
+                    <ChevronDown size={13} />
+                  </IconButton>
+                  <IconButton label={t.locked ? 'Destrave para remover' : 'Remover trilha vazia'} className="size-6" disabled={t.locked || project.clips.some((clip) => clip.trackId === t.id)} onClick={() => run('Remover trilha vazia', [{ type: 'track.remove', trackId: t.id }])}>
+                    <Trash2 size={12} />
+                  </IconButton>
                   {t.kind === 'audio' ? (
                     <IconButton label={t.muted ? 'Ativar som' : 'Silenciar'} aria-pressed={t.muted} className={`size-6 ${t.muted ? 'text-warn' : ''}`} onClick={() => run(t.muted ? 'Ativar som da trilha' : 'Silenciar trilha', [{ type: 'track.update', trackId: t.id, patch: { muted: !t.muted } }])}>
                       {t.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
@@ -574,10 +655,23 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                 </div>
                 <div
                   className={`relative flex-1 ${t.locked ? 'bg-[repeating-linear-gradient(-45deg,transparent_0_6px,rgb(255_255_255/0.02)_6px_12px)]' : ''}`}
+                  title="Clique para posicionar o playhead; arraste para selecionar clipes. Shift/Ctrl adiciona à seleção."
                   onPointerDown={(e) => {
                     if (e.button === 0 && e.target === e.currentTarget) {
-                      select([]);
-                      startScrub(e);
+                      const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+                      const initialSelection = additive ? selection : [];
+                      if (!additive) select([]);
+                      setPlayhead(Math.max(0, xToUs(e.clientX)));
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                      setGesture({
+                        kind: 'marquee',
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        endX: e.clientX,
+                        endY: e.clientY,
+                        initialSelection,
+                        moved: false,
+                      });
                     }
                   }}
                 >
@@ -605,6 +699,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
               const width = Math.max(2, usToPx(box.dur, zoom));
               const sel = selection.includes(c.id);
               const missing = asset?.status === 'missing';
+              const keyTimes = [...new Set([...(c.keyframes['transform.x'] ?? []), ...(c.keyframes['transform.y'] ?? [])].map((keyframe) => keyframe.atUs))];
               return (
                 <div
                   key={c.id}
@@ -619,6 +714,9 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                 >
                   {t.kind === 'video' && asset?.kind === 'video' && width > 30 && <Thumbs clip={c} widthPx={width} zoom={zoom} session={session} height={h - 4} />}
                   {t.kind === 'audio' && <Waveform clip={c} widthPx={width} zoom={zoom} session={session} color="rgba(147, 200, 255, 0.85)" />}
+                  {keyTimes.map((atUs) => (
+                    <span key={atUs} aria-hidden="true" className="pointer-events-none absolute top-1 z-[2] size-1.5 rotate-45 bg-azure shadow-sm" style={{ left: usToPx(atUs, zoom) - 3 }} />
+                  ))}
                   <span className="relative z-[1] block truncate px-1.5 pt-0.5 text-2xs font-medium text-ink drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]">
                     {c.origin === 'ai' && <span className="mr-1 text-violet-strong">IA</span>}
                     {c.speed !== 1 && <span className="mr-1 text-warn">{c.speed}×</span>}
@@ -634,6 +732,14 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                 </div>
               );
             })}
+
+            {marqueeBox && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute z-10 border border-azure bg-azure/15"
+                style={marqueeBox}
+              />
+            )}
 
             {/* batidas da música: compassos mais fortes, drop destacado */}
             {zoom >= 8 &&

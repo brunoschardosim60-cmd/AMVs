@@ -43,6 +43,9 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Timeline: régua, trilhas, travar/ocultar/silenciar, zoom (Ctrl+roda, botões, "ajustar tudo"), miniaturas e forma de onda nos clipes | feito | app real no Linux (Xvfb) |
 | Arrastar mídia da biblioteca para a timeline (eventos de ponteiro, não HTML5 DnD) | feito | app real; bug de clipe duplicado achado e corrigido |
 | Arrastar clipes (entre trilhas do mesmo tipo), aparar pelas bordas, encaixe com linha guia | feito | app real |
+| Seleção retangular de clipes, adição e reordenação de trilhas por tipo | feito | testes da seleção; comando de reordenação com inverso testado; validação visual pendente |
+| Keyframes de posição X/Y com easing no preview, texto e FFmpeg | feito | testes da curva e teste de render com pixels em dois instantes; WebView2 pendente |
+| Preset de glitch editável e exclusão do runtime SAM2 do bundle | feito | componentes reutilizam efeitos com paridade existente; bundle Windows atualizado ainda não medido |
 | Preview: player sincronizado com proxies, composição em canvas (posição, escala, rotação, opacidade, recorte, texto) | feito | Chromium headless com vídeo de tempo gravado: quadro certo em 3 posições, incluindo tocando |
 | Revisão manual de cenas: prévia do trecho, ajuste de entrada/saída e montagem de vários em sequência | feito | painel Cenas usa proxy mudo; cada trecho entra como clipe separado, numa única ação de undo; typecheck/build |
 | Painel de propriedades: tempo, velocidade, deslizar origem, transformar, volume e fades | feito | app real |
@@ -82,6 +85,8 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Poucas cenas: divide slots na batida, sem buraco | feito | teste + bug real achado no app |
 | Gerar outra versão, versões guardadas e voltar | feito | teste de sessão + app real |
 | Selecionar vários episódios e identificar cenas/lutas por episódio para a montagem | feito | geração usa os episódios marcados; seleção Todos/Nenhum e contagem de cenas/lutas visíveis |
+| Direção narrativa musical aplicada às escolhas de cena | primeira fatia feita | seções, energia e drops existentes geram papéis narrativos que alteram o score e aparecem nas justificativas/resumo; testes cobrem faixa parcial, offset, seção sem dados e alinhamento entre tempo local e absoluto. Heurística ainda requer validação visual em mídia real e não entende semanticamente a história. |
+| Cenas escuras preservadas na seleção | feito | cena marcada como escura continua elegível; baixa luminosidade isolada não é motivo para removê-la. Teste de geração em `packages/automv`. |
 
 ## Fase 6 — Assistente (primeira versão)
 | Item | Estado | Como foi verificado |

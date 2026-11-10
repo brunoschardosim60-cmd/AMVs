@@ -6,6 +6,7 @@
 import { SFX_ANCHOR_S, SFX_DURATION_S, type SfxKind } from '@amv/sfx';
 import { impactScore, normLabel, pickAudioStreamByLanguage, shotKey, type EpisodeVision, type ShotVision, type Cue, type EpisodeAnalysis, type MusicAnalysis, type Sequence, type Shot, type SpeechSegment } from '@amv/analysis';
 import { defaultScale, newId, TextContentSchema, type Clip, type Command, type EffectInstance, type Project, type Track } from '@amv/project';
+import { narrativeAt, narrativeRoleLabel, planNarrative, type NarrativeBeat } from './narrative.js';
 import { styleDef, type StyleDef, type StyleId } from './styles.js';
 
 export interface EpisodeInput {
@@ -71,7 +72,7 @@ export interface GenerateOptions {
 
 export interface GenerateResult {
   commands: Command[];
-  summary: { clips: number; cuts: number; speech: string | null; musicRange: [number, number]; drop: number | null; focus: 'fight' | 'mix'; fights: string[]; voices: number; hitsSynced: number; sfx: number };
+  summary: { clips: number; cuts: number; speech: string | null; musicRange: [number, number]; drop: number | null; focus: 'fight' | 'mix'; fights: string[]; voices: number; hitsSynced: number; sfx: number; direction: NarrativeBeat[] };
   warnings: string[];
 }
 
@@ -603,6 +604,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const D = range[1] - range[0];
   const dropAbs = m.drops.map((d) => d + beatOffsetS).find((d) => d > range[0] + 1 && d < range[1] - 1) ?? null;
   const dropT = dropAbs === null ? null : dropAbs - range[0];
+  const direction = planNarrative(m, range, beatOffsetS);
   if (dropT === null) warnings.push('A música não tem um drop claro nesse trecho: a montagem segue a energia da música.');
   if (opts.style === 'letra' && !opts.lyrics?.length) warnings.push('Sem a letra com tempo (LRC), o estilo "letra" corta na batida mas não escreve as palavras. Importe a letra em Legendas.');
   const lang = opts.voiceLang ?? 'original';
@@ -712,7 +714,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       clipsMade++;
       t += len + 0.35;
     }
-    return { commands: cmds, summary: { clips: clipsMade, cuts: clipsMade, speech: chosen[0]?.s.text ?? null, musicRange: range, drop: dropT, focus: 'mix', fights: [], voices: chosen.length, hitsSynced: 0, sfx: 0 }, warnings };
+    return { commands: cmds, summary: { clips: clipsMade, cuts: clipsMade, speech: chosen[0]?.s.text ?? null, musicRange: range, drop: dropT, focus: 'mix', fights: [], voices: chosen.length, hitsSynced: 0, sfx: 0, direction }, warnings };
   }
 
   // ---------------------------------------------------------------- cortes na batida
@@ -721,7 +723,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const candidates: Candidate[] = [];
   const consider = (ep: EpisodeInput, shot: Shot) => {
     const id = `${ep.assetId}@${shot.startS}`;
-    if (exclude.has(id) || shot.endS - shot.startS < 0.25 || shot.tags.includes('escura')) return;
+    if (exclude.has(id) || shot.endS - shot.startS < 0.25) return;
     if (plan.wanted && !hasCharacter(ep, shot, plan.wanted)) return;
     candidates.push({ ep, shot, id, seq: fight ? seqKeyOf(ep, shot) : '' });
   };
@@ -737,7 +739,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     warnings.push(plan.wanted
       ? `Nenhuma cena analisada corresponde aos personagens selecionados (${[...plan.wanted].join(', ')}); não misturei outros personagens.`
       : 'Nenhuma cena analisada ainda: espere a análise dos episódios terminar.');
-    return { commands: cmds, summary: { clips: 0, cuts: 0, speech: null, musicRange: range, drop: dropT, focus: plan.mode, fights: [], voices: 0, hitsSynced: 0, sfx: 0 }, warnings };
+    return { commands: cmds, summary: { clips: 0, cuts: 0, speech: null, musicRange: range, drop: dropT, focus: plan.mode, fights: [], voices: 0, hitsSynced: 0, sfx: 0, direction }, warnings };
   }
   const { lowI, highI } = plan.fit;
   const boost = 0; // já embutido em plan.fit
@@ -798,6 +800,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
 
   for (const sl of fitSlots) {
     const len = sl.endS - sl.startS;
+    const narrativeBeat = narrativeAt(direction, (sl.startS + sl.endS) / 2);
     const target = Math.min(1, Math.max(0, lowI + (highI - lowI) * sl.energy + boost + (sl.isDrop ? 0.15 : 0)));
     let best: { c: Candidate; score: number; srcIn: number } | null = null;
     for (const c of candidates) {
@@ -807,6 +810,20 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       if (shotLen < len * 0.6) continue;
       const sceneIntensity = effectiveShotIntensity(c.ep, c.shot);
       let score = 1 - Math.abs(target - sceneIntensity) * 1.6;
+      if (narrativeBeat?.role === 'opening') {
+        if (c.shot.tags.includes('calma')) score += 0.18;
+        if (sceneIntensity > 0.82) score -= 0.12;
+      } else if (narrativeBeat?.role === 'build') {
+        if (c.shot.tags.includes('ação') && sceneIntensity >= 0.35) score += 0.08;
+      } else if (narrativeBeat?.role === 'climax') {
+        if (c.shot.tags.includes('impacto')) score += 0.2;
+        if (c.shot.tags.includes('ação')) score += 0.08;
+      } else if (narrativeBeat?.role === 'release') {
+        if (c.shot.tags.includes('calma')) score += 0.2;
+        if (sceneIntensity > 0.8) score -= 0.12;
+      } else if (narrativeBeat?.role === 'ending' && c.shot.motion < 0.45) {
+        score += 0.1;
+      }
       if (style.sceneBias === 'impact') {
         if (c.shot.tags.includes('impacto')) score += 0.32;
         if (c.shot.tags.includes('ação')) score += 0.12;
@@ -902,6 +919,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     }
     const transition = style.transition === 'dissolve' && clipsMade > 0 ? { transition: 'dissolve', durationUs: us(Math.min(0.6, len / 3)), params: {} } : null;
     const why = [
+      narrativeBeat ? `${narrativeRoleLabel(narrativeBeat.role)} (${narrativeBeat.section})` : null,
       sl.isDrop ? `Drop em ${fmt(sl.startS)}` : `${sl.section || 'trecho'} (energia ${sl.energy.toFixed(2)})`,
       `cena de ${c.shot.tags.join('/') || 'intensidade'} ${sceneIntensity.toFixed(2)}`,
       `${c.ep.name} ${fmt(c.shot.startS)}`,
@@ -1063,6 +1081,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       voices: blocks.length,
       hitsSynced: syncedHits,
       sfx: sfxCount,
+      direction,
     },
     warnings: [...new Set(warnings)],
   };

@@ -8,6 +8,7 @@ export * from './hash.js';
 export * from './timeline.js';
 export * from './edit.js';
 export * from './effects.js';
+export * from './keyframes.js';
 
 /** Efeitos sonoros que o app gera (impacto, whoosh…): ficam no projeto, mas fora das listas do usuário. */
 export const SFX_TAG = 'sfx';

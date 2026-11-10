@@ -79,6 +79,11 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - **Visão opcional e retomável**, separada da análise de ritmo (arquivo `vision-v1.json` por episódio): custa chamadas ao modelo, então só roda quando pedida; mostra custo antes; local (Ollama) não envia nada.
 - **Teste de interface real**: harness (`apps/desktop/dev`) roda o app num Chromium com ponte para FFmpeg/arquivos. Achou o botão Importar inclicável e a trilha Efeitos escondida, que a leitura de código não mostrou. Hipótese refutada: o `Dialog` não roubava foco.
 
+## 2026-11-09 · SAM2 fora do runtime distribuído
+- O código SAM2 e o extra Python `segmentation` continuam disponíveis para desenvolvimento, mas o empacotador de produção exclui SAM2, PyTorch, TorchVision, ONNX Runtime e checkpoints.
+- Motivo: o candidato foi reprovado visualmente como recortador confiável; carregar o runtime e pesos no instalador não entrega valor de usuário e aumenta muito o pacote. Nenhum ambiente, checkpoint ou arquivo existente foi apagado.
+- Reavaliar somente se um recortador passar validação visual e temporal; medir o bundle atualizado antes de quantificar a economia.
+
 ## 2026-11-08 · Escopo da análise visual
 - A visão oferece o modo rápido (prioriza lutas, 1 quadro por cena, até 120 cenas) e o detalhado (todas as cenas úteis, 3 quadros por cena, sem limite fixo).
 - No modo detalhado, rótulos antigos com uma amostra são reprocessados. A saída combina personagens e exige maioria clara para marcar luta.

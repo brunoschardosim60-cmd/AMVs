@@ -1,4 +1,4 @@
-import type { Clip, ClipLook } from '@amv/project';
+import { evaluateKeyframes, type Clip, type ClipLook } from '@amv/project';
 
 export const TEXT_ANIMATIONS_IN = [
   { id: '', label: 'Nenhuma' },
@@ -23,6 +23,8 @@ export function textIsAnimated(c: Clip): boolean {
     c.text?.animationIn ||
     c.text?.animationOut ||
     c.text?.wordTimings.length ||
+    c.keyframes['transform.x']?.length ||
+    c.keyframes['transform.y']?.length ||
     c.effects.some((f) => f.enabled && f.effect === 'shake') ||
     c.transitionIn
   );
@@ -167,9 +169,12 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   const longestLine = Math.max(0, ...lines.map((line) => line.width));
   const contentHeight = totalHeight + 2 * padding;
   const verticalLimit = Math.max(0, (projH / 2 - (t.marginY ?? 0)) * k - contentHeight / 2);
-  const centerY = Math.max(-verticalLimit, Math.min(verticalLimit, c.transform.y + look.dy + dy));
+  const atUs = Math.round(localS * 1e6);
+  const x = evaluateKeyframes(c.keyframes['transform.x'], atUs, c.transform.x);
+  const y = evaluateKeyframes(c.keyframes['transform.y'], atUs, c.transform.y);
+  const centerY = Math.max(-verticalLimit, Math.min(verticalLimit, y + look.dy + dy));
 
-  ctx.translate((projW / 2 + c.transform.x + look.dx) * k, (projH / 2 + centerY) * k);
+  ctx.translate((projW / 2 + x + look.dx) * k, (projH / 2 + centerY) * k);
   if (c.transform.rotation) ctx.rotate((c.transform.rotation * Math.PI) / 180);
 
   if (t.background === 'bar' || t.background === 'box') {

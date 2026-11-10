@@ -150,6 +150,27 @@ describe('gerar AMV — hype', () => {
     expect(drop.reason).toMatch(/impacto/);
   });
 
+  it('constrói arcada narrativa explícita e usa a fase para justificar a cena', () => {
+    const { r, on } = run();
+    expect(r.summary.direction.map((beat) => beat.role)).toContain('opening');
+    expect(r.summary.direction.map((beat) => beat.role)).toContain('climax');
+    expect(on('V1')[0]?.reason).toMatch(/Abertura/);
+    const earlyClip = on('V1').find((clip) => clip.timelineStartUs <= 10 * S && clipEndUs(clip) > 10 * S);
+    expect(earlyClip?.reason).toMatch(/Abertura/);
+    expect(on('V1').find((clip) => clip.timelineStartUs === 24 * S)?.reason).toMatch(/Clímax/);
+  });
+
+  it('não descarta uma cena escura só pelo brilho', () => {
+    const ep = episode('ep1', 1, 0);
+    ep.analysis.shots[0]!.tags = ['escura'];
+    const p = project();
+    const r = generateAmv(p, music(), [ep], { ...base, focus: 'mix', useSpeech: false, durationS: 4, musicStartS: 0 });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const videoTrack = out.tracks.find((track) => track.name === 'V1')!;
+    expect(out.clips.some((clip) => clip.trackId === videoTrack.id && clip.assetId === 'ep1')).toBe(true);
+    expect(r.warnings.some((warning) => warning.includes('Nenhuma cena analisada'))).toBe(false);
+  });
+
   it('fala marcante termina exatamente no drop, com a imagem do personagem e a música abaixada', () => {
     const { on, r } = run();
     const voice = on('Vozes');

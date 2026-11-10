@@ -1,4 +1,4 @@
-import { clipEndUs, defaultParams, isSfxAsset, EFFECTS, fillScale, formatTimecode, newId, param, sourceDurationUs, TRANSITIONS, trimClip, type Clip, type Command, type EffectId, type Project, type TextWordTiming } from '@amv/project';
+import { clipEndUs, defaultParams, isSfxAsset, EFFECTS, evaluateKeyframes, fillScale, formatTimecode, newId, param, removeKeyframeAt, sourceDurationUs, TRANSITIONS, trimClip, upsertKeyframe, type Clip, type Command, type EffectId, type Keyframe, type Project, type TextWordTiming } from '@amv/project';
 import { Eye, EyeOff, Pause, Play, Plus, RotateCcw, SkipForward, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { ProjectSession } from '../../core/session';
@@ -94,6 +94,7 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
   const track = project.tracks.find((t) => t.id === clip.trackId)!;
   const asset = clip.assetId ? project.assets.find((a) => a.id === clip.assetId) : null;
   const fps = project.settings.fps;
+  const playheadUs = useEditor((state) => state.playheadUs);
   const run = (label: string, cmds: Command[]) => {
     if (!cmds.length) return;
     try {
@@ -107,6 +108,35 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
   const visual = track.kind !== 'audio';
   const srcMax = sourceDurationUs(project, clip);
   const S = 1e6;
+  const keyframeAtUs = Math.max(0, Math.min(clip.durationUs, playheadUs - clip.timelineStartUs));
+  const positionX = evaluateKeyframes(clip.keyframes['transform.x'], keyframeAtUs, tr.x);
+  const positionY = evaluateKeyframes(clip.keyframes['transform.y'], keyframeAtUs, tr.y);
+  const hasXKeyframe = clip.keyframes['transform.x']?.some((keyframe) => keyframe.atUs === keyframeAtUs) ?? false;
+  const hasYKeyframe = clip.keyframes['transform.y']?.some((keyframe) => keyframe.atUs === keyframeAtUs) ?? false;
+  const setPosition = (axis: 'x' | 'y', value: number) => {
+    const path = `transform.${axis}`;
+    if (clip.keyframes[path]?.length) {
+      patch(`Animar posição ${axis.toUpperCase()}`, { keyframes: { ...clip.keyframes, [path]: upsertKeyframe(clip.keyframes[path], keyframeAtUs, value) } });
+    } else {
+      patch('Posição', { transform: { ...tr, [axis]: value } });
+    }
+  };
+  const togglePositionKeyframe = (axis: 'x' | 'y') => {
+    const path = `transform.${axis}`;
+    const keyframes = hasXKeyframe && axis === 'x' || hasYKeyframe && axis === 'y'
+      ? removeKeyframeAt(clip.keyframes[path], keyframeAtUs)
+      : upsertKeyframe(clip.keyframes[path], keyframeAtUs, axis === 'x' ? positionX : positionY);
+    patch(`${keyframes.some((keyframe) => keyframe.atUs === keyframeAtUs) ? 'Adicionar' : 'Remover'} quadro-chave ${axis.toUpperCase()}`, {
+      keyframes: { ...clip.keyframes, [path]: keyframes },
+    });
+  };
+  const setPositionEasing = (axis: 'x' | 'y', easing: Keyframe['easing']) => {
+    const path = `transform.${axis}`;
+    const keyframes = (clip.keyframes[path] ?? []).map((keyframe) =>
+      keyframe.atUs === keyframeAtUs ? { ...keyframe, easing } : keyframe,
+    );
+    patch(`Interpolação da posição ${axis.toUpperCase()}`, { keyframes: { ...clip.keyframes, [path]: keyframes } });
+  };
 
   return (
     <div className="text-sm">
@@ -157,10 +187,43 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
         </Section>
 
         {visual && (
-          <Section title="Transformar" onReset={() => patch('Redefinir transformação', { transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: tr.opacity, crop: { left: 0, top: 0, right: 0, bottom: 0 } } })}>
+          <Section title="Transformar" onReset={() => {
+            const keyframes = { ...clip.keyframes };
+            delete keyframes['transform.x'];
+            delete keyframes['transform.y'];
+            patch('Redefinir transformação', { transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: tr.opacity, crop: { left: 0, top: 0, right: 0, bottom: 0 } }, keyframes });
+          }}>
             <FitButtons session={session} project={project} ids={[clip.id]} />
-            <NumField label="Posição X" suffix="px" value={tr.x} step={1} digits={0} onCommit={(v) => patch('Posição', { transform: { ...tr, x: v } })} />
-            <NumField label="Posição Y" suffix="px" value={tr.y} step={1} digits={0} onCommit={(v) => patch('Posição', { transform: { ...tr, y: v } })} />
+            <NumField label="Posição X" suffix="px" value={positionX} step={1} digits={0} onCommit={(v) => setPosition('x', v)} />
+            <button type="button" className="mb-1 flex items-center gap-1 rounded px-1 py-1 text-2xs text-muted hover:bg-raised hover:text-ink" onClick={() => togglePositionKeyframe('x')} aria-label={`${hasXKeyframe ? 'Remover' : 'Adicionar'} quadro-chave X`}>
+              {hasXKeyframe ? <Trash2 size={11} /> : <Plus size={11} />}
+              {hasXKeyframe ? 'Remover chave X neste tempo' : 'Marcar X neste tempo'}
+            </button>
+            <label className="grid grid-cols-[1fr_120px] items-center gap-2 py-1 text-2xs">
+              <span className="text-muted">Interpolação X</span>
+              <select className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink" disabled={!hasXKeyframe} value={clip.keyframes['transform.x']?.find((keyframe) => keyframe.atUs === keyframeAtUs)?.easing ?? 'linear'} onChange={(e) => setPositionEasing('x', e.target.value as Keyframe['easing'])}>
+                <option value="linear">Linear</option>
+                <option value="hold">Manter</option>
+                <option value="ease-in">Ease in</option>
+                <option value="ease-out">Ease out</option>
+                <option value="ease-in-out">Suave</option>
+              </select>
+            </label>
+            <NumField label="Posição Y" suffix="px" value={positionY} step={1} digits={0} onCommit={(v) => setPosition('y', v)} />
+            <button type="button" className="mb-1 flex items-center gap-1 rounded px-1 py-1 text-2xs text-muted hover:bg-raised hover:text-ink" onClick={() => togglePositionKeyframe('y')} aria-label={`${hasYKeyframe ? 'Remover' : 'Adicionar'} quadro-chave Y`}>
+              {hasYKeyframe ? <Trash2 size={11} /> : <Plus size={11} />}
+              {hasYKeyframe ? 'Remover chave Y neste tempo' : 'Marcar Y neste tempo'}
+            </button>
+            <label className="grid grid-cols-[1fr_120px] items-center gap-2 py-1 text-2xs">
+              <span className="text-muted">Interpolação Y</span>
+              <select className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink" disabled={!hasYKeyframe} value={clip.keyframes['transform.y']?.find((keyframe) => keyframe.atUs === keyframeAtUs)?.easing ?? 'linear'} onChange={(e) => setPositionEasing('y', e.target.value as Keyframe['easing'])}>
+                <option value="linear">Linear</option>
+                <option value="hold">Manter</option>
+                <option value="ease-in">Ease in</option>
+                <option value="ease-out">Ease out</option>
+                <option value="ease-in-out">Suave</option>
+              </select>
+            </label>
             <NumField label="Escala" suffix="%" value={tr.scale * 100} min={1} max={1000} step={1} digits={1} onCommit={(v) => patch('Escala', { transform: { ...tr, scale: v / 100 } })} />
             <NumField label="Rotação" suffix="°" value={tr.rotation} step={1} digits={1} onCommit={(v) => patch('Rotação', { transform: { ...tr, rotation: v } })} />
             <NumField label="Opacidade" suffix="%" value={tr.opacity * 100} min={0} max={100} step={5} digits={0} onCommit={(v) => patch('Opacidade', { transform: { ...tr, opacity: v / 100 } })} />
@@ -395,11 +458,21 @@ function TextSection({ clip, patch }: { clip: Clip; patch: (label: string, p: Pa
 
 function EffectsSection({ clip, patch }: { clip: Clip; patch: (label: string, p: Partial<Clip>) => void }) {
   const add = (id: EffectId) => patch(`Adicionar ${EFFECTS.find((e) => e.id === id)!.label}`, { effects: [...clip.effects, { id: newId('fx'), effect: id, enabled: true, params: defaultParams(id) }] });
+  const impactGlitchAdded = (['rgb_split', 'shake', 'flash'] as const).every((effect) => clip.effects.some((instance) => instance.effect === effect));
+  const addImpactGlitch = () => {
+    const effects: EffectId[] = ['rgb_split', 'shake', 'flash'];
+    patch('Adicionar preset Glitch de impacto', {
+      effects: [...clip.effects, ...effects.map((effect) => ({ id: newId('fx'), effect, enabled: true, params: defaultParams(effect) }))],
+    });
+  };
   const update = (fxId: string, p: Partial<Clip['effects'][number]>, label: string) => patch(label, { effects: clip.effects.map((f) => (f.id === fxId ? { ...f, ...p } : f)) });
   const groups = [...new Set(EFFECTS.map((e) => e.group))];
   return (
     <Section title="Efeitos">
       {clip.effects.length === 0 && <p className="mb-2 text-xs text-muted">Nenhum efeito. Experimente um clarão ou zoom no corte do drop.</p>}
+      <button type="button" disabled={impactGlitchAdded} className="mb-2 w-full rounded-control border border-violet/40 bg-violet/10 px-2 py-1.5 text-left text-xs text-ink-soft hover:bg-violet/20 disabled:cursor-not-allowed disabled:opacity-50" onClick={addImpactGlitch}>
+        {impactGlitchAdded ? 'Glitch de impacto já adicionado' : 'Glitch de impacto'} <span className="text-muted">· RGB + tremida + clarão, editáveis</span>
+      </button>
       {clip.effects.map((fx) => {
         const def = EFFECTS.find((e) => e.id === fx.effect);
         if (!def) return null;

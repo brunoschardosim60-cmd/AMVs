@@ -2,7 +2,7 @@
  * Comando do FFmpeg para UMA janela do plano. Usa os arquivos ORIGINAIS.
  * As fórmulas espelham `evalClipLook` / `clipRamps` de @amv/project.
  */
-import { clipRamps, param, type Clip, type Project, type Rational, type Ramp } from '@amv/project';
+import { clipRamps, orderedKeyframes, param, type Clip, type Keyframe, type Project, type Rational, type Ramp } from '@amv/project';
 import type { Layer, Window } from './plan.js';
 
 export interface AssetSource {
@@ -26,6 +26,28 @@ export interface WindowJob {
 
 const n = (v: number, d = 6) => Number(v.toFixed(d)).toString();
 const even = (v: number) => Math.max(2, 2 * Math.round(v / 2));
+
+function keyframeExpr(keyframes: Keyframe[] | undefined, fallback: number, T: string): string {
+  const sorted = orderedKeyframes(keyframes);
+  if (!sorted.length) return n(fallback);
+  let expression = n(sorted.at(-1)!.value);
+  for (let i = sorted.length - 1; i > 0; i--) {
+    const previous = sorted[i - 1]!;
+    const next = sorted[i]!;
+    const endS = next.atUs / 1e6;
+    const spanS = (next.atUs - previous.atUs) / 1e6;
+    const t = `clip(((${T})-${n(previous.atUs / 1e6)})/${n(spanS)},0,1)`;
+    const eased =
+      next.easing === 'hold' ? '0' :
+      next.easing === 'ease-in' ? `((${t})*(${t}))` :
+      next.easing === 'ease-out' ? `(1-(1-(${t}))*(1-(${t})))` :
+      next.easing === 'ease-in-out' ? `(0.5-0.5*cos(PI*(${t})))` : t;
+    const value = `(${n(previous.value)}+(${n(next.value - previous.value)})*${eased})`;
+    expression = `if(lt(${T},${n(endS)}),${value},${expression})`;
+  }
+  const first = sorted[0]!;
+  return `if(lt(${T},${n(first.atUs / 1e6)}),${n(first.value)},${expression})`;
+}
 
 export function encodingArgs(enc: VideoEncoding, fps: Rational): string[] {
   const g = String(Math.max(1, Math.round((2 * fps.num) / fps.den)));
@@ -216,8 +238,10 @@ export function windowArgs(o: WindowInput): WindowJob {
     // posição: centro + deslocamento + tremida (tempo da janela t → local t+L0)
     const T = `t+${n(L0)}`;
     // texto: a imagem já tem o quadro inteiro com a posição desenhada
-    const x = c.text ? (textBaked ? '0' : `(${shakeExpr(c, T, 'x')})*${n(kx)}`) : `(W-w)/2+${n(tr.x * kx)}+(${shakeExpr(c, T, 'x')})*${n(kx)}`;
-    const y = c.text ? (textBaked ? '0' : `(${shakeExpr(c, T, 'y')})*${n(kx)}`) : `(H-h)/2+${n(tr.y * kx)}+(${shakeExpr(c, T, 'y')})*${n(kx)}`;
+    const animatedX = keyframeExpr(c.keyframes['transform.x'], tr.x, T);
+    const animatedY = keyframeExpr(c.keyframes['transform.y'], tr.y, T);
+    const x = c.text ? (textBaked ? '0' : `(${shakeExpr(c, T, 'x')})*${n(kx)}`) : `(W-w)/2+(${animatedX})*${n(kx)}+(${shakeExpr(c, T, 'x')})*${n(kx)}`;
+    const y = c.text ? (textBaked ? '0' : `(${shakeExpr(c, T, 'y')})*${n(kx)}`) : `(H-h)/2+(${animatedY})*${n(kx)}+(${shakeExpr(c, T, 'y')})*${n(kx)}`;
     overlayOnto(lbl, x, y);
 
     // camadas de cor (clarão, fades, mergulho) por cima do clipe

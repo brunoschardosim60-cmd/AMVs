@@ -26,6 +26,7 @@ describe('comandos', () => {
       { type: 'asset.update', assetId: v.id, patch: { status: 'missing' } },
       { type: 'asset.remove', assetId: v.id },
       { type: 'track.update', trackId: v1.id, patch: { muted: true, name: 'Principal' } },
+      { type: 'track.move', trackId: v1.id, index: 0 },
       { type: 'track.remove', trackId: v1.id },
       {
         type: 'marker.add',
@@ -38,6 +39,13 @@ describe('comandos', () => {
       const back = applyCommand(r.project, r.inverse).project;
       expect(back, cmd.type).toEqual(withClip);
     }
+  });
+
+  it('reordena trilhas sem mover os clipes e o undo restaura a ordem Z', () => {
+    const { p, v1 } = setup();
+    const moved = applyCommand(p, { type: 'track.move', trackId: v1.id, index: 0 });
+    expect(moved.project.tracks[0]?.id).toBe(v1.id);
+    expect(applyCommand(moved.project, moved.inverse).project).toEqual(p);
   });
 
   it('remover mídia remove os clipes dela, e o undo devolve tudo na mesma posição', () => {

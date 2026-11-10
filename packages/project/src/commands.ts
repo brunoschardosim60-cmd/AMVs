@@ -25,6 +25,7 @@ export type Command =
   | { type: 'asset.update'; assetId: string; patch: Partial<Omit<Asset, 'id'>> }
   | { type: 'track.add'; track: Track; index?: number }
   | { type: 'track.remove'; trackId: string }
+  | { type: 'track.move'; trackId: string; index: number }
   | { type: 'track.update'; trackId: string; patch: Partial<Omit<Track, 'id'>> }
   | { type: 'clip.add'; clip: Clip; index?: number }
   | { type: 'clip.remove'; clipId: string }
@@ -188,6 +189,19 @@ export function applyCommand(project: Project, command: Command): ApplyResult {
       };
     }
 
+    case 'track.move': {
+      const from = findIndex(project.tracks, command.trackId, 'trilha');
+      if (!Number.isInteger(command.index)) throw new CommandError('a posição da trilha precisa ser um inteiro');
+      const index = Math.max(0, Math.min(project.tracks.length - 1, command.index));
+      const tracks = project.tracks.slice();
+      const [track] = tracks.splice(from, 1);
+      tracks.splice(index, 0, track!);
+      return {
+        project: { ...project, tracks },
+        inverse: { type: 'track.move', trackId: command.trackId, index: from },
+      };
+    }
+
     case 'track.update': {
       const index = findIndex(project.tracks, command.trackId, 'trilha');
       const before = project.tracks[index]!;
@@ -320,6 +334,8 @@ export function describeCommand(command: Command): string {
       return `Adicionar trilha ${command.track.name}`;
     case 'track.remove':
       return 'Remover trilha';
+    case 'track.move':
+      return 'Reordenar trilha';
     case 'track.update':
       return 'Alterar trilha';
     case 'clip.add':
