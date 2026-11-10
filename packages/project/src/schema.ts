@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** Versão atual do formato `.amvproj`. Toda mudança incrementa e ganha uma migração. */
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 const us = z.number().int().safe();
 const nonNegUs = us.nonnegative();
@@ -132,16 +132,49 @@ export const KeyframeSchema = z.object({
   easing: z.enum(['linear', 'hold', 'ease-in', 'ease-out', 'ease-in-out']).default('linear'),
 });
 
+export const TextWordTimingSchema = z
+  .object({
+    text: z.string().min(1),
+    startUs: nonNegUs,
+    endUs: us.positive(),
+    source: z.enum(['ass', 'lrc', 'whisper', 'manual', 'estimated']).default('manual'),
+    confidence: z.number().min(0).max(1).nullable().default(null),
+    uncertain: z.boolean().default(false),
+    color: z.string().nullable().optional(),
+    scale: z.number().positive().nullable().optional(),
+    offsetX: z.number().nullable().optional(),
+    offsetY: z.number().nullable().optional(),
+    weight: z.number().int().min(100).max(900).nullable().optional(),
+  })
+  .refine((word) => word.endUs > word.startUs, {
+    message: 'endUs precisa ser maior que startUs',
+    path: ['endUs'],
+  });
+
 export const TextContentSchema = z.object({
   text: z.string(),
   font: z.string().default('Inter'),
   size: z.number().positive().default(64),
   color: z.string().default('#ffffff'),
+  weight: z.number().int().min(100).max(900).default(700),
   outlineColor: z.string().nullable().default(null),
   outlineWidth: z.number().nonnegative().default(0),
   shadow: z.boolean().default(false),
   animationIn: z.string().nullable().default(null),
   animationOut: z.string().nullable().default(null),
+  background: z.enum(['none', 'bar', 'box', 'full']).default('none'),
+  backgroundOpacity: z.number().min(0).max(1).default(0.72),
+  alignment: z.enum(['left', 'center', 'right']).default('center'),
+  maxWidthRatio: z.number().min(0.2).max(1).default(0.9),
+  marginX: z.number().nonnegative().default(48),
+  marginY: z.number().nonnegative().default(36),
+  padding: z.number().nonnegative().default(24),
+  lineSpacing: z.number().min(0.8).max(2).default(1.18),
+  letterSpacing: z.number().min(-10).max(40).default(0),
+  highlightColor: z.string().default('#ffd166'),
+  highlightScale: z.number().min(1).max(2).default(1.12),
+  timingPrecision: z.enum(['segment', 'word', 'manual']).nullable().default(null),
+  wordTimings: z.array(TextWordTimingSchema).default([]),
   /** Legenda traduzida: o texto de antes da tradução (para voltar ou traduzir de novo). */
   original: z.string().optional(),
   /** Idioma do `text` atual (ex.: `en`), quando foi traduzido. */
@@ -248,6 +281,7 @@ export type AssetStatus = z.infer<typeof AssetStatusSchema>;
 export type Track = z.infer<typeof TrackSchema>;
 export type TrackKind = z.infer<typeof TrackKindSchema>;
 export type Clip = z.infer<typeof ClipSchema>;
+export type TextWordTiming = z.infer<typeof TextWordTimingSchema>;
 export type EffectInstance = z.infer<typeof EffectInstanceSchema>;
 export type Marker = z.infer<typeof MarkerSchema>;
 export type ProjectSettings = z.infer<typeof ProjectSettingsSchema>;

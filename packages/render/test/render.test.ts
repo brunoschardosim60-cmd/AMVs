@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CancelledError, probeFile } from '@amv/media';
 import { NodeRunner, nodeFs } from '@amv/media/src/node';
-import { applyCommand, createProject, newId, type Asset, type Clip, type Command, type Project } from '@amv/project';
+import { applyCommand, createProject, newId, TextContentSchema, type Asset, type Clip, type Command, type Project } from '@amv/project';
 import { planWindows, renderProject, gainCurve, atempoChain, type RenderEnv } from '../src/index.js';
 
 const runner = new NodeRunner();
@@ -217,7 +217,7 @@ describe('exportação', () => {
       const base = (start: number, extra: Partial<Clip>) =>
         clip(track(p, 'Legendas'), '', start, 1 * S, 0, {
           assetId: null,
-          text: { text: 'Oi', font: 'Inter', size: 40, color: '#fff', outlineColor: null, outlineWidth: 0, shadow: false, animationIn: null, animationOut: null },
+          text: TextContentSchema.parse({ text: 'Oi', font: 'Inter', size: 40, color: '#fff', outlineColor: null, outlineWidth: 0, shadow: false, animationIn: null, animationOut: null }),
           ...extra,
         });
       return [clip(track(p, 'V1'), 'rg', 0, 2 * S, 0, { sourceOutUs: 2 * S }), base(0, {}), base(1 * S, { label: 'seq' })];

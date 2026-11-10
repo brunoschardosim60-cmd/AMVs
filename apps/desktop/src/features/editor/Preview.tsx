@@ -52,6 +52,9 @@ export function Preview({ session, project }: { session: ProjectSession; project
   // liga o canvas ao player
   useEffect(() => {
     const cv = canvasRef.current!;
+    const offAudioError = player.onAudioError((error) => {
+      useApp.getState().toast({ tone: 'warn', title: 'Áudio do preview indisponível', body: error.message });
+    });
     player.attach(cv);
     const offTime = player.onTime((us) => {
       if (player.isPlaying) useEditor.getState().setPlayhead(us);
@@ -60,6 +63,7 @@ export function Preview({ session, project }: { session: ProjectSession; project
     return () => {
       offTime();
       offEnd();
+      offAudioError();
       player.pause();
       player.detach();
     };

@@ -1,6 +1,7 @@
 """Build and smoke-test the bundled Windows analyzer runtime."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
@@ -18,6 +19,41 @@ REPO = ROOT.parent.parent
 RESOURCE_ROOT = REPO / "apps" / "desktop" / "src-tauri" / "resources"
 OUTPUT = RESOURCE_ROOT / "analyzer"
 WORK = ROOT / "build" / "pyinstaller"
+CHECKPOINT = ROOT / "build" / "models" / "sam2.1_hiera_tiny.pt"
+CHECKPOINT_URL = "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt"
+CHECKPOINT_SHA256 = "7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69"
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as checkpoint:
+        while chunk := checkpoint.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def ensure_checkpoint() -> None:
+    if CHECKPOINT.is_file():
+        if sha256_file(CHECKPOINT) == CHECKPOINT_SHA256:
+            return
+        CHECKPOINT.unlink()
+
+    CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
+    partial = CHECKPOINT.with_suffix(".pt.part")
+    digest = hashlib.sha256()
+    request = urllib.request.Request(CHECKPOINT_URL, headers={"User-Agent": "AMV-Studio"})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response, partial.open("wb") as output:
+            while chunk := response.read(1024 * 1024):
+                output.write(chunk)
+                digest.update(chunk)
+    except Exception:
+        partial.unlink(missing_ok=True)
+        raise
+    if digest.hexdigest() != CHECKPOINT_SHA256:
+        partial.unlink(missing_ok=True)
+        raise RuntimeError("checksum SHA-256 do checkpoint SAM 2.1 Tiny não confere")
+    partial.replace(CHECKPOINT)
 
 
 def build() -> None:
@@ -26,6 +62,7 @@ def build() -> None:
     if OUTPUT.exists():
         shutil.rmtree(OUTPUT)
     RESOURCE_ROOT.mkdir(parents=True, exist_ok=True)
+    ensure_checkpoint()
     command = [
         sys.executable,
         "-m",
@@ -53,10 +90,18 @@ def build() -> None:
         "--collect-all",
         "av",
         "--collect-all",
+        "sam2",
+        "--collect-binaries",
+        "torch",
+        "--collect-binaries",
+        "torchvision",
+        "--collect-all",
         "onnxruntime",
         str(ROOT / "package_entry.py"),
     ]
     subprocess.run(command, cwd=ROOT, check=True)
+    (OUTPUT / "models").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(CHECKPOINT, OUTPUT / "models" / CHECKPOINT.name)
     (OUTPUT / ".gitkeep").touch()
 
 
@@ -97,6 +142,10 @@ def smoke_test() -> None:
             modules = json.loads(response.read())
         if not modules.get("speech", {}).get("available"):
             raise RuntimeError("faster-whisper não está disponível no runtime empacotado")
+        if not modules.get("segmentation", {}).get("available"):
+            raise RuntimeError("SAM 2 não está disponível no runtime empacotado")
+        if not (OUTPUT / "models" / CHECKPOINT.name).is_file():
+            raise RuntimeError("o checkpoint SAM 2.1 Tiny não foi empacotado")
         from faster_whisper.audio import decode_audio
 
         with tempfile.TemporaryDirectory(prefix="amv-analyzer-smoke-") as directory:

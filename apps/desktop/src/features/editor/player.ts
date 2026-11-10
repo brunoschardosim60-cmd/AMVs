@@ -21,6 +21,8 @@ interface Slot {
   kind: 'video' | 'audio' | 'image';
   url: string;
   lastUsed: number;
+  sourceNode: MediaElementAudioSourceNode | null;
+  gainNode: GainNode | null;
 }
 
 /** Margem para pré-carregar o próximo clipe antes de ele começar. */
@@ -48,7 +50,7 @@ export function activeClips(project: Project, atUs: number, track: Track): Clip 
   return null;
 }
 
-/** Ganho efetivo (0..1) de um clipe de áudio no instante, com fades. */
+/** Ganho linear de um clipe de áudio no instante, incluindo fades e ganho da trilha. */
 export function clipVolume(clip: Clip, track: Track, atUs: number, anySolo: boolean): number {
   if (track.muted || (anySolo && !track.solo)) return 0;
   const db = clip.audio.gainDb + track.gainDb + keyframeGainDb(clip, atUs - clip.timelineStartUs);
@@ -57,8 +59,7 @@ export function clipVolume(clip: Clip, track: Track, atUs: number, anySolo: bool
   const left = clipEndUs(clip) - atUs;
   if (clip.audio.fadeInUs > 0 && into < clip.audio.fadeInUs) v *= into / clip.audio.fadeInUs;
   if (clip.audio.fadeOutUs > 0 && left < clip.audio.fadeOutUs) v *= left / clip.audio.fadeOutUs;
-  // elementos de mídia só aceitam 0..1; ganho acima de 0 dB fica para o mixer (Fase 3)
-  return Math.max(0, Math.min(1, v));
+  return Math.max(0, v);
 }
 
 /** Ganho extra (dB) dos keyframes "audio.gainDb" no tempo local — interpolação linear em amplitude, como no render. */
@@ -88,8 +89,12 @@ export class Player {
   private clockStartPerf = 0;
   private pausedAtUs = 0;
   private ctx: CanvasRenderingContext2D | null = null;
+  private audioContext: AudioContext | null = null;
+  private audioLimiter: DynamicsCompressorNode | null = null;
   private listeners = new Set<(us: number) => void>();
   private endListeners = new Set<() => void>();
+  private audioErrorListeners = new Set<(error: Error) => void>();
+  private reportedAudioErrors = new Set<string>();
 
   constructor(
     project: Project,
@@ -133,6 +138,11 @@ export class Player {
     return () => this.endListeners.delete(l);
   }
 
+  onAudioError(l: (error: Error) => void): () => void {
+    this.audioErrorListeners.add(l);
+    return () => this.audioErrorListeners.delete(l);
+  }
+
   get isPlaying(): boolean {
     return this.playing;
   }
@@ -166,6 +176,7 @@ export class Player {
     this.pausedAtUs = this.timeUs;
     this.playing = false;
     for (const s of this.slots.values()) if (s.kind !== 'image') (s.el as HTMLMediaElement).pause();
+    this.suspendAudioContext();
   }
 
   // ------------------------------------------------------------ elementos
@@ -202,17 +213,84 @@ export class Player {
       if (m instanceof HTMLVideoElement) {
         m.muted = true; // vídeo nas trilhas de vídeo é só imagem; o som vem das trilhas de áudio
         m.playsInline = true;
+      } else {
+        m.volume = 1;
+      }
+      let sourceNode: MediaElementAudioSourceNode | null = null;
+      let gainNode: GainNode | null = null;
+      if (kind === 'audio') {
+        try {
+          ({ sourceNode, gainNode } = this.connectAudio(m));
+        } catch (error) {
+          this.reportAudioError(error, 'Não foi possível preparar o áudio do preview');
+          return null;
+        }
       }
       m.src = url;
       el = m;
+      const slot: Slot = { clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode, gainNode };
+      this.slots.set(clip.id, slot);
+      this.evict();
+      return slot;
     }
-    const slot: Slot = { clipId: clip.id, el, kind, url, lastUsed: performance.now() };
+    const slot: Slot = { clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode: null, gainNode: null };
     this.slots.set(clip.id, slot);
     this.evict();
     return slot;
   }
 
+  private connectAudio(element: HTMLMediaElement): { sourceNode: MediaElementAudioSourceNode; gainNode: GainNode } {
+    const context = this.ensureAudioContext();
+    const limiter = this.audioLimiter;
+    if (!limiter) throw new Error('O limitador do preview não foi inicializado.');
+    const sourceNode = context.createMediaElementSource(element);
+    const gainNode = context.createGain();
+    try {
+      sourceNode.connect(gainNode);
+      gainNode.connect(limiter);
+    } catch (error) {
+      sourceNode.disconnect();
+      gainNode.disconnect();
+      throw error;
+    }
+    return { sourceNode, gainNode };
+  }
+
+  private ensureAudioContext(): AudioContext {
+    if (this.audioContext && this.audioLimiter) return this.audioContext;
+    const context = new AudioContext();
+    const limiter = context.createDynamicsCompressor();
+    limiter.threshold.value = -0.3;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.05;
+    limiter.connect(context.destination);
+    this.audioContext = context;
+    this.audioLimiter = limiter;
+    return context;
+  }
+
+  private reportAudioError(error: unknown, context: string): void {
+    const detail = error instanceof Error ? error.message : String(error);
+    const message = `${context}: ${detail}`;
+    if (this.reportedAudioErrors.has(message)) return;
+    this.reportedAudioErrors.add(message);
+    const report = new Error(message);
+    console.error(report);
+    for (const listener of this.audioErrorListeners) listener(report);
+  }
+
+  private suspendAudioContext(): void {
+    const context = this.audioContext;
+    if (context?.state === 'running') {
+      void context.suspend().catch((error: unknown) => this.reportAudioError(error, 'Não foi possível pausar o áudio do preview'));
+    }
+  }
+
   private release(s: Slot): void {
+    s.sourceNode?.disconnect();
+    s.gainNode?.disconnect();
     if (s.kind !== 'image') {
       const m = s.el as HTMLMediaElement;
       m.pause();
@@ -230,13 +308,29 @@ export class Player {
     }
   }
 
-  private syncMedia(m: HTMLMediaElement, clip: Clip, atUs: number, volume: number | null): void {
+  private syncMedia(m: HTMLMediaElement, clip: Clip, atUs: number, volume: number | null, gainNode: GainNode | null = null): void {
     const target = sourceTimeS(clip, atUs);
-    if (volume !== null) m.volume = volume;
+    if (volume !== null) {
+      const context = this.audioContext;
+      if (!gainNode || !context) {
+        this.reportAudioError(new Error('O clipe de áudio não tem um caminho de ganho ativo.'), 'Áudio do preview indisponível');
+        m.volume = 0;
+      } else {
+        m.volume = 1;
+        gainNode.gain.setTargetAtTime(volume, context.currentTime, 0.015);
+      }
+    }
     if (this.playing) {
+      if (this.audioContext?.state === 'suspended') {
+        void this.audioContext.resume().catch((error: unknown) => this.reportAudioError(error, 'Não foi possível iniciar o áudio do preview'));
+      }
       if (m.playbackRate !== clip.speed) m.playbackRate = clip.speed;
       if (Math.abs(m.currentTime - target) > DRIFT_PLAYING_S && m.readyState >= 1) m.currentTime = target;
-      if (m.paused) void m.play().catch(() => undefined);
+      if (m.paused) {
+        void m.play().catch((error: unknown) => {
+          if (volume !== null) this.reportAudioError(error, 'Não foi possível reproduzir o áudio do preview');
+        });
+      }
     } else {
       if (!m.paused) m.pause();
       if (Math.abs(m.currentTime - target) > DRIFT_PAUSED_S && !m.seeking && m.readyState >= 1) m.currentTime = target;
@@ -279,7 +373,7 @@ export class Player {
         if (!slot) continue;
         used.add(c.id);
         const m = slot.el as HTMLMediaElement;
-        if (t >= c.timelineStartUs) this.syncMedia(m, c, t, clipVolume(c, track, t, anySolo));
+        if (t >= c.timelineStartUs) this.syncMedia(m, c, t, clipVolume(c, track, t, anySolo), slot.gainNode);
         else {
           // pré-carregado: parado no primeiro quadro
           if (!m.paused) m.pause();

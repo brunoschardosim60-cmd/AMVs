@@ -5,7 +5,7 @@
  */
 import { SFX_ANCHOR_S, SFX_DURATION_S, type SfxKind } from '@amv/sfx';
 import { impactScore, normLabel, pickAudioStreamByLanguage, shotKey, type EpisodeVision, type ShotVision, type Cue, type EpisodeAnalysis, type MusicAnalysis, type Sequence, type Shot, type SpeechSegment } from '@amv/analysis';
-import { defaultScale, newId, type Clip, type Command, type EffectInstance, type Project, type Track } from '@amv/project';
+import { defaultScale, newId, TextContentSchema, type Clip, type Command, type EffectInstance, type Project, type Track } from '@amv/project';
 import { styleDef, type StyleDef, type StyleId } from './styles.js';
 
 export interface EpisodeInput {
@@ -81,8 +81,9 @@ interface Slot {
   energy: number;
   section: string;
   isDrop: boolean;
-  /** Palavra da letra que entra neste corte (estilo letra). */
+  /** Palavra com tempo próprio da letra; só existe quando a fonte traz tempo por palavra. */
   word?: string;
+  wordTiming?: NonNullable<Cue['words']>[number];
   lyricCueKey?: string;
 }
 
@@ -136,24 +137,26 @@ export function chooseMusicRange(m: MusicAnalysis, durationS: number, startS: nu
 export function makeSlots(m: MusicAnalysis, range: [number, number], style: StyleDef, intensity: number, lyrics?: Cue[], beatOffsetS = 0): Slot[] {
   const [a, b] = range;
   const drop = m.drops.map((d) => d + beatOffsetS).find((d) => d > a + 1 && d < b - 1) ?? null;
-  // estilo letra com letra: um corte por palavra (palavras distribuídas na duração da linha)
+  // Só usa cortes por palavra quando a legenda tem tempos de palavra reais/importados.
   if (style.id === 'letra' && lyrics?.length) {
-    const words: { t: number; w: string; cueKey: string }[] = [];
+    const words: { t: number; endS: number; w: string; cueKey: string; timing: NonNullable<Cue['words']>[number] }[] = [];
     for (const c of lyrics) {
       if (!Number.isFinite(c.startS) || c.endS <= a || c.startS >= b) continue;
-      const ws = c.text.replace(/\n/g, ' ').split(/\s+/).filter(Boolean);
-      const step = (c.endS - c.startS) / Math.max(1, ws.length);
-      ws.forEach((w, i) => words.push({ t: c.startS + i * step, w, cueKey: lyricCueKey(c) }));
+      for (const timing of c.words ?? []) {
+        if (timing.endS <= a || timing.startS >= b || !timing.text.trim()) continue;
+        words.push({ t: Math.max(a, timing.startS), endS: Math.min(b, timing.endS), w: timing.text, cueKey: lyricCueKey(c), timing });
+      }
     }
+    words.sort((left, right) => left.t - right.t);
     if (words.length >= 2) {
       const slots: Slot[] = [];
       if (words[0]!.t > a + 0.2) slots.push({ startS: 0, endS: words[0]!.t - a, energy: energyAt(m, a), section: 'intro', isDrop: false });
       let lastEnd = a;
       words.forEach((w, i) => {
         // palavra fica no máximo ~1,5 s; depois da última, volta a cortar na batida
-        const end = Math.min(b, words[i + 1]?.t ?? w.t + 1.5, w.t + 1.5);
+        const end = Math.min(b, words[i + 1]?.t ?? w.endS, w.endS, w.t + 1.5);
         if (end - w.t < 0.12) return;
-        slots.push({ startS: w.t - a, endS: end - a, energy: energyAt(m, w.t), section: sectionAt(m, w.t)?.label ?? '', isDrop: drop !== null && Math.abs(w.t - drop) < 0.15, word: w.w, lyricCueKey: w.cueKey });
+        slots.push({ startS: w.t - a, endS: end - a, energy: energyAt(m, w.t), section: sectionAt(m, w.t)?.label ?? '', isDrop: drop !== null && Math.abs(w.t - drop) < 0.15, word: w.w, wordTiming: w.timing, lyricCueKey: w.cueKey });
         lastEnd = end;
       });
       if (lastEnd < b - 0.3) {
@@ -476,42 +479,67 @@ function gradeFx(grade: StyleDef['grade']): EffectInstance[] {
   return [];
 }
 
-function textClip(trackId: string, startS: number, durS: number, text: string, H: number, kind: 'word' | 'line', reason: string, highlight = false, impact = 0): Clip {
+function textClip(
+  trackId: string,
+  startS: number,
+  durS: number,
+  text: string,
+  H: number,
+  kind: 'word' | 'line',
+  reason: string,
+  highlight = false,
+  impact = 0,
+  timing?: NonNullable<Cue['words']>[number][],
+  preset: 'lyrics-cinematic' | 'dialogue-dramatic' = kind === 'word' ? 'lyrics-cinematic' : 'dialogue-dramatic',
+): Clip {
   const word = kind === 'word';
+  const startUs = Math.round(startS * 1e6);
+  const endUs = startUs + Math.max(40_000, Math.round(durS * 1e6));
+  const wordTimings = (timing ?? []).flatMap((item) => {
+    const a = Math.max(startUs, Math.round(item.startS * 1e6));
+    const b = Math.min(endUs, Math.round(item.endS * 1e6));
+    if (b <= a) return [];
+    return [{
+      text: item.text,
+      startUs: a - startUs,
+      endUs: b - startUs,
+      source: item.source,
+      confidence: item.confidence ?? null,
+      uncertain: item.uncertain ?? (item.confidence != null && item.confidence < 0.78),
+    }];
+  });
+  const isLyrics = preset === 'lyrics-cinematic';
   return baseClip(trackId, null, startS, durS, 0, reason, {
-    transform: { x: 0, y: word ? 0 : Math.round(H * 0.36), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
-    text: {
+    transform: { x: 0, y: word ? 0 : Math.round(H * (isLyrics ? 0.22 : 0.28)), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
+    text: TextContentSchema.parse({
       text: word ? text.toUpperCase() : text,
       font: 'Manrope Variable',
-      size: Math.round(H * (word ? 0.105 : 0.043 * (1 + 0.35 * Math.max(0, Math.min(1, impact))))),
+      size: Math.round(H * (word ? 0.105 : (isLyrics ? 0.09 : 0.062) * (1 + 0.25 * Math.max(0, Math.min(1, impact))))),
+      weight: word ? 900 : isLyrics ? 800 : 700,
       color: highlight ? '#fff0a6' : '#ffffff',
       outlineColor: '#000000',
-      outlineWidth: word ? 4 : 3,
+      outlineWidth: word ? 5 : 3,
       shadow: true,
       animationIn: 'pop',
       animationOut: 'fade',
-    },
+      background: isLyrics ? 'none' : 'box',
+      backgroundOpacity: 0.78,
+      alignment: 'center',
+      maxWidthRatio: 0.86,
+      marginX: Math.round(H * 0.06),
+      marginY: Math.round(H * 0.04),
+      padding: Math.round(H * 0.025),
+      highlightColor: highlight ? '#fff0a6' : '#ffd166',
+      highlightScale: 1.18,
+      timingPrecision: wordTimings.length ? 'word' : 'segment',
+      wordTimings,
+    }),
   });
-}
-
-function captionPhrases(text: string, durationS: number, maxWords = 3): string[] {
-  const words = text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
-  if (!words.length) return [];
-  const maxGroups = Math.max(1, Math.floor(durationS / 0.4));
-  const groupCount = Math.min(Math.ceil(words.length / maxWords), maxGroups);
-  const groupSize = Math.ceil(words.length / groupCount);
-  const groups: string[] = [];
-  for (let i = 0; i < words.length; i += groupSize) groups.push(words.slice(i, i + groupSize).join(' '));
-  return groups;
 }
 
 function addCaptionPhrases(commands: Command[], trackId: string, startS: number, durationS: number, text: string, height: number, reason: string, impact = 0): void {
-  const phrases = captionPhrases(text, durationS);
-  if (!phrases.length) return;
-  const step = durationS / phrases.length;
-  phrases.forEach((phrase, index) => {
-    commands.push({ type: 'clip.add', clip: textClip(trackId, startS + index * step, step, phrase, height, 'line', reason, false, impact) });
-  });
+  if (!text.trim() || durationS <= 0) return;
+  commands.push({ type: 'clip.add', clip: textClip(trackId, startS, durationS, text, height, 'line', reason, false, impact, undefined, 'dialogue-dramatic') });
 }
 
 /** Gera a montagem. Não mexe em nada: devolve os comandos para aplicar (um único desfazer). */
@@ -890,7 +918,12 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const clip = baseClip(v1.id, c.ep.assetId, sl.startS, len, srcIn, why, { speed, sourceOutUs: us(srcIn) + us(srcLen), effects, transitionIn: transition, confidence: Math.max(0, Math.min(1, best.score)) });
     clip.sourceOutUs = clip.sourceInUs + Math.round(clip.durationUs * speed);
     cmds.push({ type: 'clip.add', clip });
-    if (opts.showText && text && sl.word) cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra', sl.isDrop) });
+    if (opts.showText && text && sl.word) {
+      const timing = sl.wordTiming
+        ? [{ ...sl.wordTiming, startS: sl.startS, endS: sl.endS }]
+        : undefined;
+      cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra', sl.isDrop, 0, timing, 'lyrics-cinematic') });
+    }
     used.add(c.id);
     cutsLog.push({ startS: sl.startS, len, energy: sl.energy, intensity: c.shot.intensity, isDrop: sl.isDrop, hitAtS: hit ? sl.startS + (c.shot.peakS - srcIn) / speed : null, ...(sl.lyricCueKey ? { lyricCueKey: sl.lyricCueKey } : {}), ...(lyricMatch ? { lyricMatchScore: lyricMatch.score, lyricMatchReason: lyricMatch.reason } : {}) });
     prev = c;
@@ -1002,17 +1035,16 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         skippedLyrics++;
         continue;
       }
-      const phrases = captionPhrases(c.text, b - a, 4);
-      if (phrases.length) {
-        const step = (b - a) / phrases.length;
-        const reason = lyricSceneMatch ? `Letra da música · ${lyricSceneMatch.lyricMatchReason}` : 'Letra da música';
-        phrases.forEach((phrase, index) => {
-          cmds.push({
-            type: 'clip.add',
-            clip: textClip(text.id, a + index * step, step, phrase, H, 'line', reason, true, Math.max(impactScore(c.text), lyricSceneMatch?.lyricMatchScore ?? 0)),
-          });
-        });
-      }
+      const reason = lyricSceneMatch ? `Letra da música · ${lyricSceneMatch.lyricMatchReason}` : 'Letra da música';
+      const wordTimings = c.words?.map((word) => ({
+        ...word,
+        startS: word.startS - range[0],
+        endS: word.endS - range[0],
+      }));
+      cmds.push({
+        type: 'clip.add',
+        clip: textClip(text.id, a, b - a, c.text, H, 'line', reason, true, Math.max(impactScore(c.text), lyricSceneMatch?.lyricMatchScore ?? 0), wordTimings, 'lyrics-cinematic'),
+      });
     }
   }
   if (skippedLyrics) warnings.push(`${skippedLyrics} trecho(s) de letra foram omitidos para evitar sobreposição com falas ou momentos de impacto.`);

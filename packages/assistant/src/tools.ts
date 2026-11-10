@@ -1,6 +1,6 @@
 import type { EpisodeAnalysis, MusicAnalysis, Shot } from '@amv/analysis';
 import { generateAmv, STYLES, type StyleId } from '@amv/automv';
-import { applyCommand, clipEndUs, newId, splitClip, type Clip, type Command, type EffectInstance, type Project } from '@amv/project';
+import { applyCommand, clipEndUs, newId, splitClip, TextContentSchema, type Clip, type Command, type EffectInstance, type Project } from '@amv/project';
 import type { ChangeItem, ChangeSet } from './changeset.js';
 
 const S = 1_000_000;
@@ -334,7 +334,7 @@ export function proposeSpeechBeforeDrop(ctx: AssistantContext, args: { text?: st
   const items = [a];
   if (text && line.text && !p.clips.some((c) => c.trackId === text.id && c.timelineStartUs / S < drop && clipEndUs(c) / S > at)) {
     const H = p.settings.height;
-    const tclip: Clip = { ...vclip, id: newId('clp'), trackId: text.id, assetId: null, sourceInUs: 0, sourceOutUs: us(len), audio: { ...vclip.audio, gainDb: 0 }, transform: { ...vclip.transform, y: Math.round(H * 0.36) }, text: { text: line.text, font: 'Manrope Variable', size: Math.round(H * 0.05), color: '#ffffff', outlineColor: '#000000', outlineWidth: 3, shadow: true, animationIn: 'fade', animationOut: 'fade' }, reason: 'Legenda da fala' };
+    const tclip: Clip = { ...vclip, id: newId('clp'), trackId: text.id, assetId: null, sourceInUs: 0, sourceOutUs: us(len), audio: { ...vclip.audio, gainDb: 0 }, transform: { ...vclip.transform, y: Math.round(H * 0.36) }, text: TextContentSchema.parse({ text: line.text, font: 'Manrope Variable', size: Math.round(H * 0.05), color: '#ffffff', outlineColor: '#000000', outlineWidth: 3, shadow: true, animationIn: 'fade', animationOut: 'fade', timingPrecision: 'segment' }), reason: 'Legenda da fala' };
     items.push(item('add', `Legenda "${line.text}"`, us(at), [{ type: 'clip.add', clip: tclip }], [a.id]));
   }
   // abaixa a música durante a fala

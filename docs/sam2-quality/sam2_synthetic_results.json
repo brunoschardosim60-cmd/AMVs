@@ -1,0 +1,56 @@
+{
+  "model": "SAM 2.1 Hiera Tiny",
+  "checkpoint": "sam2.1_hiera_tiny.pt",
+  "device": "CPU",
+  "sample_fps": 1,
+  "resolution": "256x256",
+  "frames": [
+    {
+      "duration_s": 10,
+      "frames": 10,
+      "sample_fps": 1,
+      "elapsed_s": 41.684,
+      "sec_per_frame": 4.168,
+      "processed_fps": 0.24,
+      "mean_iou_synthetic_only": 0.8715,
+      "min_iou": 0.8506,
+      "frames_iou_below_0_75": 0,
+      "heuristic_review_frames": [],
+      "peak_working_set_mib_sampled": null
+    },
+    {
+      "duration_s": 30,
+      "frames": 30,
+      "sample_fps": 1,
+      "elapsed_s": 134.638,
+      "sec_per_frame": 4.488,
+      "processed_fps": 0.223,
+      "mean_iou_synthetic_only": 0.0635,
+      "min_iou": 0.0491,
+      "frames_iou_below_0_75": 30,
+      "heuristic_review_frames": [],
+      "peak_working_set_mib_sampled": null
+    },
+    {
+      "duration_s": 60,
+      "frames": 60,
+      "sample_fps": 1,
+      "elapsed_s": 301.461,
+      "sec_per_frame": 5.024,
+      "processed_fps": 0.199,
+      "mean_iou_synthetic_only": 0.4424,
+      "min_iou": 0.3807,
+      "frames_iou_below_0_75": 60,
+      "heuristic_review_frames": [],
+      "peak_working_set_mib_sampled": null
+    }
+  ],
+  "process_peak_working_set_mib_sampled": 2000.5,
+  "memory_sample_count": 17,
+  "comparison": [
+    "sam2_synthetic_10s_comparison.png",
+    "sam2_synthetic_30s_comparison.png",
+    "sam2_synthetic_60s_comparison.png"
+  ],
+  "note": "Synthetic animation only; not anime validation. Memory peak is for the full benchmark process, not per job."
+}

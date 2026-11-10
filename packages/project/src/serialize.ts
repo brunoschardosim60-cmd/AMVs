@@ -8,7 +8,42 @@ export type Migration = (raw: Record<string, unknown>) => Record<string, unknown
  * Ex.: MIGRATIONS[1] converte um projeto v1 em v2.
  * Toda migração nova precisa de teste em test/serialize.test.ts.
  */
-export const MIGRATIONS: Record<number, Migration> = {};
+function migrateTextTypographyV1(raw: Record<string, unknown>): Record<string, unknown> {
+  const clips = Array.isArray(raw.clips) ? raw.clips : [];
+  return {
+    ...raw,
+    clips: clips.map((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+      const clip = value as Record<string, unknown>;
+      if (!clip.text || typeof clip.text !== 'object' || Array.isArray(clip.text)) return clip;
+      const text = clip.text as Record<string, unknown>;
+      return {
+        ...clip,
+        text: {
+          weight: 700,
+          background: 'none',
+          backgroundOpacity: 0.72,
+          alignment: 'center',
+          maxWidthRatio: 0.9,
+          marginX: 48,
+          marginY: 36,
+          padding: 24,
+          lineSpacing: 1.18,
+          letterSpacing: 0,
+          highlightColor: '#ffd166',
+          highlightScale: 1.12,
+          timingPrecision: null,
+          wordTimings: [],
+          ...text,
+        },
+      };
+    }),
+  };
+}
+
+export const MIGRATIONS: Record<number, Migration> = {
+  1: migrateTextTypographyV1,
+};
 
 export type ParseResult =
   | { ok: true; project: Project; migratedFrom: number | null; warnings: string[] }

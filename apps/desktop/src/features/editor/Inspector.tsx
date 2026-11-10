@@ -1,5 +1,5 @@
-import { clipEndUs, defaultParams, isSfxAsset, EFFECTS, fillScale, formatTimecode, newId, param, sourceDurationUs, TRANSITIONS, trimClip, type Clip, type Command, type EffectId, type Project } from '@amv/project';
-import { Eye, EyeOff, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { clipEndUs, defaultParams, isSfxAsset, EFFECTS, fillScale, formatTimecode, newId, param, sourceDurationUs, TRANSITIONS, trimClip, type Clip, type Command, type EffectId, type Project, type TextWordTiming } from '@amv/project';
+import { Eye, EyeOff, Pause, Play, Plus, RotateCcw, SkipForward, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
@@ -230,7 +230,7 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
                 </select>
               </label>
             )}
-            <p className="mt-1 text-2xs text-muted">No preview o volume vai até 0 dB e toca a 1ª faixa; a exportação usa o ganho e a faixa escolhidos.</p>
+            <p className="mt-1 text-2xs text-muted">O preview aplica ganho acima de 0 dB com compressão de pico. A seleção de faixa de áudio ainda só vale na exportação; o preview usa a faixa incluída no proxy.</p>
           </Section>
         )}
       </fieldset>
@@ -241,8 +241,35 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
 function TextSection({ clip, patch }: { clip: Clip; patch: (label: string, p: Partial<Clip>) => void }) {
   const t = clip.text!;
   const [text, setText] = useState(t.text);
+  const [wordIndex, setWordIndex] = useState(0);
+  const playheadUs = useEditor((state) => state.playheadUs);
+  const playing = useEditor((state) => state.playing);
+  const setPlayhead = useEditor((state) => state.setPlayhead);
+  const setPlaying = useEditor((state) => state.setPlaying);
+  const words = t.wordTimings ?? [];
+  const word = words[wordIndex];
   useEffect(() => setText(t.text), [t.text]);
   const set = (label: string, p: Partial<NonNullable<Clip['text']>>) => patch(label, { text: { ...t, ...p } });
+  useEffect(() => {
+    if (!playing || !word) return;
+    if (playheadUs >= clip.timelineStartUs + word.endUs) setPlaying(false);
+  }, [clip.timelineStartUs, playheadUs, playing, setPlaying, word]);
+  const updateWord = (label: string, values: Partial<TextWordTiming>) => {
+    if (!word) return;
+    const updated = words.map((item, index) =>
+      index === wordIndex
+        ? { ...item, ...values, ...(values.startUs !== undefined || values.endUs !== undefined ? { source: 'manual' as const, confidence: 1, uncertain: false } : {}) }
+        : item,
+    );
+    set(label, { wordTimings: updated, timingPrecision: 'manual' });
+  };
+  const seekWord = (index: number, play: boolean) => {
+    const selected = words[index];
+    if (!selected) return;
+    setWordIndex(index);
+    setPlayhead(clip.timelineStartUs + selected.startUs);
+    setPlaying(play);
+  };
   return (
     <Section title="Texto">
       <textarea
@@ -253,10 +280,36 @@ function TextSection({ clip, patch }: { clip: Clip; patch: (label: string, p: Pa
         aria-label="Texto"
       />
       <NumField label="Tamanho" suffix="px" value={t.size} min={8} max={400} step={2} digits={0} onCommit={(v) => set('Tamanho do texto', { size: v })} />
+      <NumField label="Peso" value={t.weight ?? 700} min={100} max={900} step={100} digits={0} onCommit={(v) => set('Peso da fonte', { weight: Math.round(v / 100) * 100 })} />
       <label className="grid grid-cols-[1fr_96px] items-center gap-2 py-1 text-xs">
         <span className="text-muted">Cor</span>
         <input type="color" className="h-7 w-full rounded-control border border-line bg-base" value={t.color} onChange={(e) => set('Cor do texto', { color: e.target.value })} />
       </label>
+      <label className="grid grid-cols-[1fr_140px] items-center gap-2 py-1 text-xs">
+        <span className="text-muted">Fundo</span>
+        <select className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink" value={t.background ?? 'none'} onChange={(e) => set('Fundo do texto', { background: e.target.value as NonNullable<typeof t.background> })}>
+          <option value="none">Sem fundo</option>
+          <option value="bar">Faixa preta</option>
+          <option value="box">Caixa translúcida</option>
+          <option value="full">Tela preta</option>
+        </select>
+      </label>
+      {(t.background === 'box' || t.background === 'bar') && (
+        <NumField label="Opacidade do fundo" suffix="%" value={t.backgroundOpacity * 100} min={0} max={100} step={5} digits={0} onCommit={(v) => set('Opacidade do fundo', { backgroundOpacity: v / 100 })} />
+      )}
+      <label className="grid grid-cols-[1fr_140px] items-center gap-2 py-1 text-xs">
+        <span className="text-muted">Alinhamento</span>
+        <select className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink" value={t.alignment} onChange={(e) => set('Alinhamento do texto', { alignment: e.target.value as NonNullable<typeof t.alignment> })}>
+          <option value="left">Esquerda</option>
+          <option value="center">Centro</option>
+          <option value="right">Direita</option>
+        </select>
+      </label>
+      <NumField label="Largura máxima" suffix="%" value={t.maxWidthRatio * 100} min={20} max={100} step={5} digits={0} onCommit={(v) => set('Largura máxima do texto', { maxWidthRatio: v / 100 })} />
+      <NumField label="Margem lateral" suffix="px" value={t.marginX} min={0} max={500} step={8} digits={0} onCommit={(v) => set('Margem lateral', { marginX: v })} />
+      <NumField label="Margem vertical" suffix="px" value={t.marginY} min={0} max={500} step={8} digits={0} onCommit={(v) => set('Margem vertical', { marginY: v })} />
+      <NumField label="Espaço entre linhas" suffix="×" value={t.lineSpacing} min={0.8} max={2} step={0.05} digits={2} onCommit={(v) => set('Espaço entre linhas', { lineSpacing: v })} />
+      <NumField label="Espaço entre letras" suffix="px" value={t.letterSpacing} min={-10} max={40} step={1} digits={0} onCommit={(v) => set('Espaço entre letras', { letterSpacing: v })} />
       <label className="grid grid-cols-[1fr_96px] items-center gap-2 py-1 text-xs">
         <span className="text-muted">Contorno</span>
         <input type="color" className="h-7 w-full rounded-control border border-line bg-base" value={t.outlineColor ?? '#000000'} onChange={(e) => set('Cor do contorno', { outlineColor: e.target.value, outlineWidth: t.outlineWidth || 3 })} />
@@ -266,6 +319,11 @@ function TextSection({ clip, patch }: { clip: Clip; patch: (label: string, p: Pa
         <span className="text-muted">Sombra</span>
         <input type="checkbox" className="accent-violet" checked={t.shadow} onChange={(e) => set('Sombra', { shadow: e.target.checked })} />
       </label>
+      <label className="grid grid-cols-[1fr_96px] items-center gap-2 py-1 text-xs">
+        <span className="text-muted">Cor da palavra ativa</span>
+        <input type="color" className="h-7 w-full rounded-control border border-line bg-base" value={t.highlightColor ?? '#ffd166'} onChange={(e) => set('Cor da palavra ativa', { highlightColor: e.target.value })} />
+      </label>
+      <NumField label="Escala da palavra ativa" suffix="×" value={t.highlightScale} min={1} max={2} step={0.05} digits={2} onCommit={(v) => set('Escala da palavra ativa', { highlightScale: v })} />
       <label className="grid grid-cols-[1fr_140px] items-center gap-2 py-1 text-xs">
         <span className="text-muted">Entrada</span>
         <select className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink" value={t.animationIn ?? ''} onChange={(e) => set('Animação de entrada', { animationIn: e.target.value || null })}>
@@ -286,6 +344,51 @@ function TextSection({ clip, patch }: { clip: Clip; patch: (label: string, p: Pa
           ))}
         </select>
       </label>
+      {words.length > 0 ? (
+        <div className="mt-3 border-t border-line-soft pt-2">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs font-semibold text-ink-soft">Sincronização por palavra</span>
+            <span className="text-2xs text-faint">{word?.source === 'manual' ? 'editada' : word?.source === 'ass' ? 'ASS' : word?.source === 'lrc' ? 'LRC' : 'Whisper · revisar'}</span>
+          </div>
+          <div className="mb-2 flex gap-1">
+            <button type="button" className="flex h-7 flex-1 items-center justify-center gap-1 rounded-control border border-line bg-base text-2xs hover:bg-hover" onClick={() => seekWord(wordIndex, true)} disabled={!word}>
+              {playing ? <Pause size={12} /> : <Play size={12} />} Ouvir palavra
+            </button>
+            <button type="button" aria-label="Próxima palavra" title="Próxima palavra" className="grid size-7 place-items-center rounded-control border border-line bg-base hover:bg-hover" onClick={() => seekWord(Math.min(wordIndex + 1, words.length - 1), false)} disabled={wordIndex >= words.length - 1}>
+              <SkipForward size={13} />
+            </button>
+          </div>
+          <div className="max-h-28 space-y-0.5 overflow-y-auto rounded-control border border-line-soft p-1">
+            {words.map((item, index) => (
+              <button key={`${item.startUs}-${index}`} type="button" className={`flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-2xs ${index === wordIndex ? 'bg-violet/15 text-ink' : 'text-muted hover:bg-hover'}`} onClick={() => seekWord(index, false)}>
+                <span className="min-w-0 flex-1 truncate">{item.text}</span>
+                <span className="tnum shrink-0">{(item.startUs / 1e6).toFixed(2)}–{(item.endUs / 1e6).toFixed(2)}s</span>
+                {(item.uncertain || (item.confidence !== null && item.confidence < 0.78)) && <span className="text-amber-300">incerta</span>}
+              </button>
+            ))}
+          </div>
+          {word && (
+            <div className="mt-2 space-y-0.5">
+              <NumField label="Início relativo" suffix="s" value={word.startUs / 1e6} min={0} max={clip.durationUs / 1e6} step={0.01} digits={2} onCommit={(v) => updateWord('Ajustar início da palavra', { startUs: Math.min(Math.round(v * 1e6), word.endUs - 1) })} />
+              <NumField label="Fim relativo" suffix="s" value={word.endUs / 1e6} min={0.001} max={clip.durationUs / 1e6} step={0.01} digits={2} onCommit={(v) => updateWord('Ajustar fim da palavra', { endUs: Math.max(Math.round(v * 1e6), word.startUs + 1) })} />
+              <label className="grid grid-cols-[1fr_96px] items-center gap-2 py-1 text-xs">
+                <span className="text-muted">Cor desta palavra</span>
+                <input type="color" className="h-7 w-full rounded-control border border-line bg-base" value={word.color ?? t.color} onChange={(e) => updateWord('Cor da palavra', { color: e.target.value })} />
+              </label>
+              <NumField label="Escala desta palavra" suffix="×" value={word.scale ?? 1} min={0.5} max={3} step={0.05} digits={2} onCommit={(v) => updateWord('Escala da palavra', { scale: v })} />
+              <NumField label="Deslocamento X" suffix="px" value={word.offsetX ?? 0} min={-500} max={500} step={4} digits={0} onCommit={(v) => updateWord('Deslocamento X da palavra', { offsetX: v })} />
+              <NumField label="Deslocamento Y" suffix="px" value={word.offsetY ?? 0} min={-500} max={500} step={4} digits={0} onCommit={(v) => updateWord('Deslocamento Y da palavra', { offsetY: v })} />
+              <NumField label="Peso desta palavra" value={word.weight ?? t.weight} min={100} max={900} step={100} digits={0} onCommit={(v) => updateWord('Peso da palavra', { weight: Math.round(v / 100) * 100 })} />
+            </div>
+          )}
+        </div>
+      ) : (
+        <p className="mt-2 text-2xs text-muted">
+          {t.timingPrecision === 'segment'
+            ? 'Sincronizada como frase/segmento. Este arquivo não trouxe tempos por palavra; o editor não os inventa.'
+            : 'Sem tempos por palavra. Importe ASS karaokê ou transcreva com timestamps Whisper para revisar palavra a palavra.'}
+        </p>
+      )}
     </Section>
   );
 }

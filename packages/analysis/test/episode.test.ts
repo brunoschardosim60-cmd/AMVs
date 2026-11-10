@@ -104,10 +104,32 @@ describe('legendas', () => {
     expect(parseVtt('WEBVTT\n\n00:01.000 --> 00:02.500\nOi\n')).toEqual([{ startS: 1, endS: 2.5, text: 'Oi' }]);
     const ass = `[Script Info]\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:02.00,0:00:04.50,Default,,0,0,0,,{\\i1}Eu sou o mais forte,\\Nlembre disso\nDialogue: 0,0:00:03.00,0:00:05.00,Sign,,0,0,0,,PLACA\n`;
     expect(parseAss(ass)).toEqual([{ startS: 2, endS: 4.5, text: 'Eu sou o mais forte,\nlembre disso' }]);
+    const karaoke = '[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:02.00,0:00:04.50,Karaoke,,0,0,0,,{\\k30}Eu {\\k20}vou {\\kf40}vencer!\n';
+    expect(parseAss(karaoke)).toEqual([{
+      startS: 2,
+      endS: 4.5,
+      text: 'Eu vou vencer!',
+      words: [
+        { text: 'Eu', startS: 2, endS: 2.3, source: 'ass', confidence: 1 },
+        { text: 'vou', startS: 2.3, endS: 2.5, source: 'ass', confidence: 1 },
+        { text: 'vencer', startS: 2.5, endS: 2.9, source: 'ass', confidence: 1 },
+      ],
+    }]);
     expect(parseLrc('[00:12.00]Primeira\n[00:15.50]Segunda', 20)).toEqual([
       { startS: 12, endS: 15.5, text: 'Primeira' },
       { startS: 15.5, endS: 20, text: 'Segunda' },
     ]);
+    expect(parseLrc('[00:12.00]<00:12.00>Eu <00:12.30>vou <00:12.50>vencer!\n[00:13.00]Outro verso', 20)[0]).toEqual({
+      startS: 12,
+      endS: 13,
+      text: 'Eu vou vencer!',
+      words: [
+        { startS: 12, endS: 12.3, text: 'Eu', source: 'lrc' },
+        { startS: 12.3, endS: 12.5, text: 'vou', source: 'lrc' },
+        { startS: 12.5, endS: 13, text: 'vencer!', source: 'lrc' },
+      ],
+    });
+    expect(parseLrc('[00:12.00]Eu vou <00:12.50>vencer!\n[00:13.00]Outro verso', 20)[0]?.words).toBeUndefined();
     expect(detectFormat('x.txt', '[00:01.00]a')).toBe('lrc');
     expect(parseSrt(toSrt(parseSrt(srt)))).toEqual(parseSrt(srt));
   });

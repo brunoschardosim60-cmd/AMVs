@@ -138,3 +138,55 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - A correspondência semântica entre até seis versos temporizados e quadros de cena é opcional, desligada por padrão e só roda por ação explícita. Reanalisa quadros do escopo escolhido, respeita o opt-in de envio externo e acrescenta justificativa aos clipes escolhidos; sem isso, a montagem permanece local e heurística.
 - Motivo: aproximar música e imagem sem esconder custo nem transformar análise de IA em requisito. As correspondências semânticas são temporárias na janela de geração e precisam ser refeitas se ela for fechada.
 - Falas com maior pontuação de impacto recebem fonte maior; a tradução da letra não é automática, então só se exibe o texto sincronizado fornecido pelo usuário.
+
+## 2026-11-09 · Fase 1 do roadmap profissional de AMV
+- A tipografia continua como clipes de texto normais e não destrutivos. Aumentar o schema exige migrar projetos v1; defaults de migração mantêm o look antigo.
+- Os timestamps de palavra são relativos ao clipe, guardam origem/confiança quando disponíveis e nunca são inferidos dividindo igualmente o tempo do segmento. Sem tempos de palavra, a frase continua uma unidade revisável.
+- ASS karaoke e LRC enhanced de uma palavra por timestamp fornecem tempos com origem própria; faster-whisper fornece tempos de origem Whisper, exibidos como sugestão. Edição manual é outro comando com undo. LRC enhanced com trechos de várias palavras por timestamp permanece como frase, sem subdivisão artificial.
+- Fundos, alinhamento e realce por palavra são desenhados pelo mesmo `drawTextLayer` usado no preview e na exportação rasterizada. Sem segunda implementação visual.
+- SAM 2.1 Hiera Tiny foi selecionado para um spike local de CPU, sem aprovação de qualidade para produção. Código e checkpoint oficial são Apache-2.0; a instalação de dependências/pesos no instalador principal foi escolhida pelo usuário, sujeita aos gates de tamanho, memória e estabilidade.
+- Referência: [roadmap profissional](./ROADMAP_PRO_AMV.md), [SAM 2 oficial](https://github.com/facebookresearch/sam2).
+
+## 2026-11-09 · Spike local de isolamento temporal com SAM 2.1 Tiny
+- SAM 2.1 Hiera Tiny é o candidato recomendado para o primeiro spike por combinar prompt por pontos/caixas com propagação temporal. O upstream licencia código e checkpoints Apache-2.0 e lista 38,9 milhões de parâmetros para Tiny. O INSTALL declara Linux, recomenda WSL no Windows, requer PyTorch ≥2.5.1/TorchVision correspondente e documenta a extensão CUDA opcional; velocidade publicada foi medida em A100.
+- Cutie e XMem propagam máscaras, mas seus exemplos/documentação não resolvem sozinhos a seleção inicial por clique; Cutie declara teste em Ubuntu. Seus termos de checkpoint ainda requerem revisão.
+- O host Windows disponível reporta Ryzen 5 3600, 16 GB de RAM e AMD Radeon RX 580 4 GB, sem CUDA. O uso de DirectML não será presumido. Não há números de RAM/FPS para inferência CPU do vídeo publicados pelo upstream nem medidos neste projeto.
+- O usuário escolheu testar SAM 2.1 Tiny em CPU e incluir runtime/pesos no instalador principal. Em Windows nativo, o sidecar PyInstaller empacotado processou via FFmpeg um clipe sintético de 3 quadros 256×256 a 1 fps em 13,95 s após iniciar o serviço; a máscara acompanhou o objeto nos três quadros e não acionou revisão heurística. O pico de working set do processo, amostrado a cada 400 ms, foi ~1.079 MiB.
+- O bundle PyInstaller foi validado por smoke test e inferência real com o checkpoint. O tamanho descompactado do sidecar é 745,9 MiB, dos quais 148,8 MiB são o checkpoint. O instalador Tauri ainda não foi construído. O pico de RAM e a qualidade com anime não foram medidos.
+- O cancelamento de um job real foi solicitado durante a propagação; o job terminou como `cancelled` e não deixou diretório parcial. A extensão nativa `_C` não está disponível nesta instalação; o upstream informa que, nesse caso, o preenchimento de buracos é ignorado. O caso sintético passou, mas o runtime não está aprovado para qualidade de produção.
+- A prova de conceito gera sequência PNG RGBA e máscaras PNG, com cache, jobs autenticados, progresso e cancelamento. Ainda não há schema/asset de sequência integrado, UI de seleção/correção, composição no preview ou renderização/exportação. Não habilitar o recurso na interface até esses fluxos serem reais.
+- Especificação, dependências e critérios de aceitação: [roadmap de isolamento temporal](./ROADMAP_CHARACTER_CUTOUT.md).
+
+## 2026-11-09 · Gate de qualidade do SAM 2.1 Tiny
+- O benchmark de CPU em Windows com animação sintética de 10/30/60 s foi concluído a 256×256 e 1 quadro/s. IoU médio: 0,8715, 0,0635 e 0,4424; os ensaios de 30/60 s falharam em todos os quadros segundo IoU < 0,75. A sinalização `reviewFrames` permaneceu vazia, pois a heurística atual mede área e variação da área, não a qualidade da máscara.
+- Decisão: **REPROVADO para avançar o gate de integração**. Isto não é uma conclusão de que SAM 2 nunca possa servir ao caso; não houve teste com anime autorizado, múltiplos prompts nem correção manual. Requer dados reais anotados e nova avaliação antes de integrar.
+- `_C` faz o preenchimento opcional de buracos pequenos via componentes conectados. O upstream só oferece construção CUDA (`CUDAExtension`/`.cu`); no host CPU/Radeon não há comparação ou instalação compatível. SciPy/OpenCV são alternativas CPU a avaliar, mas não foram instaladas nem testadas.
+- Relatório, métricas e comparações sintéticas: [benchmark SAM 2.1](./SAM2_QUALITY_BENCHMARK.md). Os PNGs são explicitamente sintéticos, não evidência de qualidade em anime.
+- Para a Fase 2.2, não buscar vídeos aleatórios na internet. A pasta de entrada fica em `C:\Users\Bruno\Videos\AMV-SAM2-Quality`, fora do Git. A avaliação real permanece bloqueada até receber clipes próprios/licenciados.
+- O predictor SAM 2 fixado oferece pontos positivos/negativos por quadro (`add_new_points_or_box`) e máscara binária por quadro (`add_new_mask`). A possibilidade de usar esses prompts para corrigir o estado e propagar novamente é tecnicamente fundamentada no upstream, mas ainda não existe protótipo do ciclo nem teste local com o modelo; não considerar implementado.
+
+## 2026-11-09 · Fase 2.2 — teste visual real de SAM 2.1 Tiny
+- O usuário autorizou o processamento local do episódio fornecido. Foi processado um segmento de 3 s (72 quadros, 1280×720, 24000/1001 fps) com o runtime isolado já verificado, sem CUDA e sem `_C`.
+- A propagação inicial levou 338,296 s, cerca de 4,699 s/quadro (0,2128 quadro/s), com working set máximo observado de 2404,6 MiB. A máscara inicial perdeu completamente o alvo após a troca de plano; amostras posteriores mostram silhueta incompleta/vazamento.
+- Adicionar pontos positivos/negativos ao estado propagado no quadro 36 e repetir a propagação não alterou a máscara vazia. Um teste isolado com novos pontos no mesmo quadro gerou somente uma máscara parcial de pernas/roupa, ~5,023% da imagem.
+- Decisão mantida: **REPROVADO para integração**. Os resultados reais reforçam que a saída não é confiável sem revisão, mas não cobrem todos os cenários nem substituem ground truth anotado; não são uma avaliação geral do modelo.
+- A música fornecida não foi usada nesta validação visual. Nenhum clipe foi copiado ao repositório, e não houve mudança na UI, timeline, instalador ou dependências do app.
+- Comparativos, prompts e medições ficaram fora do Git em `C:\Users\Bruno\Videos\AMV-SAM2-Quality\resultados`; ver [relatório SAM 2.1](./SAM2_QUALITY_BENCHMARK.md).
+
+## 2026-11-09 · Fase 2.3 — gate visual do SkyTNT ISNet_IS
+- Testar primeiro o ONNX oficial do `skytnt/anime-seg` isoladamente, sem instalar dependências no app, e só executar a etapa temporal se os quadros individuais fossem utilizáveis.
+- Em cinco quadros do episódio, com o pré-processamento documentado pelo Space oficial, a máscara teve alpha médio entre 0,00010 e 0,02072 e nenhum pixel acima de 0,5. Tempo médio: 1,9284 s/quadro; pico de working set observado: 1761,7 MiB.
+- Decisão preliminar: reprovação da execução ONNX a 1024, com verificação PyTorch ainda pendente à época. A Fase 2.4 abaixo revisa o diagnóstico: o tamanho oficial do checkpoint é 640 e a conversão ONNX concorda com PyTorch a 1024.
+- A publicação oficial só contém pesos `isnet_is`; o código implementa `isnet` e `isnet_is` com a mesma classe de inferência `ISNetDIS`, mas não há pesos independentes `isnet`. Também não há pesos U2Net na publicação. Não comparar nomes de arquitetura com o mesmo checkpoint e chamar isso de avaliação independente.
+- CUTIE permanece candidato experimental de propagação que recebe uma máscara rotulada inicial; CPU/Windows e termos dos pesos não estão verificados. O código é MIT; não foi presumida a mesma licença para os pesos.
+- A detecção exploratória de cena pelo FFmpeg mostrou scores altos em mudanças visuais do trecho, mas flashes/efeitos também podem acionar o detector; qualquer reinicialização de tracking requer revisão.
+- Relatório e imagens: [benchmark de segmentação alternativa](./ALTERNATIVE_ANIME_SEGMENTATION_BENCHMARK.md). Testes e pesos locais ficam fora do Git; sem mudanças na interface, timeline, instalador ou dependências do produto.
+
+## 2026-11-09 · Fase 2.4 — validar checkpoint SkyTNT no PyTorch original
+- O checkpoint oficial `isnetis.ckpt` foi obtido apenas da URL oficial e seu SHA-256 esperado foi validado antes do carregamento: `2c8f6b9a77386c54dcdbf55b6c917108c4bdf4328abca9152c7bce5727b74d18`.
+- Executado o `inference.py` do repositório oficial (commit `55d874013a2811cdf59c365059174c7823acf5b4`), CPU FP32, nos mesmos cinco quadros, em 640 e 1024. O `config.json` HF declara `isnet_is` e `img_size: 640`.
+- A entrada RGB float32 NCHW, normalização `/255`, letterbox central e remoção do padding seguiram `inference.py`. `AnimeSegmentation.forward` aplica sigmoid; a saída ONNX já contém sigmoid e não foi novamente ativada nem invertida.
+- PyTorch e ONNX, ambos a 1024 e alimentados com o mesmo tensor, coincidiram com MAE de `1.7e-8` a `7.4e-8` e erro absoluto máximo `1.92e-6`. Portanto não atribuir a falha observada a conversão ou runtime; a execução ONNX inicial estava em tamanho diferente do config publicado.
+- A 640, o primeiro quadro teve uma máscara visível mas com vazamentos; o segundo foi fraco, quadros de ação 02/03 ficaram praticamente vazios e o 04 não gerou região opaca (`max alpha 0.402`). Decisão: **recorte automático SkyTNT em espera; insuficiente para uso confiável neste material.** Não executar tracking, benchmark de 72 quadros nem instalar CUTIE.
+- Inferência média PyTorch: `0.748 s/quadro` a 640 e `1.878 s/quadro` a 1024, seis threads. Sem ground truth, a avaliação de qualidade é visual e limitada aos cinco quadros.
+- Resultados/PNG/JSON e checkpoint permanecem fora do Git. Nenhuma alteração na interface, timeline, instalador ou dependências do produto.

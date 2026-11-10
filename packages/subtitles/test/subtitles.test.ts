@@ -22,7 +22,7 @@ describe('legendas na timeline', () => {
       { start: 2.2, end: 2.4, text: 'me' },
       { start: 2.4, end: 2.8, text: 'levantar' },
     ]);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       cues: [
         { startS: 1, endS: 1.6, text: 'Quando eu cair' },
         { startS: 2, endS: 2.8, text: 'vou me levantar' },
@@ -31,6 +31,11 @@ describe('legendas na timeline', () => {
       uncertain: 1,
       unmatched: 1,
     });
+    expect(result.cues[0]?.words?.map((word) => [word.text, word.startS, word.endS, word.source])).toEqual([
+      ['Quando', 1, 1.2, 'whisper'],
+      ['eu', 1.2, 1.4, 'whisper'],
+      ['caí', 1.4, 1.6, 'whisper'],
+    ]);
   });
 
   it('alinha letra japonesa caractere a caractere sem confundir linhas repetidas fora de ordem', () => {
@@ -70,6 +75,27 @@ describe('legendas na timeline', () => {
     const texts = subtitleClips(p, tr).map((c) => [c.timelineStartUs / S, clipEndUs(c) / S, c.text!.text]);
     expect(texts).toEqual([[0, 1, 'velha'], [1, 2, 'um'], [2, 3.5, 'dois'], [10, 11, 'fica']]);
     expect(findOverlaps(p)).toEqual([]);
+  });
+
+  it('conserva os timestamps e a origem das palavras como dados relativos ao clipe', () => {
+    let p = project();
+    const commands = placeCues(p, [{
+      startS: 2,
+      endS: 3,
+      text: 'Eu vou',
+      words: [
+        { startS: 2, endS: 2.4, text: 'Eu', source: 'ass', confidence: 1 },
+        { startS: 2.4, endS: 2.8, text: 'vou', source: 'whisper', confidence: 0.9 },
+      ],
+    }], { trackId: textTrack(p), offsetUs: S, look: 'lyrics-cinematic' });
+    p = apply(p, commands);
+    const created = subtitleClips(p, textTrack(p))[0]!;
+    expect(created.timelineStartUs).toBe(3 * S);
+    expect(created.text?.timingPrecision).toBe('word');
+    expect(created.text?.wordTimings.map(({ text, startUs, endUs, source }) => [text, startUs, endUs, source])).toEqual([
+      ['Eu', 0, 0.4 * S, 'ass'],
+      ['vou', 0.4 * S, 0.8 * S, 'whisper'],
+    ]);
   });
 
   it('falas do episódio caem no lugar certo do clipe, inclusive em câmera lenta', () => {

@@ -167,7 +167,22 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     setSpeechProgress({ stage: 'extracting', progress: 0, duration });
     try {
       const transcript = await transcribeAsset(asset, audioIndex, controller);
-      const cues = transcript.segments.map((segment) => ({ startS: segment.start, endS: segment.end, text: segment.text }));
+      const cues = transcript.segments.map((segment) => ({
+        startS: segment.start,
+        endS: segment.end,
+        text: segment.text,
+        ...(segment.words.length
+          ? {
+              words: segment.words.map((word) => ({
+                startS: word.start,
+                endS: word.end,
+                text: word.text,
+                source: 'whisper' as const,
+                confidence: null,
+              })),
+            }
+          : {}),
+      }));
       if (!cues.length) {
         toast({ tone: 'warn', title: 'Nenhuma fala reconhecida', body: 'Tente outra faixa de áudio ou um modelo maior. O arquivo original não foi alterado.' });
         return;

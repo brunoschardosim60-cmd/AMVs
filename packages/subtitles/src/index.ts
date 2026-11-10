@@ -1,5 +1,5 @@
 import type { Cue } from '@amv/analysis';
-import { applyCommand, clipEndUs, newId, type Clip, type Command, type Project } from '@amv/project';
+import { applyCommand, clipEndUs, newId, TextContentSchema, type Clip, type Command, type Project, type TextWordTiming } from '@amv/project';
 
 /**
  * Legendas na timeline: são clipes de texto comuns na trilha de texto.
@@ -10,13 +10,16 @@ import { applyCommand, clipEndUs, newId, type Clip, type Command, type Project }
 const S = 1_000_000;
 const us = (s: number) => Math.round(s * S);
 
-export type SubtitleLook = 'legenda' | 'destaque' | 'palavra' | 'karaoke';
+export type SubtitleLook = 'legenda' | 'destaque' | 'palavra' | 'karaoke' | 'lyrics-cinematic' | 'dialogue-dramatic' | 'impact-typography';
 
 export const LOOKS: { id: SubtitleLook; label: string; description: string }[] = [
   { id: 'legenda', label: 'Legenda', description: 'Embaixo, contorno preto, discreta.' },
   { id: 'destaque', label: 'Destaque', description: 'No meio, grande, com sombra. Para frases de impacto.' },
   { id: 'palavra', label: 'Palavra', description: 'Maiúsculas enormes, entra com pulo. Estilo letra na tela.' },
   { id: 'karaoke', label: 'Letra', description: 'Embaixo, maior, amarelo claro. Para letra da música.' },
+  { id: 'lyrics-cinematic', label: 'Lyrics Cinematic', description: 'Letra grande com realce palavra a palavra.' },
+  { id: 'dialogue-dramatic', label: 'Dialogue Dramatic', description: 'Fala legível com caixa escura e contorno.' },
+  { id: 'impact-typography', label: 'Impact Typography', description: 'Texto central grande com entrada pop.' },
 ];
 
 export interface UntimedLyricAlignment {
@@ -25,6 +28,8 @@ export interface UntimedLyricAlignment {
   uncertain: number;
   unmatched: number;
 }
+
+type CueWord = NonNullable<Cue['words']>[number];
 
 function lyricTokens(text: string, characters: boolean): string[] {
   const normalized = text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
@@ -84,10 +89,26 @@ export function alignUntimedLyrics(
       }
     }
     if (!best || best.score < 0.55) continue;
-    const first = transcriptWords[spoken[best.start]!.wordIndex]!;
-    const last = transcriptWords[spoken[best.end - 1]!.wordIndex]!;
+    const matchedWords = [...new Set(spoken.slice(best.start, best.end).map((word) => word.wordIndex))]
+      .map((wordIndex) => transcriptWords[wordIndex]!)
+      .filter((word) => word.end > word.start);
+    const first = matchedWords[0];
+    const last = matchedWords.at(-1);
+    if (!first || !last) continue;
     if (!Number.isFinite(first.start) || !Number.isFinite(last.end) || last.end <= first.start) continue;
-    cues.push({ startS: Math.max(0, first.start), endS: Math.max(first.start, last.end), text: line });
+    cues.push({
+      startS: Math.max(0, first.start),
+      endS: Math.max(first.start, last.end),
+      text: line,
+      words: matchedWords.map((word) => ({
+        startS: word.start,
+        endS: word.end,
+        text: word.text,
+        source: 'whisper',
+        confidence: best!.score,
+        uncertain: best!.score < 0.78,
+      })),
+    });
     matched++;
     if (best.score < 0.78) uncertain++;
     cursor = best.end;
@@ -98,19 +119,35 @@ export function alignUntimedLyrics(
 
 export function lookText(look: SubtitleLook, H: number, text: string): { transform: Clip['transform']; text: NonNullable<Clip['text']> } {
   const t = (y: number) => ({ x: 0, y: Math.round(H * y), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } });
+  const content = (values: Partial<NonNullable<Clip['text']>> & { text: string }) => TextContentSchema.parse(values);
   switch (look) {
     case 'destaque':
-      return { transform: t(0), text: { text, font: 'Manrope Variable', size: Math.round(H * 0.075), color: '#ffffff', outlineColor: '#000000', outlineWidth: 4, shadow: true, animationIn: 'pop', animationOut: 'fade' } };
+      return { transform: t(0), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.075), color: '#ffffff', outlineColor: '#000000', outlineWidth: 4, shadow: true, animationIn: 'pop', animationOut: 'fade' }) };
     case 'palavra':
-      return { transform: t(0), text: { text: text.toUpperCase(), font: 'Georgia', size: Math.round(H * 0.12), color: '#ffffff', outlineColor: '#000000', outlineWidth: 2, shadow: true, animationIn: 'pop', animationOut: null } };
+      return { transform: t(0), text: content({ text: text.toUpperCase(), font: 'Georgia', size: Math.round(H * 0.12), color: '#ffffff', outlineColor: '#000000', outlineWidth: 2, shadow: true, animationIn: 'pop', animationOut: null }) };
     case 'karaoke':
-      return { transform: t(0.34), text: { text, font: 'Manrope Variable', size: Math.round(H * 0.055), color: '#fff3b0', outlineColor: '#000000', outlineWidth: 4, shadow: true, animationIn: 'fade', animationOut: 'fade' } };
+      return { transform: t(0.34), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.055), color: '#fff3b0', outlineColor: '#000000', outlineWidth: 4, shadow: true, animationIn: 'fade', animationOut: 'fade' }) };
+    case 'lyrics-cinematic':
+      return { transform: t(0.22), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.09), weight: 800, color: '#ffffff', outlineColor: '#08090c', outlineWidth: 3, shadow: true, animationIn: 'pop', animationOut: 'fade', highlightColor: '#ffd166', highlightScale: 1.18, alignment: 'center', maxWidthRatio: 0.9, marginX: Math.round(H * 0.06), background: 'none' }) };
+    case 'dialogue-dramatic':
+      return { transform: t(0.28), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.062), weight: 700, color: '#ffffff', outlineColor: '#000000', outlineWidth: 2, shadow: true, animationIn: 'fade', animationOut: 'fade', background: 'box', backgroundOpacity: 0.78, alignment: 'center', maxWidthRatio: 0.82, marginX: Math.round(H * 0.08), padding: Math.round(H * 0.025), lineSpacing: 1.22 }) };
+    case 'impact-typography':
+      return { transform: t(0), text: content({ text: text.toUpperCase(), font: 'Manrope Variable', size: Math.round(H * 0.14), weight: 900, color: '#ffffff', outlineColor: '#050505', outlineWidth: 5, shadow: true, animationIn: 'pop', animationOut: 'fade', background: 'box', backgroundOpacity: 0.68, alignment: 'center', maxWidthRatio: 0.88, marginX: Math.round(H * 0.06), padding: Math.round(H * 0.03), highlightColor: '#ffe066', highlightScale: 1.25 }) };
     default:
-      return { transform: t(0.38), text: { text, font: 'Manrope Variable', size: Math.round(H * 0.045), color: '#ffffff', outlineColor: '#000000', outlineWidth: 3, shadow: false, animationIn: null, animationOut: null } };
+      return { transform: t(0.38), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.045), color: '#ffffff', outlineColor: '#000000', outlineWidth: 3, shadow: false, animationIn: null, animationOut: null }) };
   }
 }
 
-export function subtitleClip(project: Project, trackId: string, startUs: number, durUs: number, text: string, look: SubtitleLook, label: string | null = null): Clip {
+export function subtitleClip(
+  project: Project,
+  trackId: string,
+  startUs: number,
+  durUs: number,
+  text: string,
+  look: SubtitleLook,
+  label: string | null = null,
+  wordTimings: TextWordTiming[] = [],
+): Clip {
   const l = lookText(look, project.settings.height, text);
   return {
     id: newId('clp'),
@@ -126,7 +163,11 @@ export function subtitleClip(project: Project, trackId: string, startUs: number,
     effects: [],
     transitionIn: null,
     keyframes: {},
-    text: l.text,
+    text: {
+      ...l.text,
+      wordTimings,
+      timingPrecision: wordTimings.length ? 'word' : 'segment',
+    },
     origin: 'user',
     reason: null,
     confidence: null,
@@ -181,7 +222,7 @@ export interface PlaceOptions {
 /** Coloca legendas na trilha (substituindo o que já estava naquele trecho). */
 export function placeCues(project: Project, cues: Cue[], opts: PlaceOptions): Command[] {
   const items = normalizeCues(cues)
-    .map((c) => ({ a: opts.offsetUs + us(c.startS), b: opts.offsetUs + us(c.endS), text: c.text }))
+    .map((c) => ({ a: opts.offsetUs + us(c.startS), b: opts.offsetUs + us(c.endS), text: c.text, words: c.words }))
     .map((c) => (opts.windowUs ? { ...c, a: Math.max(c.a, opts.windowUs[0]), b: Math.min(c.b, opts.windowUs[1]) } : c))
     .filter((c) => c.b - c.a >= 40_000 && c.b > 0);
   if (!items.length) return [];
@@ -189,7 +230,27 @@ export function placeCues(project: Project, cues: Cue[], opts: PlaceOptions): Co
   const to = Math.max(...items.map((c) => c.b));
   return [
     ...clearRange(project, opts.trackId, from, to),
-    ...items.map((c) => ({ type: 'clip.add' as const, clip: subtitleClip(project, opts.trackId, c.a, c.b - Math.max(0, c.a), c.text, opts.look, opts.label ?? null) })),
+    ...items.map((c) => {
+      const clipStartUs = Math.max(0, c.a);
+      const clipEnd = c.b;
+      const wordTimings = (c.words ?? []).flatMap((word) => {
+        const startUs = Math.max(clipStartUs, opts.offsetUs + us(word.startS));
+        const endUs = Math.min(clipEnd, opts.offsetUs + us(word.endS));
+        if (endUs <= startUs) return [];
+        return [{
+          text: word.text,
+          startUs: startUs - clipStartUs,
+          endUs: endUs - clipStartUs,
+          source: word.source,
+          confidence: word.confidence ?? null,
+          uncertain: word.uncertain ?? (word.confidence != null && word.confidence < 0.78),
+        }];
+      });
+      return {
+        type: 'clip.add' as const,
+        clip: subtitleClip(project, opts.trackId, clipStartUs, clipEnd - clipStartUs, c.text, opts.look, opts.label ?? null, wordTimings),
+      };
+    }),
   ];
 }
 
@@ -206,7 +267,17 @@ export function cuesForClip(clip: Clip, episodeCues: Cue[]): Cue[] {
     if (c.endS <= srcA || c.startS >= srcB) continue;
     const a = Math.max(c.startS, srcA);
     const b = Math.min(c.endS, srcB);
-    out.push({ startS: t0 + (a - srcA) / clip.speed, endS: t0 + (b - srcA) / clip.speed, text: c.text });
+    const words = c.words?.flatMap((word) => {
+      const wordStart = Math.max(word.startS, a);
+      const wordEnd = Math.min(word.endS, b);
+      if (wordEnd <= wordStart) return [];
+      return [{
+        ...word,
+        startS: t0 + (wordStart - srcA) / clip.speed,
+        endS: t0 + (wordEnd - srcA) / clip.speed,
+      }];
+    });
+    out.push({ startS: t0 + (a - srcA) / clip.speed, endS: t0 + (b - srcA) / clip.speed, text: c.text, ...(words?.length ? { words } : {}) });
   }
   return out;
 }
@@ -255,7 +326,21 @@ export function restyleSubtitles(project: Project, clipIds: string[], look: Subt
     .map((c) => {
       const raw = look === 'palavra' ? c.text!.text.toUpperCase() : c.text!.text;
       const l = lookText(look, H, raw);
-      return { type: 'clip.update' as const, clipId: c.id, patch: { transform: l.transform, text: l.text } };
+      return {
+        type: 'clip.update' as const,
+        clipId: c.id,
+        patch: {
+          transform: l.transform,
+          text: {
+            ...l.text,
+            text: raw,
+            original: c.text!.original,
+            lang: c.text!.lang,
+            wordTimings: c.text!.wordTimings,
+            timingPrecision: c.text!.timingPrecision,
+          },
+        },
+      };
     });
 }
 
@@ -321,7 +406,7 @@ export function applyTranslation(clips: Clip[], translations: (string | null)[],
   clips.forEach((c, i) => {
     const t = translations[i];
     if (!c.text || t === null || t === undefined || !t.trim()) return;
-    cmds.push({ type: 'clip.update', clipId: c.id, patch: { text: { ...c.text, text: t, original: c.text.original ?? c.text.text, lang } } });
+    cmds.push({ type: 'clip.update', clipId: c.id, patch: { text: { ...c.text, text: t, original: c.text.original ?? c.text.text, lang, wordTimings: [], timingPrecision: 'segment' } } });
   });
   return cmds;
 }

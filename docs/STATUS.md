@@ -7,7 +7,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Item | Estado | Como foi verificado |
 |---|---|---|
 | Monorepo (pnpm), TS strict, Vitest, pytest | feito | `pnpm typecheck`, `pnpm test` |
-| Modelo do projeto: schema v1, µs inteiros, FPS racional | feito | testes `packages/project` |
+| Modelo do projeto: schema v2, µs inteiros, FPS racional | feito | testes `packages/project`, incluindo migração v1 → v2 |
 | Comandos com inverso, histórico undo/redo, transações | feito | testes: todo comando + inverso = original; batch atômico; projeto nunca mutado |
 | Salvar/abrir com round-trip idêntico, migrações, erros claros | feito | testes de serialização |
 | FFmpeg/FFprobe como sidecar do Tauri | feito | app real rodando no Linux (Xvfb) processou mídia pelo sidecar; Windows: CI baixa build GPL do BtbN com checksum |
@@ -60,7 +60,11 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Diálogo de exportação: formato, resolução, qualidade, progresso, cancelar, mostrar na pasta | feito | app real (Linux) |
 
 ### Limitações da Fase 2
-- No preview, volume acima de 0 dB e a faixa de áudio escolhida não são ouvidos (usa a 1ª faixa do proxy); a exportação respeita os dois.
+- O preview aplica ganho acima de 0 dB com Web Audio e compressão de pico; a seleção de faixa ainda não é respeitada, pois o proxy inclui a primeira faixa de áudio. O comportamento de áudio precisa ser confirmado no WebView2.
+
+### Ajuste do ganho no preview
+- `clipVolume()` agora preserva ganho linear acima de 1 para clipe, trilha e keyframes. O preview usa `GainNode` seguido de `DynamicsCompressorNode`; erros de preparação/reprodução do áudio são notificados.
+- Validação: 4 testes focados passaram; typecheck e build desktop passaram. A suíte ampla teve 7 falhas em testes de importação de biblioteca/sessão, fora dos arquivos deste ajuste. WebView2 ainda não foi validado manualmente.
 
 
 ## Fase 4 — Análise (feita)
@@ -140,3 +144,60 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | 7. Aceitação ponta a ponta no Windows | pendente | Testar mídia real autorizada pelo usuário, modelos reais com opt-in, render, áudio, legendas, botões e atualização do instalador. |
 | 8. Revisão/correção de batidas | primeira entrega feita | A curva da biblioteca mostra batidas; ×2/÷2 e tap tempo persistem no cache por hash e atualizam montagens futuras. Mapa de andamento variável e metrônomo sincronizado ainda pendentes; calibração com música real pendente. |
 | 9. Música, letra e cena com mais contexto | primeira entrega | Recomendações da biblioteca agora comparam a curva de energia medida à sequência/intensidade das cenas e mostram os motivos; análise semântica letra↔cena é opcional, usa até 6 versos e reanalisa quadros amostrados. Falas marcantes ganham fonte maior; correspondências fortes podem manter a letra sobre um impacto. Testes automatizados passaram; falta calibrar Gemini real, tradução automática da letra e conferir tipografia/sincronia no WebView2 com mídia real. |
+
+## Roadmap profissional de AMV — Fase 1 (2026-11-09)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Auditoria de tipografia, legendas, diálogo, música, efeitos, render e recorte temporal | feito | registrada em `docs/ROADMAP_PRO_AMV.md`; recorte temporal permanece fora do escopo de implementação |
+| Schema v2 e migração de projetos v1 | feito | 44 testes de `packages/project`, incluindo round-trip/migração |
+| Timestamps de palavra ASS karaoke, LRC enhanced e faster-whisper | feito | parser e integração cobertos por testes de `packages/analysis`, `packages/subtitles` e `packages/automv` |
+| Presets de tipografia, fundos e ajuste de texto/palavras | implementado | inspetor e renderer compartilhado atualizados; typecheck concluído |
+| Geração sem timestamps artificiais por palavra | feito | testes do Auto AMV cobrem segmentos sem timestamps e palavra temporizada |
+| Testes focados de projeto, análise, legendas, Auto AMV, assistente, desktop e render FFmpeg | feito | 220 testes passaram; render usa FFmpeg/FFprobe empacotados |
+| Typecheck e build da interface desktop | feito | `corepack pnpm --filter @amv/desktop run build` |
+| Conferência visual e de áudio no WebView2/Windows | pendente | requer teste manual com mídia autorizada |
+
+O preview e a exportação usam `drawTextLayer`; ainda não há teste automatizado de comparação pixel a pixel entre WebView2 e a sequência de imagens exportada.
+
+## Isolamento e composição temporal de personagens — avaliação (2026-11-09)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Auditoria de schema, comandos/undo, preview, render e sidecar Python | feito | código atual documentado em `docs/ROADMAP_CHARACTER_CUTOUT.md` |
+| Avaliação documental de SAM 2.1, Cutie e XMem | feito | fontes oficiais de código, instalação, checkpoints e licenças consultadas |
+| Spike SAM 2.1 Tiny em CPU Windows | parcialmente verificado | Sidecar PyInstaller processou via FFmpeg um clipe sintético de 3 quadros 256×256 a 1 fps em 13,95 s; working set amostrado ~1.079 MiB. Cancelamento real removeu saída parcial; ver benchmark de qualidade abaixo |
+| Benchmark SAM 2.1 Tiny (sintético 10/30/60 s) | executado; gate reprovado | Somente animação sintética a 256×256/1 fps; IoU médio 0,8715 / 0,0635 / 0,4424; 30/30 e 60/60 quadros abaixo de 0,75. Evidência real limitada a um trecho de anime de 3 s; relatório em `docs/SAM2_QUALITY_BENCHMARK.md` |
+| Comparação `_C` CPU/GPU | pendente | `_C` ausente e CUDA indisponível; não instalada nem comparada uma alternativa CPU |
+| Fase 2.2: teste visual com mídia autorizada | executado parcialmente; gate reprovado | Segmento de 72 quadros em 1280×720 processado em CPU. Máscara desapareceu em quadros após troca de plano. Comparativos e JSONs em `C:\Users\Bruno\Videos\AMV-SAM2-Quality\resultados`, fora do repositório |
+| Correção em quadro e propagação após correção | testada sem sucesso após perda do alvo | Pontos positivos/negativos e nova propagação no quadro 36 não mudaram a máscara vazia. Inicialização isolada no mesmo quadro produziu apenas uma máscara parcial (~5% da imagem); sem correção temporal confiável nem UI |
+| Runtime/pesos no instalador principal | bundle validado; instalador pendente | PyInstaller + smoke test; sidecar descompactado 745,9 MiB (checkpoint 148,8 MiB). Build Tauri ainda não executado |
+| API de job, progresso, cancelamento, cache e sequência RGBA | protótipo implementado | 15 testes pytest passam; inferência SAM2 e extração FFmpeg no sidecar empacotado passaram com vídeo sintético; cancelamento real também verificado |
+| Seleção no preview, revisão/correção manual de máscara | não iniciado | não há UI |
+| Asset editável, timeline, preview e render/exportação da camada | não iniciado | requer migração de schema, comandos undo/redo e integração nos dois renderizadores |
+
+Especificação técnica, pipeline proposto, dependências e gates de aceitação: `docs/ROADMAP_CHARACTER_CUTOUT.md`.
+
+## Fase 2.3 — modelos alternativos de segmentação (2026-11-09)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| SkyTNT ISNet_IS em imagens (teste ONNX inicial) | resultado revisado na Fase 2.4 | ONNX em CPU a 1024, embora o config HF do checkpoint indique 640; o ONNX concordou com PyTorch quando ambos receberam o mesmo tensor |
+| SkyTNT nos 72 quadros | não executado | critérios de saída individual falharam; não inferir consistência temporal por quadros independentes |
+| ISNet e U2Net com pesos apropriados | sem benchmark | publicação SkyTNT consultada só tem pesos `isnet_is`; sem checkpoint independente `isnet` ou U2Net |
+| CUTIE Small | viabilidade pesquisada; não instalado | API aceita máscara inicial; CPU e Windows não validados pelo upstream neste host; licença de pesos não encontrada separada da licença MIT do código |
+| Detecção de mudança de cena | sondagem FFmpeg | picos observados perto de +0,545 s e +2,881 s no trecho; iluminação/efeitos podem causar falso positivo; nenhuma lógica integrada |
+
+Relatório: `docs/ALTERNATIVE_ANIME_SEGMENTATION_BENCHMARK.md`.
+
+## Fase 2.4 — confirmar SkyTNT com PyTorch original (2026-11-09)
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Checkpoint oficial | SHA-256 validado | `isnetis.ckpt`, hash `2c8f6b9a77386c54dcdbf55b6c917108c4bdf4328abca9152c7bce5727b74d18`; carregado somente após validação |
+| PyTorch original, config 640 | executado; recorte não confiável neste material | `inference.py` oficial em CPU/FP32 nos mesmos cinco quadros; imagem 00 teve máscara visível mas com vazamentos, 02/03 quase nulas |
+| Resolução 1024 | executada | PyTorch e ONNX ficaram numericamente equivalentes com os mesmos tensores; a configuração HF do checkpoint declara 640 |
+| Diagnóstico ONNX | conversão/runtime não apontados como causa | MAE PyTorch×ONNX 1,7e-8–7,4e-8; erro máximo 1,92e-6; nenhum NaN/Inf |
+| Consistência temporal | não testada; recorte automático em espera | sem vídeo, sem CUTIE, sem integração ao produto; não avançar tracking sem novas máscaras iniciais confiáveis |
+
+Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Videos\AMV-SAM2-Quality\resultados\skytnt_isnetis_pytorch_validation`. A conclusão é limitada a esses cinco quadros. Sem UI, timeline, instalador ou dependências do app alterados.

@@ -4,6 +4,16 @@ export interface Cue {
   startS: number;
   endS: number;
   text: string;
+  words?: CueWord[];
+}
+
+export interface CueWord {
+  startS: number;
+  endS: number;
+  text: string;
+  source: 'ass' | 'lrc' | 'whisper' | 'manual' | 'estimated';
+  confidence?: number | null;
+  uncertain?: boolean;
 }
 
 function ts(h: string, m: string, s: string, frac = '0'): number {
@@ -39,6 +49,51 @@ export function parseVtt(text: string): Cue[] {
   return parseSrt(norm);
 }
 
+function assKaraokeWords(raw: string, startS: number, endS: number): CueWord[] {
+  const syllables: { startS: number; endS: number; text: string }[] = [];
+  const tags = /\{\\(?:kf|ko|K|k)(\d+)\}/g;
+  const matches = [...raw.matchAll(tags)];
+  let cursor = startS;
+  for (const [index, match] of matches.entries()) {
+    const tagEnd = match.index! + match[0].length;
+    const end = matches[index + 1]?.index ?? raw.length;
+    const text = raw
+      .slice(tagEnd, end)
+      .replace(/\{[^}]*\}/g, '')
+      .replace(/<[^>]+>/g, '')
+      .replace(/\\[Nn]/g, ' ')
+      .replace(/\\h/g, ' ')
+      .replace(/[ \t]+/g, ' ');
+    const wordEnd = Math.min(endS, cursor + Number(match[1]) / 100);
+    if (text && wordEnd > cursor) syllables.push({ startS: cursor, endS: wordEnd, text });
+    cursor = wordEnd;
+  }
+  if (!syllables.length) return [];
+
+  const combined = syllables.map((part) => part.text).join('');
+  if (/[\u3040-\u30ff\u3400-\u9fff]/u.test(combined)) {
+    return syllables.map((part) => ({ ...part, text: part.text.trim(), source: 'ass' as const })).filter((part) => part.text);
+  }
+
+  const glyphs: { char: string; startS: number; endS: number }[] = [];
+  for (const part of syllables) {
+    for (const char of part.text) glyphs.push({ char, startS: part.startS, endS: part.endS });
+  }
+  const text = glyphs.map((glyph) => glyph.char).join('');
+  const out: CueWord[] = [];
+  const wordPattern = /[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu;
+  for (const match of text.matchAll(wordPattern)) {
+    const first = Array.from(text.slice(0, match.index)).length;
+    const wordGlyphs = glyphs.slice(first, first + Array.from(match[0]).length);
+    const firstGlyph = wordGlyphs[0];
+    const lastGlyph = wordGlyphs.at(-1);
+    if (firstGlyph && lastGlyph && lastGlyph.endS > firstGlyph.startS) {
+      out.push({ text: match[0], startS: firstGlyph.startS, endS: lastGlyph.endS, source: 'ass', confidence: 1 });
+    }
+  }
+  return out;
+}
+
 export function parseAss(text: string): Cue[] {
   const out: Cue[] = [];
   let format: string[] = [];
@@ -53,7 +108,8 @@ export function parseAss(text: string): Cue[] {
     const f = format.length ? format : ['layer', 'start', 'end', 'style', 'name', 'marginl', 'marginr', 'marginv', 'effect', 'text'];
     const textIdx = f.indexOf('text');
     const get = (k: string) => fields[f.indexOf(k)]?.trim() ?? '';
-    const t = clean(fields.slice(textIdx).join(','));
+    const rawText = fields.slice(textIdx).join(',');
+    const t = clean(rawText);
     const p = (v: string) => {
       const m = v.match(/(\d+):(\d{2}):(\d{2})\.(\d{1,2})/);
       return m ? ts(m[1]!, m[2]!, m[3]!, m[4]!.padEnd(2, '0')) : NaN;
@@ -62,24 +118,48 @@ export function parseAss(text: string): Cue[] {
     const e = p(get('end'));
     // estilos de placa/sinal/karaokê costumam ser texto na tela, não fala
     const style = get('style').toLowerCase();
-    if (!t || !Number.isFinite(s) || !Number.isFinite(e) || /sign|placa|song|karaoke|op|ed|title/.test(style)) continue;
-    out.push({ startS: s, endS: e, text: t });
+    if (!t || !Number.isFinite(s) || !Number.isFinite(e) || /sign|placa|song|op|ed|title/.test(style)) continue;
+    const words = assKaraokeWords(rawText, s, e);
+    out.push({ startS: s, endS: e, text: t, ...(words.length ? { words } : {}) });
   }
   return out.sort((a, b) => a.startS - b.startS);
 }
 
 /** LRC: [mm:ss.xx] linha. O fim de cada linha é o começo da próxima. */
 export function parseLrc(text: string, durationS?: number): Cue[] {
-  const marks: { t: number; text: string }[] = [];
+  const marks: { t: number; text: string; rawText: string }[] = [];
   for (const raw of text.replace(/\r/g, '').split('\n')) {
     const tags = [...raw.matchAll(/\[(\d+):(\d{2})(?:[.:](\d{1,3}))?\]/g)];
     if (!tags.length) continue;
-    const body = clean(raw.replace(/\[[^\]]*\]/g, '').replace(/<\d+:\d{2}[.:]\d+>/g, ''));
-    for (const m of tags) marks.push({ t: Number(m[1]) * 60 + Number(m[2]) + Number(`0.${m[3] ?? '0'}`), text: body });
+    const rawText = raw.replace(/\[[^\]]*\]/g, '');
+    const body = clean(rawText.replace(/<\d+:\d{2}[.:]\d+>/g, ''));
+    for (const m of tags) marks.push({ t: Number(m[1]) * 60 + Number(m[2]) + Number(`0.${m[3] ?? '0'}`), text: body, rawText });
   }
   marks.sort((a, b) => a.t - b.t);
   return marks
-    .map((m, i) => ({ startS: m.t, endS: marks[i + 1]?.t ?? durationS ?? m.t + 4, text: m.text }))
+    .map((m, i) => {
+      const endS = marks[i + 1]?.t ?? durationS ?? m.t + 4;
+      const timingTags = [...m.rawText.matchAll(/<(\d+):(\d{2})[.:](\d{1,3})>/g)];
+      const segments = [
+        ...(timingTags[0]?.index
+          ? [{ startS: m.t, text: m.rawText.slice(0, timingTags[0].index) }]
+          : []),
+        ...timingTags.map((tag, index) => ({
+          startS: Number(tag[1]) * 60 + Number(tag[2]) + Number(`0.${tag[3]}`),
+          text: m.rawText.slice(tag.index! + tag[0].length, timingTags[index + 1]?.index ?? m.rawText.length),
+        })),
+      ];
+      const hasOneWordPerTimestamp = segments.length > 0 && segments.every((segment) => clean(segment.text).trim().split(/\s+/u).filter(Boolean).length === 1);
+      const words: CueWord[] = hasOneWordPerTimestamp
+        ? segments.flatMap((segment, index) => {
+            const startS = Math.max(m.t, segment.startS);
+            const wordEndS = Math.min(endS, segments[index + 1]?.startS ?? endS);
+            const wordText = clean(segment.text).trim();
+            return wordEndS > startS ? [{ startS, endS: wordEndS, text: wordText, source: 'lrc' as const }] : [];
+          })
+        : [];
+      return { startS: m.t, endS, text: m.text, ...(words.length ? { words } : {}) };
+    })
     .filter((c) => c.text);
 }
 

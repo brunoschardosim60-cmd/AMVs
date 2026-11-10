@@ -6,6 +6,7 @@ import {
   parseProject,
   partialHash,
   serializeProject,
+  TextContentSchema,
 } from '../src/index.js';
 import { audioAsset, baseProject, clip, track, videoAsset } from './helpers.js';
 
@@ -41,7 +42,7 @@ function richProject() {
     type: 'clip.add',
     clip: clip(track(p, 'Legendas').id, '', {
       assetId: null,
-      text: { text: 'Eu não vou perder!', font: 'Inter', size: 72, color: '#fff', outlineColor: '#000', outlineWidth: 4, shadow: true, animationIn: null, animationOut: null },
+      text: TextContentSchema.parse({ text: 'Eu não vou perder!', font: 'Inter', size: 72, color: '#fff', outlineColor: '#000', outlineWidth: 4, shadow: true, animationIn: null, animationOut: null }),
     }),
   }).project;
   return p;
@@ -84,6 +85,33 @@ describe('serialização', () => {
     };
     expect(migrate({ schemaVersion: 1 }, 3, migrations)).toEqual({ schemaVersion: 3, a: 1, b: 2 });
     expect(() => migrate({ schemaVersion: 1 }, 4, migrations)).toThrow(/não há migração do formato 3/);
+  });
+
+  it('migra projetos v1 preservando texto e aplicando defaults visuais não destrutivos', () => {
+    const raw = JSON.parse(serializeProject(richProject())) as {
+      schemaVersion: number;
+      clips: { text: Record<string, unknown> | null }[];
+    };
+    raw.schemaVersion = 1;
+    for (const clip of raw.clips) {
+      if (!clip.text) continue;
+      for (const field of [
+        'weight', 'background', 'backgroundOpacity', 'alignment', 'maxWidthRatio', 'marginX', 'marginY',
+        'padding', 'lineSpacing', 'letterSpacing', 'highlightColor', 'highlightScale', 'timingPrecision', 'wordTimings',
+      ]) delete clip.text[field];
+    }
+
+    const result = parseProject(JSON.stringify(raw));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const migratedText = result.project.clips.find((clip) => clip.text)?.text;
+    expect(result.migratedFrom).toBe(1);
+    expect(migratedText).toMatchObject({
+      text: 'Eu não vou perder!',
+      background: 'none',
+      alignment: 'center',
+      wordTimings: [],
+    });
   });
 });
 

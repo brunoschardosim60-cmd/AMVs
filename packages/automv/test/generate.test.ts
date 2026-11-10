@@ -205,10 +205,27 @@ describe('outros estilos', () => {
     expect(v1.slice(1).every((c) => c.transitionIn?.transition === 'dissolve')).toBe(true);
   });
 
-  it('letra: uma palavra por corte quando há a letra com tempo', () => {
+  it('letra: cortes palavra a palavra só usam timestamps fornecidos', () => {
     const lyrics = [
-      { startS: 16, endS: 18, text: 'never gonna stop' },
-      { startS: 18, endS: 20, text: 'arise again' },
+      {
+        startS: 16,
+        endS: 18,
+        text: 'never gonna stop',
+        words: [
+          { startS: 16, endS: 16.4, text: 'never', source: 'ass' as const },
+          { startS: 16.4, endS: 17, text: 'gonna', source: 'ass' as const },
+          { startS: 17, endS: 17.6, text: 'stop', source: 'ass' as const },
+        ],
+      },
+      {
+        startS: 18,
+        endS: 20,
+        text: 'arise again',
+        words: [
+          { startS: 18, endS: 18.7, text: 'arise', source: 'ass' as const },
+          { startS: 18.7, endS: 19.2, text: 'again', source: 'ass' as const },
+        ],
+      },
     ];
     const { on } = run({ style: 'letra', lyrics });
     const words = on('Legendas').map((c) => c.text?.text);
@@ -217,17 +234,19 @@ describe('outros estilos', () => {
     // cada palavra começa exatamente num corte de vídeo
     const cuts = new Set(on('V1').map((c) => c.timelineStartUs));
     expect(wordClips.every((w) => cuts.has(w.timelineStartUs))).toBe(true);
+    expect(wordClips.every((clip) => clip.text?.timingPrecision === 'word')).toBe(true);
   });
 
-  it('legendas de música entram na batida próxima, são animadas e quebradas em frases curtas', () => {
+  it('letra sem tempos por palavra fica como frase única, sem inventar sincronização interna', () => {
     const lyrics = [{ startS: 30.04, endS: 33.04, text: 'Here we are beneath the moonlight tonight' }];
     const { on } = run({ style: 'hype', lyrics, useSpeech: false });
     const captions = on('Legendas').filter((clip) => clip.reason === 'Letra da música');
-    expect(captions.length).toBeGreaterThan(1);
+    expect(captions).toHaveLength(1);
     expect(captions[0]!.timelineStartUs).toBe(14 * S);
     expect(captions.every((clip) => clip.text?.animationIn === 'pop' && clip.text.animationOut === 'fade')).toBe(true);
     expect(captions.every((clip) => clip.text?.color === '#fff0a6')).toBe(true);
-    expect(captions.every((clip) => (clip.text?.text.split(' ').length ?? 0) <= 4)).toBe(true);
+    expect(captions[0]?.text?.text).toBe(lyrics[0]!.text);
+    expect(captions[0]?.text?.timingPrecision).toBe('segment');
   });
 
   it('usa correspondências semânticas aprovadas na escolha da cena e preserva o motivo no clipe', () => {
@@ -263,7 +282,15 @@ describe('outros estilos', () => {
     expect(hype.r.warnings.some((warning) => warning.includes('omitido'))).toBe(true);
     expect(hype.on('Legendas').some((clip) => clip.reason === 'Letra da música')).toBe(false);
 
-    const lyrics = [{ startS: 40, endS: 42, text: 'rise above' }];
+    const lyrics = [{
+      startS: 40,
+      endS: 42,
+      text: 'rise above',
+      words: [
+        { startS: 40, endS: 40.5, text: 'rise', source: 'ass' as const },
+        { startS: 40.5, endS: 41, text: 'above', source: 'ass' as const },
+      ],
+    }];
     const letter = run({ style: 'letra', lyrics, useSpeech: false });
     const dropWord = letter.on('Legendas').find((clip) => clip.timelineStartUs === 24 * S)!;
     expect(dropWord.text?.text).toBe('RISE');
@@ -272,12 +299,12 @@ describe('outros estilos', () => {
     expect(dropWord.text?.animationOut).toBe('fade');
   });
 
-  it('discurso: as falas viram a espinha, com legenda em pedaços e preto e branco', () => {
+  it('discurso: as falas viram frases em unidade e indicam precisão por segmento', () => {
     const { on } = run({ style: 'discurso', durationS: 20 });
     expect(on('Vozes').length).toBeGreaterThan(0);
     expect(on('Música')[0]!.audio.gainDb).toBe(-14);
     expect(on('V1').every((c) => c.effects.some((e) => e.effect === 'color' && e.params.saturation === 0))).toBe(true);
-    expect(on('Legendas').every((c) => (c.text?.text.split(' ').length ?? 0) <= 3)).toBe(true);
+    expect(on('Legendas').every((c) => c.text?.timingPrecision === 'segment')).toBe(true);
   });
 });
 
