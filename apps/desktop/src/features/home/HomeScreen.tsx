@@ -28,7 +28,7 @@ function RecentRow({ r }: { r: RecentProject }) {
   const { openProject, platform, refreshRecents, session } = useApp();
   const isOpen = session?.path === r.path;
   return (
-    <li className="group relative">
+    <li className="home-recent-row group relative">
       <button
         type="button"
         onClick={() => openProject(r.path)}
@@ -80,9 +80,9 @@ function RecentRow({ r }: { r: RecentProject }) {
 function ContinueHero({ r }: { r: RecentProject }) {
   const openProject = useApp((s) => s.openProject);
   return (
-    <section className="mb-10 flex items-stretch gap-6" aria-label="Continuar de onde parou">
-      <button type="button" onClick={() => openProject(r.path)} className="group relative shrink-0 overflow-hidden rounded-panel" aria-label={`Abrir ${r.name}`}>
-        <Poster path={r.posterPath} className="aspect-video w-[420px] transition-transform duration-500 group-hover:scale-[1.02]" />
+    <section className="home-hero home-continue mb-10 flex items-stretch gap-6 overflow-hidden rounded-panel p-4" aria-label="Continuar de onde parou">
+      <button type="button" onClick={() => openProject(r.path)} className="group relative shrink-0 overflow-hidden rounded-control" aria-label={`Abrir ${r.name}`}>
+        <Poster path={r.posterPath} className="home-continue-poster aspect-video w-[420px] transition-transform duration-500 group-hover:scale-[1.02]" />
         <span className="pointer-events-none absolute inset-x-0 bottom-0 h-1 bg-violet" />
       </button>
       <div className="flex min-w-0 flex-col justify-end pb-1">
@@ -108,10 +108,13 @@ export function HomeScreen() {
   const list = onlyFavorites ? recents.filter((r) => r.favorite) : rest;
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[1080px] px-10 pt-10 pb-16">
-        <header className="mb-10 flex items-center justify-between">
-          <h1 className="text-[15px] font-semibold text-ink-soft">Projetos</h1>
+    <div className="home-screen h-full overflow-y-auto">
+      <div className="home-content mx-auto max-w-[1120px] px-10 pt-10 pb-16">
+        <header className="mb-10 flex items-center justify-between border-b border-line-soft pb-5">
+          <div>
+            <p className="text-2xs font-bold uppercase tracking-[0.2em] text-violet-strong">AMV Studio</p>
+            <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink">Seu espaço de criação</h1>
+          </div>
           <div className="flex gap-2">
             <Button icon={<FolderOpen size={16} />} onClick={() => openProject()}>
               Abrir projeto
@@ -123,9 +126,10 @@ export function HomeScreen() {
         </header>
 
         {!first ? (
-          <section className="max-w-[560px] pt-16">
-            <h2 className="text-[32px] leading-tight font-semibold tracking-tight">Comece seu primeiro AMV</h2>
-            <p className="mt-3 text-[15px] leading-relaxed text-ink-soft">
+          <section className="home-hero max-w-[680px] rounded-panel p-8 sm:p-10">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-strong">Da primeira cena ao corte final</p>
+            <h2 className="mt-3 text-[32px] leading-tight font-semibold tracking-tight">Comece seu primeiro AMV</h2>
+            <p className="mt-3 max-w-[560px] text-[15px] leading-relaxed text-ink-soft">
               Crie um projeto, importe os episódios e a música. O AMV Studio prepara versões leves dos vídeos para a edição ficar fluida, sem tocar nos
               seus arquivos originais.
             </p>

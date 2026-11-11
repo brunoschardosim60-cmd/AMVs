@@ -142,3 +142,8 @@
 - O assistente pode usar rótulos de personagens/ações já analisados e carregados em cache para contextualizar os clipes da timeline; são inferências com confiança limitada, não inspeção dos quadros em tempo real. O modelo não vê o arquivo exportado nem recebe frames através do chat.
 - A análise por IA extrai até três quadros em paralelo por lote. Isso reduz a serialização das chamadas locais ao FFmpeg, mas não acelera a latência do provedor nem garante menor tempo total; falta benchmark com episódio completo e modelos locais/remotos reais. O modo "todas as cenas, em detalhe" continua potencialmente demorado.
 - O Avaliador audiovisual verifica dados da timeline e oferece abrir um achado no Assistente; qualquer alteração continua sendo uma proposta sujeita à aprovação. A análise do arquivo exportado atualmente valida integridade técnica e trechos pretos, não coerência narrativa ou qualidade artística do render.
+
+## Redesign visual amplo
+
+- A nova camada visual compila, mas ainda não foi inspecionada em 1920×1080 nem em viewport menor no WebView2. Este ambiente não tem Rust/Cargo ou executável Tauri local; o frontend em navegador não substitui essa verificação.
+- A suíte completa do desktop e o build/typecheck passaram com `AMV_FFPROBE` e `AMV_FFMPEG` apontando para os sidecars. Sem essas variáveis, os testes de mídia falham ao procurar `ffprobe` no PATH.

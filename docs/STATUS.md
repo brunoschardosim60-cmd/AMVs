@@ -339,6 +339,17 @@ Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Video
 | Edição não destrutiva | implementada | Split, trim e clear-range preservam o mapeamento de origem e recortam keyframes; testes cobrem ramp, reverse, freeze, migração e continuidade nos limites. |
 | Verificação desta etapa | parcial | Projeto: 69 testes; Auto AMV: 117; legendas: 17; assistente: 38 — todos passaram. Typechecks dos seis pacotes e build desktop passaram. A execução inicial teve 22/23 testes de render; a asserção de cor foi corrigida depois e a suíte atual passa 24/24. O render real de speed ramp, freeze e reverse passou, incluindo duração de 96 quadros a 24000/1001. Comparação visual preview/export e validação no WebView2 continuam pendentes. |
 
+## Velocidade adaptativa na geração
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Slow motion em ação | implementado com critérios | O Auto AMV concentra uma rampa curta no pico de movimento quando a cena é classificada como combate/impacto e o FPS de origem oferece quadros suficientes. Quando o golpe foi sincronizado, o mapeamento conserva sua posição musical; os keyframes continuam editáveis no clipe. O resumo da geração mostra quantas rampas foram aplicadas. |
+| Aceleração em preparação | implementada com critérios | Só é aplicada numa preparação visual de alta confiança durante a construção narrativa e com pelo menos o dobro do FPS de saída. |
+| Recorte orientado a movimento | primeira fatia implementada | Ao escolher subtrechos de um plano, usa intervalos de movimento localizado com confiança suficiente para colocar o evento dentro do clipe, sem atravessar o corte original. Golpes sincronizados continuam ancorados ao pico; sem evidência local, mantém a seleção anterior. |
+| Efeitos de impacto | primeira fatia implementada | Remove o sorteio de zoom/shake genéricos: golpes sincronizados com ação visual confiável recebem zoom central animado por keyframes e shake curto conforme a direção editorial; flash no drop e grading/transições continuam pelas regras existentes. A escala-base é preservada para enquadramentos preenchidos e também na exportação. |
+| Segurança de cadência e perfis | implementadas | FPS desconhecido, insuficiente ou VFR não recebe rampa automática. A opção vem habilitada e pode ser desligada; fica preservada nos perfis, e perfis antigos sem o campo continuam válidos. |
+| Verificação | passou em testes automatizados | Auto AMV: 132/132; render com FFmpeg: 32/32; typecheck do Auto AMV e build do desktop passaram. Testes cobrem alinhamento do pico, zoom animado contextual, recorte guiado por movimento, FPS baixo, VFR, opção desligada e aceleração em preparação. A validação comparativa com mídia real autorizada e no WebView2 continua pendente; não há interpolação de quadros nem promessa de slow motion suave em qualquer fonte. |
+
 ## Composição multicamadas (schema v9)
 
 | Item | Estado | Como foi verificado |
@@ -376,3 +387,13 @@ Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Video
 | Revisão de problemas com a assistente | implementada | Cada achado do Avaliador audiovisual pode abrir o Assistente com o trecho selecionado e pedir uma proposta revisável; não altera a timeline sem aprovação. |
 | Verificação | passou parcialmente | Desktop: typecheck e 24/24 testes de sessão/player; Assistant: teste do resumo visual e suíte do pacote. A build/tempo de inferência com modelo real ainda precisam de verificação. |
 | Análise semântica do arquivo exportado | pendente | Exportação já verifica integridade, duração, FPS, streams, sincronismo A/V e trechos pretos; ainda não há revisão semântica de quadros do arquivo final por IA nem comparação editorial completa com a timeline. |
+
+## Reformulação visual ampla da interface
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Sistema visual compartilhado | primeira camada implementada | Tokens, foco, superfícies, botões e diálogos atualizados sem adicionar dependências nem alterar os fluxos de edição. |
+| Início, editor, música, cenas, efeitos sonoros, assistente e geração | primeira camada implementada | Hierarquia visual, espaçamento, responsividade e estados existentes foram preservados; a timeline e o preview mantêm os mesmos handlers. |
+| Transporte do preview | implementado | Busca temporal por quadro e tela cheia usam o playhead e o monitor existentes. |
+| Build e testes do desktop | passou | Build/typecheck de produção passou; 42/42 testes passaram com `AMV_FFMPEG` e `AMV_FFPROBE` apontando para os sidecars locais. |
+| Inspeção visual 1920×1080 e viewport menor no Windows/WebView2 | pendente | Não há toolchain Rust/Cargo nem executável Tauri local disponível. Não declarar a validação visual concluída até abrir e conferir o app no WebView2. |

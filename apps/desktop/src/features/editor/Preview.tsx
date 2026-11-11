@@ -1,5 +1,5 @@
 import { clipEndUs, evaluateKeyframes, formatTimecode, frameToUs, projectDurationUs, upsertKeyframe, usToFrame, type Clip, type Project } from '@amv/project';
-import { ChevronFirst, ChevronLast, MonitorPlay, Pause, Play, StepBack, StepForward } from 'lucide-react';
+import { ChevronFirst, ChevronLast, Maximize2, Minimize2, MonitorPlay, Pause, Play, StepBack, StepForward } from 'lucide-react';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
@@ -53,8 +53,10 @@ export function Preview({ session, project }: { session: ProjectSession; project
   const player = getPlayer(session);
   const P = project.settings;
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
+  const [fullscreen, setFullscreen] = useState(false);
   const [draftTransform, setDraftTransform] = useState<{ x: number; y: number; scale: number } | null>(null);
   const manipulation = useRef<{ clip: Clip; action: 'move' | 'resize'; pointerId: number; startX: number; startY: number; x: number; y: number; scale: number; width: number; height: number } | null>(null);
+  const previewRef = useRef<HTMLElement>(null);
 
   // liga o canvas ao player
   useEffect(() => {
@@ -77,6 +79,12 @@ export function Preview({ session, project }: { session: ProjectSession; project
   }, [player]);
 
   useEffect(() => player.setProject(project), [player, project]);
+
+  useEffect(() => {
+    const updateFullscreen = () => setFullscreen(document.fullscreenElement === previewRef.current);
+    document.addEventListener('fullscreenchange', updateFullscreen);
+    return () => document.removeEventListener('fullscreenchange', updateFullscreen);
+  }, []);
 
   // playhead mudou por fora (scrub, teclas): reposiciona o player
   useEffect(() => {
@@ -124,6 +132,17 @@ export function Preview({ session, project }: { session: ProjectSession; project
   const go = (us: number) => {
     setPlayhead(us);
     player.seek(us);
+  };
+
+  const toggleFullscreen = async () => {
+    const element = previewRef.current;
+    if (!element) return;
+    try {
+      if (document.fullscreenElement === element) await document.exitFullscreen();
+      else await element.requestFullscreen();
+    } catch (error) {
+      useApp.getState().toast({ tone: 'warn', title: 'Não foi possível ampliar a prévia', body: error instanceof Error ? error.message : String(error) });
+    }
   };
   const selectedClip = selection.length === 1 ? project.clips.find((clip) => clip.id === selection[0]) : undefined;
   const selectedTrack = selectedClip && project.tracks.find((track) => track.id === selectedClip.trackId);
@@ -213,7 +232,7 @@ export function Preview({ session, project }: { session: ProjectSession; project
   };
 
   return (
-    <section className="editor-preview flex min-h-0 min-w-0 flex-1 flex-col" aria-label="Pré-visualização">
+    <section ref={previewRef} className="editor-preview flex min-h-0 min-w-0 flex-1 flex-col" aria-label="Pré-visualização">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line-soft px-4">
         <MonitorPlay size={15} className="text-violet-strong" />
         <span className="text-[11px] font-semibold tracking-wide text-ink">Prévia</span>
@@ -253,46 +272,62 @@ export function Preview({ session, project }: { session: ProjectSession; project
           )}
         </div>
       </div>
-      <div className="flex h-12 shrink-0 items-center gap-2 border-t border-line-soft bg-panel px-3">
-        <span className="tnum w-[92px] shrink-0 font-mono text-[13px] font-semibold tracking-tight text-ink">{formatTimecode(playheadUs, P.fps)}</span>
-        <div className="flex flex-1 items-center justify-center gap-0.5">
-          <div className="flex items-center rounded-lg border border-line-soft bg-base/80 p-0.5">
-          <IconButton label="Início (Home)" onClick={() => go(0)}>
-            <ChevronFirst size={17} />
-          </IconButton>
-          <IconButton label="Quadro anterior (←)" onClick={() => go(stepFrames(project, playheadUs, -1))}>
-            <StepBack size={16} />
-          </IconButton>
-          <button
-            type="button"
-            aria-label={playing ? 'Pausar (Espaço)' : 'Reproduzir (Espaço)'}
-            title={playing ? 'Pausar (Espaço)' : 'Reproduzir (Espaço)'}
-            className="mx-1 grid size-9 place-items-center rounded-full bg-ink text-base hover:bg-white"
-            onClick={() => setPlaying(!playing)}
-          >
-            {playing ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" className="translate-x-px" />}
-          </button>
-          <IconButton label="Próximo quadro (→)" onClick={() => go(stepFrames(project, playheadUs, 1))}>
-            <StepForward size={16} />
-          </IconButton>
-          <IconButton label="Fim (End)" onClick={() => go(end)}>
-            <ChevronLast size={17} />
-          </IconButton>
+      <div className="flex min-h-[68px] shrink-0 flex-col justify-center gap-1 border-t border-line-soft bg-panel px-3 py-1.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="tnum w-[92px] shrink-0 font-mono text-[13px] font-semibold tracking-tight text-ink">{formatTimecode(playheadUs, P.fps)}</span>
+          <div className="flex min-w-0 flex-1 items-center justify-center gap-0.5">
+            <div className="flex items-center rounded-lg border border-line-soft bg-base/80 p-0.5">
+              <IconButton label="Início (Home)" onClick={() => go(0)}>
+                <ChevronFirst size={17} />
+              </IconButton>
+              <IconButton label="Quadro anterior (←)" onClick={() => go(stepFrames(project, playheadUs, -1))}>
+                <StepBack size={16} />
+              </IconButton>
+              <button
+                type="button"
+                aria-label={playing ? 'Pausar (Espaço)' : 'Reproduzir (Espaço)'}
+                title={playing ? 'Pausar (Espaço)' : 'Reproduzir (Espaço)'}
+                className="mx-1 grid size-9 place-items-center rounded-full bg-ink text-base hover:bg-white"
+                onClick={() => setPlaying(!playing)}
+              >
+                {playing ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" className="translate-x-px" />}
+              </button>
+              <IconButton label="Próximo quadro (→)" onClick={() => go(stepFrames(project, playheadUs, 1))}>
+                <StepForward size={16} />
+              </IconButton>
+              <IconButton label="Fim (End)" onClick={() => go(end)}>
+                <ChevronLast size={17} />
+              </IconButton>
+            </div>
           </div>
+          <span className="tnum w-[92px] shrink-0 text-right font-mono text-[11px] text-muted">{formatTimecode(end, P.fps)}</span>
+          <label className="hidden shrink-0 items-center justify-end gap-1.5 text-[10px] text-muted sm:flex">
+            Escala
+            <select
+              className="h-7 rounded-md border border-line bg-base px-1.5 text-[11px] text-ink"
+              value={previewScale}
+              onChange={(e) => setPreviewScale(Number(e.target.value) as 1 | 0.5 | 0.25)}
+              title="Resolução do preview; a exportação usa sempre a qualidade total"
+            >
+              <option value={1}>100%</option>
+              <option value={0.5}>1/2</option>
+              <option value={0.25}>1/4</option>
+            </select>
+          </label>
+          <IconButton label={fullscreen ? 'Sair da tela cheia' : 'Ampliar prévia'} onClick={() => void toggleFullscreen()}>
+            {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </IconButton>
         </div>
-        <label className="flex w-[112px] shrink-0 items-center justify-end gap-1.5 text-[10px] text-muted">
-          Escala
-          <select
-            className="h-7 rounded-md border border-line bg-base px-1.5 text-[11px] text-ink"
-            value={previewScale}
-            onChange={(e) => setPreviewScale(Number(e.target.value) as 1 | 0.5 | 0.25)}
-            title="Resolução do preview; a exportação usa sempre a qualidade total"
-          >
-            <option value={1}>100%</option>
-            <option value={0.5}>1/2</option>
-            <option value={0.25}>1/4</option>
-          </select>
-        </label>
+        <input
+          type="range"
+          aria-label="Posição da prévia"
+          className="h-1 w-full cursor-pointer accent-violet"
+          min={0}
+          max={Math.max(1, end)}
+          step={Math.max(1, frameToUs(1, P.fps))}
+          value={Math.min(playheadUs, end)}
+          onChange={(event) => go(Number(event.currentTarget.value))}
+        />
       </div>
     </section>
   );

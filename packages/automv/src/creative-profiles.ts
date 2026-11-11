@@ -23,6 +23,7 @@ export interface CreativeProfile {
   showText: boolean;
   useEffects: boolean;
   hitSync: boolean;
+  adaptiveSpeed: boolean;
 }
 
 export const DEFAULT_CREATIVE_PROFILES: readonly CreativeProfile[] = [
@@ -41,6 +42,7 @@ export const DEFAULT_CREATIVE_PROFILES: readonly CreativeProfile[] = [
     showText: true,
     useEffects: true,
     hitSync: true,
+    adaptiveSpeed: true,
   },
   {
     id: 'builtin:cinematic',
@@ -57,6 +59,7 @@ export const DEFAULT_CREATIVE_PROFILES: readonly CreativeProfile[] = [
     showText: true,
     useEffects: false,
     hitSync: true,
+    adaptiveSpeed: true,
   },
   {
     id: 'builtin:chronological',
@@ -73,6 +76,7 @@ export const DEFAULT_CREATIVE_PROFILES: readonly CreativeProfile[] = [
     showText: true,
     useEffects: false,
     hitSync: true,
+    adaptiveSpeed: false,
   },
 ];
 
@@ -98,6 +102,7 @@ export function parseCreativeProfiles(value: unknown): CreativeProfile[] {
     const {
       id, name, style, intensity, editorialDirection, organizationMode, focus,
       actionEmphasis, emotionEmphasis, voiceMoments, showText, useEffects, hitSync,
+      adaptiveSpeed = true,
       preferredEmotion,
     } = entry;
     if (typeof id !== 'string' || id.trim().length === 0 || PROFILE_IDS.has(id) || ids.has(id)) {
@@ -117,7 +122,8 @@ export function parseCreativeProfiles(value: unknown): CreativeProfile[] {
       || !boundedNumber(voiceMoments, 0, 4)
       || typeof showText !== 'boolean'
       || typeof useEffects !== 'boolean'
-      || typeof hitSync !== 'boolean') {
+      || typeof hitSync !== 'boolean'
+      || typeof adaptiveSpeed !== 'boolean') {
       throw new Error(`O perfil criativo "${name.trim()}" contém configurações inválidas.`);
     }
     ids.add(id);
@@ -137,6 +143,7 @@ export function parseCreativeProfiles(value: unknown): CreativeProfile[] {
       showText,
       useEffects,
       hitSync,
+      adaptiveSpeed,
     };
   });
 }

@@ -42,6 +42,15 @@ describe('perfis criativos', () => {
     expect(() => parseCreativeProfiles([{ ...profile, id: 'builtin:combat' }])).toThrow(/identificador/i);
   });
 
+  it('mantém compatibilidade com perfis salvos antes da opção de velocidade adaptativa', () => {
+    const { adaptiveSpeed: _adaptiveSpeed, ...legacyProfile } = {
+      ...DEFAULT_CREATIVE_PROFILES[0]!,
+      id: 'custom:legacy',
+      name: 'Perfil antigo',
+    };
+    expect(parseCreativeProfiles([legacyProfile])[0]?.adaptiveSpeed).toBe(true);
+  });
+
   it('muda a prioridade de seleção somente com base nos sinais de cena disponíveis', () => {
     const balanced = scoreSceneCandidate({
       ...actionScene,

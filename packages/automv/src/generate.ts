@@ -5,7 +5,7 @@
  */
 import { SFX_ANCHOR_S, SFX_DURATION_S, type SfxKind } from '@amv/sfx';
 import { impactScore, languageFamily, normLabel, pickAudioStreamByLanguage, shotKey, type EpisodeVision, type ShotVision, type Cue, type EpisodeAnalysis, type MusicAnalysis, type Sequence, type Shot, type SpeechSegment } from '@amv/analysis';
-import { defaultScale, matchSceneColor, matchSceneExposure, newId, TextContentSchema, type Clip, type Command, type EffectInstance, type Project, type Track } from '@amv/project';
+import { defaultScale, matchSceneColor, matchSceneExposure, newId, speedCurveIntegral, speedCurveTotal, TextContentSchema, timelineLocalAtSource, type Clip, type Command, type EffectInstance, type Keyframe, type Project, type Track } from '@amv/project';
 import { narrativeAt, narrativeRoleLabel, planNarrative, type NarrativeBeat } from './narrative.js';
 import { buildMusicMap } from './music-map.js';
 import { scoreSceneCandidate, type SceneScoreBreakdown } from './scoring.js';
@@ -19,6 +19,10 @@ export interface EpisodeInput {
   name: string;
   analysis: EpisodeAnalysis;
   hasAudio: boolean;
+  /** FPS médio/racional medido pelo probe; necessário para rampas automáticas sem inventar quadros. */
+  sourceFps?: { num: number; den: number } | null;
+  /** Rampas automáticas são evitadas em VFR, cuja cadência local não é garantida pelo FPS médio. */
+  variableFrameRate?: boolean;
   /** Faixas de áudio do arquivo (ex.: japonês e português): para escolher a da fala. */
   audioStreams?: { index: number; language: string | null; title?: string | null }[];
   /** Quem aparece em cada cena e se é luta (análise com IA com visão), se a pessoa rodou. */
@@ -58,6 +62,8 @@ export interface GenerateOptions {
   sequenceIds?: string[];
   /** Encaixa o golpe de cada cena forte na batida (padrão: ligado). */
   hitSync?: boolean;
+  /** Aplica rampas de velocidade só quando a ação e a cadência da fonte são confiáveis. */
+  adaptiveSpeed?: boolean;
   /** Ajuste manual da posição dos cortes em relação à música, em milissegundos. */
   beatOffsetMs?: number;
   /** Quantas falas intercalar, contando a de antes do drop. Padrão: 1 se o estilo usa fala, senão 0. */
@@ -83,7 +89,7 @@ export interface GenerateOptions {
 
 export interface GenerateResult {
   commands: Command[];
-  summary: { clips: number; cuts: number; speech: string | null; musicRange: [number, number]; drop: number | null; focus: 'fight' | 'mix'; fights: string[]; voices: number; hitsSynced: number; sfx: number; direction: NarrativeBeat[] };
+  summary: { clips: number; cuts: number; speech: string | null; musicRange: [number, number]; drop: number | null; focus: 'fight' | 'mix'; fights: string[]; voices: number; hitsSynced: number; speedRamps: number; sfx: number; direction: NarrativeBeat[] };
   warnings: string[];
 }
 
@@ -574,6 +580,45 @@ function baseClip(trackId: string, assetId: string | null, startS: number, durS:
   };
 }
 
+function adaptiveSpeedCurve(durationUs: number, impactAtUs: number, minimumFactor: number): Keyframe[] {
+  const impact = Math.max(0, Math.min(durationUs, impactAtUs));
+  const slowStart = Math.max(0, impact - 100_000);
+  const slowEnd = Math.min(durationUs, impact + 45_000);
+  const recover = Math.min(durationUs, impact + 220_000);
+  const points: Keyframe[] = [
+    { atUs: 0, value: 1.08, easing: 'linear' },
+    { atUs: slowStart, value: 1.08, easing: 'ease-in-out' },
+    { atUs: impact, value: minimumFactor, easing: 'ease-in-out' },
+    { atUs: slowEnd, value: minimumFactor, easing: 'hold' },
+    { atUs: recover, value: 1.12, easing: 'ease-in-out' },
+    { atUs: durationUs, value: 1.12, easing: 'linear' },
+  ];
+  return points
+    .map((point) => ({ ...point, atUs: Math.max(0, Math.min(durationUs, point.atUs)) }))
+    .filter((point, index, all) => index === 0 || point.atUs > all[index - 1]!.atUs);
+}
+
+function accelerationCurve(durationUs: number): Keyframe[] {
+  return [
+    { atUs: 0, value: 0.9, easing: 'ease-in-out' },
+    { atUs: durationUs, value: 1.45, easing: 'linear' },
+  ];
+}
+
+function impactZoomCurve(durationUs: number, impactAtUs: number, baseScale: number, strength: number): Keyframe[] {
+  const impact = Math.max(0, Math.min(durationUs, impactAtUs));
+  const points: { atUs: number; value: number; easing: Keyframe['easing'] }[] = [
+    { atUs: 0, value: baseScale, easing: 'linear' },
+    { atUs: Math.max(0, impact - 80_000), value: baseScale, easing: 'ease-in-out' },
+    { atUs: impact, value: baseScale * (1 + strength), easing: 'ease-out' },
+    { atUs: Math.min(durationUs, impact + 100_000), value: baseScale * (1 + strength * 0.45), easing: 'ease-in-out' },
+    { atUs: Math.min(durationUs, impact + 260_000), value: baseScale, easing: 'linear' },
+  ];
+  return points
+    .map((point) => ({ ...point, atUs: Math.max(0, Math.min(durationUs, point.atUs)) }))
+    .filter((point, index, all) => index === 0 || point.atUs > all[index - 1]!.atUs);
+}
+
 function fx(effect: string, params: Record<string, number>): EffectInstance {
   return { id: newId('fx'), effect, enabled: true, params };
 }
@@ -656,7 +701,16 @@ export function generateAmv(project: Project, music: MusicInput, episodes: Episo
   for (const c of r.commands) {
     if (c.type !== 'clip.add' || !c.clip.assetId || !video.has(c.clip.trackId)) continue;
     const asset = project.assets.find((a) => a.id === c.clip.assetId);
-    if (asset) c.clip.transform = { ...c.clip.transform, scale: defaultScale(project, asset) };
+    if (asset) {
+      const base = defaultScale(project, asset);
+      c.clip.transform = { ...c.clip.transform, scale: base };
+      if (c.clip.keyframes['transform.scale']?.length) {
+        c.clip.keyframes['transform.scale'] = c.clip.keyframes['transform.scale'].map((frame) => ({
+          ...frame,
+          value: frame.value * base,
+        }));
+      }
+    }
   }
   return r;
 }
@@ -836,7 +890,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       clipsMade++;
       t += len + 0.35;
     }
-    return { commands: cmds, summary: { clips: clipsMade, cuts: clipsMade, speech: chosen[0] && speechTextMatchesAudio(chosen[0].ep, chosen[0].s, lang) ? chosen[0].s.text : null, musicRange: range, drop: dropT, focus: 'mix', fights: [], voices: chosen.length, hitsSynced: 0, sfx: 0, direction }, warnings };
+    return { commands: cmds, summary: { clips: clipsMade, cuts: clipsMade, speech: chosen[0] && speechTextMatchesAudio(chosen[0].ep, chosen[0].s, lang) ? chosen[0].s.text : null, musicRange: range, drop: dropT, focus: 'mix', fights: [], voices: chosen.length, hitsSynced: 0, speedRamps: 0, sfx: 0, direction }, warnings };
   }
 
   // ---------------------------------------------------------------- cortes na batida
@@ -873,7 +927,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     warnings.push(plan.wanted
       ? `Nenhuma cena analisada corresponde aos personagens selecionados (${[...plan.wanted].join(', ')}); não misturei outros personagens.`
       : 'Nenhuma cena analisada ainda: espere a análise dos episódios terminar.');
-    return { commands: cmds, summary: { clips: 0, cuts: 0, speech: null, musicRange: range, drop: dropT, focus: plan.mode, fights: [], voices: 0, hitsSynced: 0, sfx: 0, direction }, warnings };
+    return { commands: cmds, summary: { clips: 0, cuts: 0, speech: null, musicRange: range, drop: dropT, focus: plan.mode, fights: [], voices: 0, hitsSynced: 0, speedRamps: 0, sfx: 0, direction }, warnings };
   }
   const { lowI, highI } = plan.fit;
   const boost = 0; // já embutido em plan.fit
@@ -1020,6 +1074,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
 
   let syncedHits = 0;
   let hitSlots = 0;
+  let speedRamps = 0;
   let prev: Candidate | null = null;
   let prevSlot: Slot | null = null;
   /** Para os efeitos sonoros: onde cada corte/golpe aconteceu na timeline. */
@@ -1067,6 +1122,84 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         }
       }
     }
+    let motionCropReason: string | null = null;
+    if (!hit && shotLen > srcLen) {
+      const local = visionOf(c.ep, c.shot)?.local;
+      const motionEvent = local?.motionEvents
+        .filter((event) =>
+          event.startS >= c.shot.startS
+          && event.endS <= c.shot.endS
+          && event.confidence >= 0.6
+          && event.subjectMotion.confidence >= 0.6
+          && event.subjectMotion.speed >= 0.025,
+        )
+        .sort((left, right) =>
+          right.subjectMotion.speed * right.subjectMotion.confidence
+          - left.subjectMotion.speed * left.subjectMotion.confidence,
+        )[0];
+      if (motionEvent) {
+        const eventCenterS = (motionEvent.startS + motionEvent.endS) / 2;
+        const sourceLoS = c.shot.startS + Math.min(0.08, Math.max(0, shotLen - srcLen));
+        const sourceHiS = c.shot.endS - srcLen;
+        const preferredStartS = eventCenterS - srcLen * 0.45;
+        const motionStartS = Math.max(sourceLoS, Math.min(sourceHiS, preferredStartS));
+        if (eventCenterS >= motionStartS && eventCenterS <= motionStartS + srcLen) {
+          srcIn = motionStartS;
+          motionCropReason = 'recorte guiado por movimento localizado com confiança';
+        }
+      }
+    }
+    let speedKeyframes: Keyframe[] = [];
+    let adaptiveSpeedReason: string | null = null;
+    let visualScaleKeyframes: Keyframe[] = [];
+    let visualImpactReason: string | null = null;
+    const visual = visionOf(c.ep, c.shot);
+    const sourceFps = c.ep.sourceFps && c.ep.sourceFps.den > 0 ? c.ep.sourceFps.num / c.ep.sourceFps.den : 0;
+    const projectFps = project.settings.fps.num / project.settings.fps.den;
+    const fpsRatio = sourceFps / projectFps;
+    const canRetimingBeSmooth = opts.adaptiveSpeed !== false
+      && !c.ep.variableFrameRate
+      && Number.isFinite(fpsRatio)
+      && fpsRatio >= 1.5
+      && speed === 1
+      && shotLen >= len
+      && len >= 0.35;
+    const reliablePreparation = narrativeBeat?.role === 'build'
+      && visual?.action === 'preparação'
+      && (visual.confidence ?? 0) >= 0.75;
+    if (canRetimingBeSmooth && reliablePreparation && fpsRatio >= 2) {
+      speedKeyframes = accelerationCurve(us(len));
+      adaptiveSpeedReason = 'aceleração progressiva numa preparação identificada';
+    } else if (canRetimingBeSmooth) {
+      const reliableImpact = (visual?.action === 'combate' && (visual.confidence ?? 0) >= 0.7)
+        || (c.shot.tags.includes('impacto') && c.shot.motion >= 0.65);
+      if (reliableImpact && Number.isFinite(c.shot.peakS) && c.shot.peakS >= c.shot.startS && c.shot.peakS < c.shot.endS) {
+        const impactAtS = hit
+          ? (sl.isDrop ? 0.04 : Math.min(0.12, Math.max(0.05, len * 0.25)))
+          : Math.min(len * 0.45, Math.max(0.08, len * 0.35));
+        const minimumFactor = Math.max(0.65, Math.min(0.9, 1.2 / fpsRatio));
+        speedKeyframes = adaptiveSpeedCurve(us(len), us(impactAtS), minimumFactor);
+        const candidateClip = baseClip(v1.id, c.ep.assetId, sl.startS, len, srcIn, '', {
+          keyframes: { speed: speedKeyframes },
+        });
+        candidateClip.sourceOutUs = candidateClip.sourceInUs + candidateClip.durationUs;
+        const sourceLoUs = us(c.shot.startS + Math.min(0.08, Math.max(0, shotLen - len)));
+        const sourceHiUs = us(c.shot.endS) - candidateClip.durationUs;
+        const desiredSourceInUs = us(c.shot.peakS) - Math.round(candidateClip.durationUs * speedCurveIntegral(candidateClip, us(impactAtS)) / speedCurveTotal(candidateClip));
+        const alignedSourceInUs = Math.max(sourceLoUs, Math.min(sourceHiUs, desiredSourceInUs));
+        candidateClip.sourceInUs = alignedSourceInUs;
+        candidateClip.sourceOutUs = alignedSourceInUs + candidateClip.durationUs;
+        const alignedImpactUs = timelineLocalAtSource(candidateClip, us(c.shot.peakS));
+        const alignmentToleranceUs = Math.round(S / projectFps);
+        if (alignedImpactUs !== null && Math.abs(alignedImpactUs - us(impactAtS)) <= alignmentToleranceUs) {
+          srcIn = alignedSourceInUs / S;
+          speedKeyframes = candidateClip.keyframes.speed ?? [];
+          adaptiveSpeedReason = 'câmera lenta breve no impacto com o golpe preservado no corte musical';
+        } else {
+          speedKeyframes = [];
+        }
+      }
+    }
 
     const priorGrade = project.clips.find((old) =>
       old.trackId === v1.id && old.origin === 'ai' && sl.startS * S >= old.timelineStartUs && sl.startS * S < old.timelineStartUs + old.durationUs,
@@ -1087,8 +1220,22 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       }));
     }
     const fxOn = opts.useEffects && style.impactFx > 0;
-    const visual = visionOf(c.ep, c.shot);
     const hasVisualImpact = c.shot.tags.includes('impacto') || (visual?.confidence !== undefined && visual.confidence >= 0.55 && visual.action === 'combate');
+    let impactLocalUs: number | null = null;
+    if (Number.isFinite(c.shot.peakS) && c.shot.peakS >= srcIn && c.shot.peakS <= srcIn + len * speed) {
+      const speedProbe = baseClip(v1.id, c.ep.assetId, sl.startS, len, srcIn, '', {
+        speed,
+        sourceOutUs: us(srcIn + len * speed),
+        keyframes: speedKeyframes.length ? { speed: speedKeyframes } : {},
+      });
+      if (speedKeyframes.length) speedProbe.sourceOutUs = speedProbe.sourceInUs + speedProbe.durationUs;
+      impactLocalUs = timelineLocalAtSource(speedProbe, us(c.shot.peakS));
+    }
+    if (fxOn && hit && hasVisualImpact && impactLocalUs !== null) {
+      const zoomStrength = editorialDirection === 'cinematic' ? 0.035 : editorialDirection === 'hype' ? 0.075 : 0.055;
+      visualScaleKeyframes = impactZoomCurve(us(len), impactLocalUs, 1, zoomStrength);
+      visualImpactReason = 'zoom de impacto animado no golpe sincronizado';
+    }
     if (fxOn && sl.isDrop) {
       const flashStrength = editorialDirection === 'cinematic' ? 0.5 : editorialDirection === 'hype' ? 1.15 : 1;
       effects.push(fx('flash', { duration: editorialDirection === 'cinematic' ? 0.12 : 0.2, white: 1, strength: flashStrength }));
@@ -1096,11 +1243,10 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         const shakeIntensity = editorialDirection === 'cinematic' ? 8 : editorialDirection === 'hype' ? 28 : 22;
         effects.push(fx('shake', { intensity: shakeIntensity, frequency: 14, duration: editorialDirection === 'cinematic' ? 0.2 : 0.45 }));
       }
-    } else if (fxOn && editorialDirection !== 'cinematic' && sl.energy > 0.7 && hasVisualImpact && rand() < 0.45 * style.impactFx) {
-      const intensity = editorialDirection === 'hype' ? 18 : 14;
-      effects.push(fx('shake', { intensity, frequency: 12, duration: Math.min(0.35, len) }));
-    } else if (fxOn && editorialDirection !== 'cinematic' && sl.energy > 0.55 && len >= 0.8 && rand() < 0.3 * style.impactFx) {
-      effects.push(fx('zoom', { from: 1, to: 1.15, ease: 1 }));
+    } else if (fxOn && editorialDirection !== 'cinematic' && hit && sl.energy >= 0.65 && hasVisualImpact) {
+      const visualConfidence = Math.max(visual?.confidence ?? 0, c.shot.motion);
+      const intensity = (editorialDirection === 'hype' ? 8 : 5) + Math.round(visualConfidence * (editorialDirection === 'hype' ? 12 : 8));
+      effects.push(fx('shake', { intensity, frequency: 12, duration: Math.min(0.22, len) }));
     }
     const previousVision = prev ? visionOf(prev.ep, prev.shot) : undefined;
     const currentVision = visionOf(c.ep, c.shot);
@@ -1133,7 +1279,10 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       best.breakdown.reasons.length ? `critérios: ${best.breakdown.reasons.join(', ')}` : null,
       sequencePlan.repeatedSlots.includes(slotIndex) ? 'cena repetida por falta de material novo' : null,
       hit ? 'golpe na batida' : null,
+      motionCropReason,
       speed < 1 ? `câmera lenta ${speed.toFixed(2)}×` : null,
+      adaptiveSpeedReason,
+      visualImpactReason,
       exposureMatch ? `exposição ajustada ${exposureMatch > 0 ? '+' : ''}${exposureMatch.toFixed(2)} EV pela diferença de luminosidade` : null,
       colorMatch.temperature || colorMatch.tint ? 'cor suavizada em relação à cena anterior usando histogramas visuais locais' : null,
       transitionChoice?.reason ?? null,
@@ -1142,6 +1291,12 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       .join(' — ');
     const clip = baseClip(v1.id, c.ep.assetId, sl.startS, len, srcIn, why, { speed, sourceOutUs: us(srcIn) + us(srcLen), effects: clipEffects, transitionIn: transition });
     clip.sourceOutUs = clip.sourceInUs + Math.round(clip.durationUs * speed);
+    if (speedKeyframes.length) {
+      clip.keyframes.speed = speedKeyframes;
+      clip.sourceOutUs = clip.sourceInUs + clip.durationUs;
+      speedRamps++;
+    }
+    if (visualScaleKeyframes.length) clip.keyframes['transform.scale'] = visualScaleKeyframes;
     cmds.push({ type: 'clip.add', clip });
     if (opts.showText && text && sl.word) {
       const timing = sl.wordTiming
@@ -1150,7 +1305,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra', sl.isDrop, 0, timing, 'lyrics-cinematic') });
     }
     used.add(c.id);
-    cutsLog.push({ startS: sl.startS, len, energy: sl.energy, intensity: c.shot.intensity, isDrop: sl.isDrop, hitAtS: hit ? sl.startS + (c.shot.peakS - srcIn) / speed : null, ...(sl.lyricCueKey ? { lyricCueKey: sl.lyricCueKey } : {}), ...(lyricMatch ? { lyricMatchScore: lyricMatch.score, lyricMatchReason: lyricMatch.reason } : {}) });
+    const impactAtUs = hit ? timelineLocalAtSource(clip, us(c.shot.peakS)) : null;
+    cutsLog.push({ startS: sl.startS, len, energy: sl.energy, intensity: c.shot.intensity, isDrop: sl.isDrop, hitAtS: impactAtUs === null ? null : sl.startS + impactAtUs / S, ...(sl.lyricCueKey ? { lyricCueKey: sl.lyricCueKey } : {}), ...(lyricMatch ? { lyricMatchScore: lyricMatch.score, lyricMatchReason: lyricMatch.reason } : {}) });
     prev = c;
     prevSlot = sl;
     clipsMade++;
@@ -1288,6 +1444,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       fights: plan.pool.map((e) => `${e.ep.name} ${fmt(e.seq.startS)}–${fmt(e.seq.endS)}`),
       voices: blocks.length,
       hitsSynced: syncedHits,
+      speedRamps,
       sfx: sfxCount,
       direction,
     },

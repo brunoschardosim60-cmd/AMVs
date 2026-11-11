@@ -147,7 +147,7 @@ export function SoundLibraryScreen() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center justify-between border-b border-line px-5 py-3">
+      <header className="studio-page-header flex shrink-0 items-center justify-between border-b border-line px-5 py-3">
         <div>
           <h1 className="flex items-center gap-2 text-base font-semibold"><AudioLines size={18} className="text-violet" /> Biblioteca de efeitos sonoros</h1>
           <p className="mt-1 text-xs text-muted">Arquivos locais referenciados sem cópia ou alteração. Confira licença e atribuição antes de usar.</p>
@@ -208,7 +208,7 @@ export function SoundLibraryScreen() {
             <div className="min-h-0 flex-1 overflow-auto p-3">
               <div className="grid gap-2">
                 {sounds.map((sound) => (
-                  <article key={sound.id} className={`flex items-center gap-3 rounded-panel border p-3 ${selectedId === sound.id ? 'border-violet/60 bg-violet/5' : 'border-line bg-panel'}`} onClick={() => setSelectedId(sound.id)}>
+                  <article key={sound.id} className={`sound-library-item flex items-center gap-3 rounded-panel border p-3 ${selectedId === sound.id ? 'border-violet/60 bg-violet/5' : 'border-line'}`} onClick={() => setSelectedId(sound.id)}>
                     <button type="button" aria-label={playingId === sound.id ? `Pausar ${sound.name}` : `Pré-escutar ${sound.name}`} className="grid size-9 shrink-0 place-items-center rounded-full bg-raised text-ink-soft hover:text-ink" onClick={(event) => { event.stopPropagation(); void preview(sound); }}>
                       {playingId === sound.id ? <Pause size={15} /> : <Play size={15} />}
                     </button>

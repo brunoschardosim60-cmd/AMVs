@@ -400,7 +400,7 @@ export function SceneLaboratory({ session }: { session: ProjectSession }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3">
+      <header className="studio-page-header flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3">
         <div>
           <h1 className="text-base font-semibold">Laboratório de Cenas</h1>
           <p className="text-2xs text-muted">{entries.length} cenas analisadas · {analysisTargets.length} vídeos com análise disponível · cache reaproveitado</p>

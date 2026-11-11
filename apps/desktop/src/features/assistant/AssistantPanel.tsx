@@ -240,7 +240,7 @@ export function AssistantPanel({ session, onClose }: { session: ProjectSession; 
       </button>
     )}
     <aside
-      className={`fixed z-[35] flex-col rounded-xl border border-line bg-panel shadow-2xl ${float.minimized ? 'hidden' : 'flex'}`}
+      className={`assistant-floating-panel fixed z-[35] flex-col rounded-xl border border-line bg-panel ${float.minimized ? 'hidden' : 'flex'}`}
       style={{ left: float.pos.x, top: float.pos.y, width: 380, height: 540, minWidth: 300, minHeight: 320, maxWidth: '92vw', maxHeight: 'calc(100vh - 16px)', resize: 'both', overflow: 'hidden' }}
       aria-label="Assistente"
     >

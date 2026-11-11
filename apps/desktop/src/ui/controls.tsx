@@ -4,9 +4,9 @@ import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from 're
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
 const VARIANTS: Record<Variant, string> = {
-  primary: 'bg-violet text-white hover:bg-violet-strong disabled:bg-violet-deep disabled:text-muted',
-  secondary: 'bg-raised text-ink border border-line hover:bg-hover disabled:text-faint',
-  ghost: 'text-ink-soft hover:bg-raised hover:text-ink disabled:text-faint disabled:hover:bg-transparent',
+  primary: 'bg-violet text-white shadow-[0_3px_14px_rgba(137,117,245,0.16)] hover:bg-violet-strong hover:shadow-[0_4px_18px_rgba(137,117,245,0.24)] disabled:bg-violet-deep disabled:text-muted',
+  secondary: 'bg-raised/80 text-ink border border-line hover:border-line hover:bg-hover disabled:text-faint',
+  ghost: 'text-ink-soft hover:bg-raised/80 hover:text-ink disabled:text-faint disabled:hover:bg-transparent',
   danger: 'text-danger hover:bg-danger/10 disabled:text-faint',
 };
 
@@ -77,8 +77,8 @@ export function Dialog({
   return (
     <div className="fixed inset-0 z-40 grid place-items-center bg-black/55" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div ref={ref} role="dialog" aria-modal="true" aria-label={title} className={`${width} flex max-h-[calc(100dvh-32px)] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-panel border border-line bg-panel shadow-2xl shadow-black/50`}>
-        <div className="flex shrink-0 items-center justify-between border-b border-line-soft px-5 py-3.5">
-          <h2 className="text-[15px] font-semibold">{title}</h2>
+        <div className="flex shrink-0 items-center justify-between border-b border-line-soft bg-white/[0.015] px-5 py-3.5">
+          <h2 className="text-[15px] font-semibold tracking-tight">{title}</h2>
           <IconButton label="Fechar" onClick={onClose}>
             <X size={16} />
           </IconButton>

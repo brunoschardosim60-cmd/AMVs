@@ -778,7 +778,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                   aria-label={`${c.label ?? asset?.name ?? 'clipe'} em ${formatTimecode(c.timelineStartUs, project.settings.fps)}`}
                   title={`${c.label ?? asset?.name ?? 'Texto'}${c.groupId ? '\nElemento agrupado' : ''}${c.reason ? `\nIA: ${c.reason}` : ''}`}
                   onPointerDown={(e) => onClipPointerDown(e, c)}
-                  className={`pointer-events-auto absolute overflow-hidden rounded-md border ${trackColor(t)} ${sel ? 'ring-2 ring-azure ring-offset-1 ring-offset-base shadow-lg shadow-azure/10' : ''} ${box.dragging ? 'opacity-80 shadow-lg shadow-black/50' : ''} ${missing ? 'border-dashed border-warn' : ''} ${t.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
+                  className={`editor-clip pointer-events-auto absolute overflow-hidden rounded-md border ${trackColor(t)} ${sel ? 'ring-2 ring-azure ring-offset-1 ring-offset-base shadow-lg shadow-azure/10' : ''} ${box.dragging ? 'opacity-80 shadow-lg shadow-black/50' : ''} ${missing ? 'border-dashed border-warn' : ''} ${t.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
                   style={{ left, width, top: trackTops.tops[ti]! + 2, height: h - 4, zIndex: box.dragging ? 5 : 1 }}
                 >
                   {t.kind === 'video' && asset?.kind === 'video' && width > 30 && <Thumbs clip={c} widthPx={width} zoom={zoom} session={session} height={h - 4} />}

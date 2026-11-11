@@ -40,8 +40,8 @@ function NavButton({ label, active, disabled, onClick, children }: { label: stri
 function Sidebar() {
   const { screen, go, session } = useApp();
   return (
-    <nav className="flex w-14 shrink-0 flex-col items-center gap-1 border-r border-line bg-panel py-3" aria-label="Navegação">
-      <img src="/favicon.png" alt="AMV Studio" className="mb-3 size-7" draggable={false} />
+    <nav className="app-sidebar flex w-16 shrink-0 flex-col items-center gap-1 py-3" aria-label="Navegação">
+      <img src="/favicon.png" alt="AMV Studio" className="mb-4 size-8" draggable={false} />
       <NavButton label="Início" active={screen === 'home'} onClick={() => go('home')}>
         <House size={19} />
       </NavButton>
@@ -217,7 +217,7 @@ export function App() {
           </ErrorBoundary>
         </div>
         <JobsDock />
-        <PlayerBar />
+        <div className="app-player-bar shrink-0"><PlayerBar /></div>
       </main>
       {newProjectOpen && <NewProjectDialog />}
       <RecoveryDialog />

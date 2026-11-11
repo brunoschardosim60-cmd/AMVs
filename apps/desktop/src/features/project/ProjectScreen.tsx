@@ -182,8 +182,8 @@ export function ProjectScreen() {
   return (
     <div className="flex h-full min-w-0 flex-col">
       {assistantOpen && <AssistantPanel session={s} onClose={() => setAssistantOpen(false)} />}
-      <header className="z-20 shrink-0 border-b border-line bg-panel">
-        <div className="flex min-h-12 items-center gap-3 px-4">
+      <header className="z-20 shrink-0 border-b border-line bg-panel/95 shadow-[0_4px_18px_rgba(0,0,0,0.1)]">
+        <div className="flex min-h-14 items-center gap-3 px-4">
           <div className="flex min-w-0 items-center gap-2">
             {editingName ? (
               <input
@@ -201,7 +201,7 @@ export function ProjectScreen() {
                 }}
               />
             ) : (
-              <button type="button" className="max-w-72 truncate rounded px-1 text-sm font-bold tracking-tight text-ink hover:bg-raised" title="Renomear projeto" onClick={() => setEditingName(true)}>
+              <button type="button" className="max-w-72 truncate rounded px-1 text-[15px] font-bold tracking-tight text-ink hover:bg-raised" title="Renomear projeto" onClick={() => setEditingName(true)}>
                 {project.name}
               </button>
             )}
@@ -249,7 +249,7 @@ export function ProjectScreen() {
           </Button>
           </div>
         </div>
-        <div className="flex min-h-10 items-center gap-1 overflow-x-auto border-t border-line-soft/70 px-4 py-1">
+        <div className="flex min-h-11 items-center gap-1 overflow-x-auto border-t border-line-soft/70 bg-black/10 px-4 py-1">
           <span className="mr-2 shrink-0 text-[10px] font-bold uppercase tracking-[0.16em] text-faint">Projeto</span>
           <IconButton label="Validar mídias, versões e referências do projeto" className="size-7" onClick={() => void validateProject()}>
             <ShieldCheck size={14} />

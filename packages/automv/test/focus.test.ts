@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildSequences, shotKey, type EpisodeAnalysis, type MusicAnalysis, type Shot, type SpeechSegment } from '@amv/analysis';
-import { applyCommand, clipEndUs, createProject, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
+import { buildSequences, shotKey, type EpisodeAnalysis, type LocalVisualFeatures, type MusicAnalysis, type Shot, type SpeechSegment } from '@amv/analysis';
+import { applyCommand, clipEndUs, createProject, findOverlaps, timelineLocalAtSource, type Asset, type Clip, type Project } from '@amv/project';
 import { chooseSequences, generateAmv, pickAudioStream, planFootage, suggestMusicRanges, type EpisodeInput, type GenerateOptions, type MusicInput } from '../src/index.js';
 
 const S = 1_000_000;
@@ -208,6 +208,189 @@ describe('golpe na batida', () => {
   it('desligado: nenhum clipe diz que encaixou golpe', () => {
     const { on } = run([twoFights('ep1', 0.7, 0.7)], { focus: 'fight', hitSync: false });
     expect(on('V1').some((c) => c.reason?.includes('golpe na batida'))).toBe(false);
+  });
+
+  it('aplica slow motion no pico apenas com FPS alto e conserva o alinhamento do golpe', () => {
+    const ep = twoFights('ep1', 0.7, 0.7);
+    ep.sourceFps = { num: 120, den: 1 };
+    ep.vision = {
+      version: 'v2',
+      model: 'teste',
+      shots: Object.fromEntries(ep.analysis.shots.map((shot) => [
+        shotKey(shot.startS),
+        { characters: ['Personagem A'], fight: true, note: 'Ataque', action: 'combate', confidence: 0.95 },
+      ])),
+    };
+
+    const clips = run([ep], { focus: 'fight', hitSync: true, adaptiveSpeed: true }).on('V1');
+    const slowed = clips.filter((clip) => clip.reason?.includes('câmera lenta breve'));
+
+    expect(slowed.length).toBeGreaterThan(0);
+    expect(run([ep], { focus: 'fight', hitSync: true, adaptiveSpeed: true }).r.summary.speedRamps).toBe(slowed.length);
+    for (const clip of slowed) {
+      const shot = ep.analysis.shots.find((item) => srcS(clip) >= item.startS && srcS(clip) < item.endS)!;
+      const peakAtUs = Math.round(shot.peakS * S);
+      const localPeakUs = timelineLocalAtSource(clip, peakAtUs);
+      expect(localPeakUs).not.toBeNull();
+      expect(clip.keyframes.speed?.some((keyframe) => keyframe.value < 1)).toBe(true);
+      expect(clip.sourceOutUs - clip.sourceInUs).toBe(clip.durationUs);
+      if (clip.reason?.includes('golpe na batida')) {
+        const expectedLead = clip.reason.includes('Drop em')
+          ? 0.04
+          : Math.min(0.12, Math.max(0.05, clip.durationUs / S * 0.25));
+        expect(localPeakUs! / S).toBeCloseTo(expectedLead, 1);
+      }
+    }
+  });
+
+  it('anima um zoom discreto exatamente nos impactos confiáveis, sem sortear zooms genéricos', () => {
+    const ep = twoFights('ep1', 0.7, 0.7);
+    ep.vision = {
+      version: 'v2',
+      model: 'teste',
+      shots: Object.fromEntries(ep.analysis.shots.map((shot) => [
+        shotKey(shot.startS),
+        { characters: ['Personagem A'], fight: true, note: 'Golpe', action: 'combate', confidence: 0.95 },
+      ])),
+    };
+    const clips = run([ep], { focus: 'fight', hitSync: true, adaptiveSpeed: false }).on('V1');
+    const zooms = clips.filter((clip) => clip.reason?.includes('zoom de impacto animado'));
+
+    expect(zooms.length).toBeGreaterThan(0);
+    for (const clip of zooms) {
+      const points = clip.keyframes['transform.scale']!;
+      expect(clip.reason).toContain('golpe na batida');
+      expect(points[0]?.value).toBe(1);
+      expect(Math.max(...points.map((point) => point.value))).toBeGreaterThan(1.03);
+      expect(points.at(-1)?.value).toBe(1);
+      expect(points.at(-1)!.atUs).toBeLessThanOrEqual(clip.durationUs);
+    }
+    expect(clips.filter((clip) => clip.effects.some((effect) => effect.effect === 'zoom')).length).toBe(0);
+  });
+
+  it('não inventa slow motion sem FPS suficiente, em VFR ou quando desativado', () => {
+    const makeEpisode = (fps: number, variableFrameRate = false) => {
+      const ep = twoFights('ep1', 0.7, 0.7);
+      ep.sourceFps = { num: fps, den: 1 };
+      ep.variableFrameRate = variableFrameRate;
+      ep.vision = {
+        version: 'v2',
+        model: 'teste',
+        shots: Object.fromEntries(ep.analysis.shots.map((shot) => [
+          shotKey(shot.startS),
+          { characters: ['Personagem A'], fight: true, note: 'Ataque', action: 'combate', confidence: 0.95 },
+        ])),
+      };
+      return ep;
+    };
+
+    for (const ep of [makeEpisode(30), makeEpisode(120, true), makeEpisode(120)]) {
+      const disabled = ep.sourceFps?.num === 120 && !ep.variableFrameRate;
+      const clips = run([ep], {
+        focus: 'fight',
+        hitSync: true,
+        adaptiveSpeed: !disabled,
+      }).on('V1');
+      expect(clips.some((clip) => clip.keyframes.speed?.length)).toBe(false);
+    }
+  });
+
+  it('acelera uma preparação identificada durante o crescimento musical', () => {
+    const ep = twoFights('ep1', 0.7, 0.7);
+    ep.sourceFps = { num: 120, den: 1 };
+    ep.vision = {
+      version: 'v2',
+      model: 'teste',
+      shots: Object.fromEntries(ep.analysis.shots.map((shot) => [
+        shotKey(shot.startS),
+        { characters: ['Personagem A'], fight: true, note: 'Preparando o ataque', action: 'preparação', confidence: 0.95 },
+      ])),
+    };
+    const fastMusic = music();
+    fastMusic.analysis.bpm = 60;
+    fastMusic.analysis.beats = Array.from({ length: 90 }, (_, index) => index);
+    fastMusic.analysis.downbeats = fastMusic.analysis.beats.filter((_, index) => index % 4 === 0);
+    fastMusic.analysis.energy = Array.from({ length: 360 }, () => 0.9);
+    fastMusic.analysis.drops = [];
+    fastMusic.analysis.sections = [{ startS: 0, endS: 90, label: 'pré-refrão', energy: 0.8 }];
+
+    const p = project();
+    const result = generateAmv(p, fastMusic, [ep], {
+      ...base,
+      style: 'rapido',
+      durationS: 6,
+      musicStartS: 0,
+      focus: 'fight',
+      adaptiveSpeed: true,
+    });
+    const videoTrackId = p.tracks.find((track) => track.name === 'V1')!.id;
+    const accelerated = result.commands.flatMap((command) =>
+      command.type === 'clip.add' && command.clip.trackId === videoTrackId && command.clip.keyframes.speed?.length
+        ? [command.clip]
+        : [],
+    );
+
+    expect(accelerated.length).toBeGreaterThan(0);
+    expect(accelerated.every((clip) => clip.reason?.includes('aceleração progressiva numa preparação identificada'))).toBe(true);
+    expect(result.summary.speedRamps).toBe(accelerated.length);
+  });
+
+  it('recorta dentro do plano para preservar o movimento localizado sem cruzar o corte original', () => {
+    const ep = twoFights('ep1', 0.7, 0.7);
+    ep.vision = {
+      version: 'v2',
+      model: 'teste',
+      shots: Object.fromEntries(ep.analysis.shots.map((shot) => {
+        const event = {
+          startS: shot.startS + 0.3,
+          endS: shot.startS + 0.7,
+          cameraMotion: 'static' as const,
+          directionDeg: null,
+          speed: 0,
+          scaleSpeed: 0,
+          confidence: 0.9,
+          subjectMotion: { directionDeg: 0, speed: 0.08, confidence: 0.9 },
+          apparentScaleChange: 'none' as const,
+          abruptFramingChange: false,
+        };
+        const local: LocalVisualFeatures = {
+          version: 3,
+          samples: 2,
+          lumaGrid: Array.from({ length: 64 }, () => 0.5),
+          edgeGrid: Array.from({ length: 16 }, () => 0.5),
+          colorHistogram: Array.from({ length: 12 }, () => 0.25),
+          brightness: 0.5,
+          saturation: 0.5,
+          entropy: 0.5,
+          edgeDensity: 0.5,
+          centerOfVisualMass: [0.5, 0.5],
+          temporalMotion: 0.5,
+          globalShift: [0, 0],
+          globalMotion: 0.5,
+          motionEvents: [event],
+          motionConfidence: 0.9,
+          fingerprint: 'test',
+          sceneType: 'action',
+          sceneTypeConfidence: 0.9,
+        };
+        return [
+          shotKey(shot.startS),
+          { characters: [], fight: true, note: 'Movimento', confidence: 0.9, local },
+        ];
+      })),
+    };
+
+    const clips = run([ep], { focus: 'fight', hitSync: false, adaptiveSpeed: false }).on('V1');
+    const motionCrops = clips.filter((clip) => clip.reason?.includes('recorte guiado por movimento'));
+
+    expect(motionCrops.length).toBeGreaterThan(0);
+    for (const clip of motionCrops) {
+      const shot = ep.analysis.shots.find((item) => srcS(clip) >= item.startS && srcS(clip) < item.endS)!;
+      const eventCenterS = shot.startS + 0.5;
+      expect(srcS(clip)).toBeGreaterThanOrEqual(shot.startS);
+      expect(clip.sourceOutUs / S).toBeLessThanOrEqual(shot.endS);
+      expect((eventCenterS - srcS(clip)) / clip.speed).toBeCloseTo(clip.durationUs / S * 0.45, 2);
+    }
   });
 
   it('o trecho do clipe nunca sai da cena (não pega o quadro de outro corte)', () => {

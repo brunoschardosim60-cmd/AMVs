@@ -1,5 +1,14 @@
 # Novidades
 
+## 0.6.10
+
+**Editor visual e montagem de ação mais cuidadosos**
+- A interface do editor, preview, timeline, tela inicial e ferramentas recebeu uma atualização visual consistente, mantendo os fluxos e estados reais existentes.
+- O Auto AMV pode posicionar recortes dentro do plano conforme eventos de movimento local confiáveis, sem cruzar o corte original.
+- A geração oferece rampas de velocidade condicionadas à ação e ao FPS medido: desaceleração breve em impactos e aceleração em preparações visuais confiáveis. Fontes VFR ou com cadência insuficiente não recebem slow motion automático.
+- Zoom animado no impacto e tremida curta deixam de ser sorteados: dependem de evidência de ação e sincronização musical. O golpe continua alinhado à batida quando a rampa é aceita.
+- A atualização automática ainda depende do workflow Windows concluir a assinatura e publicar os instaladores e `latest.json`. A validação visual no WebView2 e a comparação com mídia real autorizada continuam pendentes.
+
 ## 0.6.9
 
 **Montagem mais contínua e áudio mais previsível**

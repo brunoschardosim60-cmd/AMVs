@@ -84,6 +84,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [editorialDirection, setEditorialDirection] = useState<EditorialDirection>('balanced');
   const [seqIds, setSeqIds] = useState<string[]>([]);
   const [hitSync, setHitSync] = useState(true);
+  const [adaptiveSpeed, setAdaptiveSpeed] = useState(true);
   const [beatOffsetMs, setBeatOffsetMs] = useState(0);
   const [useSfx, setUseSfx] = useState(true);
   const [characters, setCharacters] = useState<string[]>([]);
@@ -167,6 +168,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         name: e.name,
         analysis: session.assetRuntime(e.id).episode!,
         hasAudio: (e.probe?.audio.length ?? 0) > 0,
+        sourceFps: e.probe?.video?.avgFps ?? e.probe?.video?.fps ?? null,
+        variableFrameRate: e.probe?.video?.vfr ?? false,
         audioStreams: e.probe?.audio.map((a) => ({ index: a.index, language: a.language, title: a.title })),
         vision: canonicalizeEpisodeVision(vision, project.characterLibrary),
       };
@@ -411,6 +414,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     setShowText(profile.showText);
     setUseEffects(profile.useEffects);
     setHitSync(profile.hitSync);
+    setAdaptiveSpeed(profile.adaptiveSpeed);
   };
 
   const persistCreativeProfiles = async (next: CreativeProfile[], selectedId: string, message: string): Promise<boolean> => {
@@ -442,6 +446,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     showText,
     useEffects,
     hitSync,
+    adaptiveSpeed,
   });
 
   const saveNewCreativeProfile = async () => {
@@ -532,6 +537,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           focus,
           sequenceIds: seqIds,
           hitSync,
+          adaptiveSpeed,
           beatOffsetMs,
           characters,
           organizationMode,
@@ -598,7 +604,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           sfxError = (e as Error).message;
         }
       }
-      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
+      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
       const m = musics.find((a) => a.id === musicId)!;
       const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
       if (sfxError) r.warnings.push(`Não consegui preparar os efeitos sonoros (${sfxError}): o vídeo saiu sem eles.`);
@@ -611,7 +617,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       const s = r.summary;
       setResult({
         warnings: r.warnings,
-        text: `${s.clips} cenas, ${s.cuts} cortes${s.drop !== null ? `, drop em ${s.drop.toFixed(1)} s` : ''}${s.voices ? `, ${s.voices} fala(s)${s.speech ? ` (começando por "${s.speech}")` : ''}` : ''}. Trecho da música: ${mmss(s.musicRange[0])}–${mmss(s.musicRange[1])}. Direção: ${[...new Set(s.direction.map((beat) => beat.role))].map((role) => role === 'opening' ? 'Abertura' : role === 'build' ? 'Crescimento' : role === 'climax' ? 'Clímax' : role === 'release' ? 'Respiro' : role === 'ending' ? 'Encerramento' : 'Desenvolvimento').join(' → ')}.${s.focus === 'fight' && s.fights.length ? ` Luta usada: ${s.fights.join(' + ')}.` : s.focus === 'mix' ? ' Cenas de vários pontos (modo misturar).' : ''}${s.hitsSynced ? ` ${s.hitsSynced} golpes encaixados na batida.` : ''}${s.sfx ? ` ${s.sfx} efeitos sonoros.` : ''}`,
+        text: `${s.clips} cenas, ${s.cuts} cortes${s.drop !== null ? `, drop em ${s.drop.toFixed(1)} s` : ''}${s.voices ? `, ${s.voices} fala(s)${s.speech ? ` (começando por "${s.speech}")` : ''}` : ''}. Trecho da música: ${mmss(s.musicRange[0])}–${mmss(s.musicRange[1])}. Direção: ${[...new Set(s.direction.map((beat) => beat.role))].map((role) => role === 'opening' ? 'Abertura' : role === 'build' ? 'Crescimento' : role === 'climax' ? 'Clímax' : role === 'release' ? 'Respiro' : role === 'ending' ? 'Encerramento' : 'Desenvolvimento').join(' → ')}.${s.focus === 'fight' && s.fights.length ? ` Luta usada: ${s.fights.join(' + ')}.` : s.focus === 'mix' ? ' Cenas de vários pontos (modo misturar).' : ''}${s.hitsSynced ? ` ${s.hitsSynced} golpes encaixados na batida.` : ''}${s.speedRamps ? ` ${s.speedRamps} rampas de velocidade aplicadas.` : ''}${s.sfx ? ` ${s.sfx} efeitos sonoros.` : ''}`,
       });
     } catch (e) {
       toast({ tone: 'error', title: 'Não deu para gerar', body: (e as Error).message });
@@ -809,7 +815,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     <Dialog
       title={localizedRange ? 'Regenerar intervalo selecionado' : 'Gerar meu AMV'}
       onClose={onClose}
-      width="w-[1020px]"
+      width="w-[1240px]"
       footer={
         <>
           <span className={`mr-auto self-center text-xs ${analysisFailures.length ? 'text-warn' : 'text-muted'}`}>
@@ -885,7 +891,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       {episodes.length === 0 || (musics.length === 0 && !recs.length) ? (
         <p className="text-sm text-ink-soft">Importe pelo menos <b>uma música</b> e <b>um episódio</b>. O AMV Studio analisa os dois e monta o vídeo a partir deles.</p>
       ) : (
-        <div className="grid max-h-[calc(100vh-210px)] grid-cols-[1.05fr_1fr_0.8fr] gap-5 overflow-y-auto pr-1">
+        <div className="generate-options grid max-h-[calc(100vh-210px)] gap-5 overflow-y-auto pr-1">
           <div>
             <p className="mb-2 text-xs font-medium text-ink-soft">Perfil criativo</p>
             <select
@@ -1094,6 +1100,13 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             )}
             <label className="mt-2 flex items-center gap-2 text-xs">
               <input type="checkbox" className="accent-violet" checked={hitSync} onChange={(e) => setHitSync(e.target.checked)} /> Encaixar o golpe de cada cena na batida
+            </label>
+            <label className="mt-2 flex items-start gap-2 text-xs">
+              <input type="checkbox" className="mt-0.5 accent-violet" checked={adaptiveSpeed} onChange={(e) => setAdaptiveSpeed(e.target.checked)} />
+              <span>
+                Rampas de velocidade guiadas pela ação
+                <span className="mt-0.5 block text-2xs text-muted">Só usa slow motion em fontes de FPS alto e aceleração em preparações identificadas. VFR ou cadência insuficiente mantém a velocidade original.</span>
+              </span>
             </label>
             <label className="mt-2 flex items-center justify-between gap-2 text-xs">
               <span title="Ajusta os cortes e o drop, sem deslocar o áudio da música.">Ajuste fino da sincronia</span>

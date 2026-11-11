@@ -294,6 +294,15 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - O schema sobe para v8 com migração que define reverse normal e pitch preservado em projetos legados.
 - Motivo: manter a curva editável e reversível, sem mudar os extremos de origem durante speed ramps; explicitar os limites técnicos que ainda dependem de validação com FFmpeg e WebView2.
 
+## Velocidade adaptativa no Auto AMV
+- A montagem automática só cria slow motion se o FPS racional medido da fonte tiver margem sobre o FPS do projeto; cadência desconhecida/insuficiente e vídeo VFR não são desacelerados automaticamente. A aceleração também exige cadência alta para evitar duplicação excessiva de quadros.
+- O slow motion usa o pico de movimento já analisado; uma cena identificada como combate/impacto precisa ter sinal visual forte. A rampa em preparação exige rótulo semântico com confiança alta e papel narrativo de crescimento.
+- Quando um plano precisa ser encurtado, um evento de movimento localizado só orienta o recorte com confiança de fluxo e movimento de sujeito acima dos limites definidos; a janela deve cobrir o evento e permanecer dentro dos limites do plano original. Eventos sem confiança suficiente não alteram o ponto de entrada existente.
+- Quando o pico está sincronizado com a batida, o gerador reposiciona o trecho-fonte com a integral da curva e verifica a posição antes de aceitar a rampa; se não couber no plano com tolerância de um quadro, conserva a velocidade original.
+- Zoom de impacto é uma curva de escala do clipe com subida/retorno em keyframes no instante local do pico; a escala é multiplicada pela escala-base de preenchimento para não revelar bordas. Shake fora do drop não é sorteado: exige impacto detectado, alinhamento com batida e direção que permite efeito mais forte.
+- A configuração vem habilitada, pode ser desativada na interface e é persistida em perfis criativos. Perfis antigos sem o campo recebem o padrão habilitado; projetos e schema não mudam.
+- Motivo: oferecer variação de velocidade sem mover o impacto para fora da batida, ultrapassar o plano original ou sugerir interpolação de movimento que não existe.
+
 ## Composição multicamadas — schema v9
 - Cada clipe armazena modo de mesclagem, máscara e id de grupo, preservando a edição não destrutiva dos assets originais. A migração v8→v9 aplica defaults neutros para projetos existentes.
 - Preview e FFmpeg consomem os mesmos valores de transformação/keyframes; o render usa alpha para máscaras e separa RGB/alpha nos blends, evitando que a conversão YUV altere o resultado do modo de mesclagem.

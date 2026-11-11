@@ -99,9 +99,9 @@ export function MusicScreen() {
   );
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="music-library flex h-full min-h-0">
       {/* coleções */}
-      <aside className="flex w-52 shrink-0 flex-col gap-0.5 border-r border-line bg-panel p-2">
+      <aside className="flex w-56 shrink-0 flex-col gap-0.5 border-r border-line bg-panel/80 p-3">
         <p className="px-2 pt-1 pb-2 text-sm font-semibold">Músicas</p>
         {(
           [
@@ -264,7 +264,7 @@ export function MusicScreen() {
                 key={t.id}
                 onClick={(e) => pickRow(t.id, e.ctrlKey || e.metaKey || e.shiftKey)}
                 onDoubleClick={() => player.play(t.id, tracks.map((x) => x.id))}
-                className={`grid cursor-default grid-cols-[32px_24px_minmax(0,1fr)_64px_110px_64px_56px_100px] items-center gap-2 border-b border-line/50 px-4 py-1.5 text-xs [content-visibility:auto] ${selected.includes(t.id) ? 'bg-violet/10' : 'hover:bg-raised/50'} ${t.status === 'missing' ? 'opacity-50' : ''}`}
+                className={`music-library-row grid cursor-default grid-cols-[32px_24px_minmax(0,1fr)_64px_110px_64px_56px_100px] items-center gap-2 border-b border-line/50 px-4 py-2 text-xs [content-visibility:auto] ${selected.includes(t.id) ? 'selected bg-violet/10' : ''} ${t.status === 'missing' ? 'opacity-50' : ''}`}
               >
                 <PlayButton track={t} onClick={() => playList(t, tracks)} />
                 <button type="button" aria-label="Favorita" onClick={(e) => (e.stopPropagation(), library.update([t.id], { favorite: !t.favorite }))} className={t.favorite ? 'text-violet-strong' : 'text-faint hover:text-ink'}>
