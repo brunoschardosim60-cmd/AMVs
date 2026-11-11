@@ -131,3 +131,14 @@
 - Ênfase de ação e emoção usa pesos limitados a 0,5–1,5; 50 corresponde ao peso neutro. Esses valores ordenam candidatos, não medem qualidade e não garantem que o vídeo final expresse a intenção.
 - Perfis personalizados são globais ao app e locais ao computador, não são embutidos no `.amvproj` nem sincronizados. Modelos padrão não podem ser editados diretamente; salve uma cópia para personalizar.
 - O teste verifica a mudança de score e o motivo gravado no clipe com fixtures; ainda falta validação editorial em episódios/músicas reais autorizados e medição de performance no hardware-alvo.
+
+## Redesign visual do editor
+
+- As alterações de interface em projeto, biblioteca, preview, timeline e inspetor passaram typecheck, build e os testes direcionados de player/sessão. O build Vite ainda emite o aviso existente de bundle principal acima de 500 kB.
+- A validação visual no WebView2 permanece pendente: não havia processo/janela nem binário Tauri local, e a execução pelo navegador web é bloqueada intencionalmente pelo app. Portanto, disposição em janelas estreitas, clipping e acessibilidade visual ainda precisam ser conferidos no aplicativo desktop.
+
+## Assistente e revisão do AMV
+
+- O assistente pode usar rótulos de personagens/ações já analisados e carregados em cache para contextualizar os clipes da timeline; são inferências com confiança limitada, não inspeção dos quadros em tempo real. O modelo não vê o arquivo exportado nem recebe frames através do chat.
+- A análise por IA extrai até três quadros em paralelo por lote. Isso reduz a serialização das chamadas locais ao FFmpeg, mas não acelera a latência do provedor nem garante menor tempo total; falta benchmark com episódio completo e modelos locais/remotos reais. O modo "todas as cenas, em detalhe" continua potencialmente demorado.
+- O Avaliador audiovisual verifica dados da timeline e oferece abrir um achado no Assistente; qualquer alteração continua sendo uma proposta sujeita à aprovação. A análise do arquivo exportado atualmente valida integridade técnica e trechos pretos, não coerência narrativa ou qualidade artística do render.

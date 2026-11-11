@@ -182,52 +182,58 @@ export function ProjectScreen() {
   return (
     <div className="flex h-full min-w-0 flex-col">
       {assistantOpen && <AssistantPanel session={s} onClose={() => setAssistantOpen(false)} />}
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-line px-5">
-        {editingName ? (
-          <input
-            autoFocus
-            defaultValue={project.name}
-            className={`${inputClass} h-8 w-72 text-[15px] font-semibold`}
-            onBlur={(e) => {
-              const v = e.target.value.trim();
-              if (v && v !== project.name) s.execute({ type: 'project.rename', name: v });
-              setEditingName(false);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-              if (e.key === 'Escape') setEditingName(false);
-            }}
-          />
-        ) : (
-          <button type="button" className="max-w-80 truncate rounded px-1 text-[15px] font-semibold hover:bg-raised" title="Renomear" onClick={() => setEditingName(true)}>
-            {project.name}
-          </button>
-        )}
-        <span className="tnum text-xs text-muted">
-          {project.settings.width}×{project.settings.height}, {fpsLabel(project.settings.fps)} fps
-        </span>
-        <span className={`text-xs ${s.dirty ? 'text-warn' : 'text-muted'}`}>{s.dirty ? 'Alterações não salvas' : 'Salvo'}</span>
-        <div className="ml-4 flex gap-0.5 rounded-control bg-base p-0.5 text-xs" role="tablist" aria-label="Modo">
-          {(
-            [
-              ['edit', 'Edição'],
-              ['media', 'Mídia'],
-            ] as const
-          ).map(([k, label]) => (
-            <button
-              key={k}
-              type="button"
-              role="tab"
-              aria-selected={view === k}
-              onClick={() => setView(k)}
-              className={`rounded-[4px] px-3 py-1 ${view === k ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+      <header className="z-20 shrink-0 border-b border-line bg-panel">
+        <div className="flex min-h-12 items-center gap-3 px-4">
+          <div className="flex min-w-0 items-center gap-2">
+            {editingName ? (
+              <input
+                autoFocus
+                defaultValue={project.name}
+                className={`${inputClass} h-8 w-72 text-[15px] font-semibold`}
+                onBlur={(e) => {
+                  const v = e.target.value.trim();
+                  if (v && v !== project.name) s.execute({ type: 'project.rename', name: v });
+                  setEditingName(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                  if (e.key === 'Escape') setEditingName(false);
+                }}
+              />
+            ) : (
+              <button type="button" className="max-w-72 truncate rounded px-1 text-sm font-bold tracking-tight text-ink hover:bg-raised" title="Renomear projeto" onClick={() => setEditingName(true)}>
+                {project.name}
+              </button>
+            )}
+            <span className="tnum hidden whitespace-nowrap text-2xs text-muted xl:inline">
+              {project.settings.width}×{project.settings.height} · {fpsLabel(project.settings.fps)} fps
+            </span>
+            <span className={`hidden items-center gap-1.5 whitespace-nowrap text-2xs sm:inline-flex ${s.dirty ? 'text-warn' : 'text-muted'}`}>
+              <span className={`size-1.5 rounded-full ${s.dirty ? 'bg-warn' : 'bg-ok'}`} />
+              {s.dirty ? 'Não salvo' : 'Salvo'}
+            </span>
+          </div>
+          <div className="ml-2 flex gap-0.5 rounded-lg border border-line-soft bg-base p-0.5 text-xs" role="tablist" aria-label="Modo">
+            {(
+              [
+                ['edit', 'Edição'],
+                ['media', 'Mídia'],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                role="tab"
+                aria-selected={view === k}
+                onClick={() => setView(k)}
+                className={`rounded-md px-3 py-1.5 transition-colors ${view === k ? 'bg-raised font-semibold text-ink shadow-sm' : 'text-muted hover:text-ink'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
 
-        <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex shrink-0 items-center gap-1">
           <IconButton label={s.history.undoLabel ? `Desfazer: ${s.history.undoLabel} (Ctrl+Z)` : 'Nada para desfazer'} disabled={!s.history.canUndo} onClick={() => s.undo()}>
             <Undo2 size={16} />
           </IconButton>
@@ -235,36 +241,42 @@ export function ProjectScreen() {
             <Redo2 size={16} />
           </IconButton>
           <span className="mx-2 h-5 w-px bg-line" />
-          <IconButton label="Validar mídias, versões e referências do projeto" onClick={() => void validateProject()}>
-            <ShieldCheck size={15} />
-          </IconButton>
-          <IconButton label="Criar cópia completa do projeto" onClick={() => void duplicateProject()}>
-            <Copy size={15} />
-          </IconButton>
-          <IconButton label="Arquivar projeto em outro local" onClick={() => void archiveProject()}>
-            <Archive size={15} />
-          </IconButton>
-          <Button icon={<Save size={15} />} onClick={save} disabled={!s.dirty} title="Salvar (Ctrl+S)">
+          <Button size="sm" icon={<Save size={14} />} onClick={save} disabled={!s.dirty} title="Salvar (Ctrl+S)">
             Salvar
           </Button>
-          <Button icon={<Plus size={16} />} onClick={() => importMedia()} title="Importar mídia (Ctrl+I)">
-            Importar
+          <Button size="sm" variant="primary" icon={<Download size={15} />} onClick={() => setExporting(true)} title="Exportar vídeo (Ctrl+E)">
+            Exportar
           </Button>
+          </div>
+        </div>
+        <div className="flex min-h-10 items-center gap-1 overflow-x-auto border-t border-line-soft/70 px-4 py-1">
+          <span className="mr-2 shrink-0 text-[10px] font-bold uppercase tracking-[0.16em] text-faint">Projeto</span>
+          <IconButton label="Validar mídias, versões e referências do projeto" className="size-7" onClick={() => void validateProject()}>
+            <ShieldCheck size={14} />
+          </IconButton>
+          <IconButton label="Criar cópia completa do projeto" className="size-7" onClick={() => void duplicateProject()}>
+            <Copy size={14} />
+          </IconButton>
+          <IconButton label="Arquivar projeto em outro local" className="size-7" onClick={() => void archiveProject()}>
+            <Archive size={14} />
+          </IconButton>
           <div className="relative">
-            <IconButton label={`Versões guardadas (${s.project.versions.length})`} onClick={() => setVersionsOpen((v) => !v)}>
-              <History size={16} />
+            <IconButton label={`Versões guardadas (${s.project.versions.length})`} className="size-7" onClick={() => setVersionsOpen((v) => !v)}>
+              <History size={14} />
             </IconButton>
             {versionsOpen && <VersionsMenu session={s} onClose={() => setVersionsOpen(false)} />}
           </div>
-          <Button icon={<Bot size={15} />} variant={assistantOpen ? 'primary' : undefined} onClick={() => setAssistantOpen((v) => !v)} title="Assistente: peça mudanças, ideias e análise do AMV">
+          <Button size="sm" icon={<Plus size={14} />} onClick={() => importMedia()} title="Importar mídia (Ctrl+I)">
+            Importar mídia
+          </Button>
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <Button size="sm" icon={<Bot size={14} />} variant={assistantOpen ? 'primary' : undefined} onClick={() => setAssistantOpen((v) => !v)} title="Assistente: peça mudanças, ideias e análise do AMV">
             Assistente
           </Button>
-          <Button icon={<Wand2 size={15} />} onClick={() => setGenerating(true)} title="Gerar um AMV automaticamente a partir da música e dos episódios">
+          <Button size="sm" icon={<Wand2 size={14} />} onClick={() => setGenerating(true)} title="Gerar um AMV automaticamente a partir da música e dos episódios">
             Gerar meu AMV
           </Button>
-          <Button variant="primary" icon={<Download size={16} />} onClick={() => setExporting(true)} title="Exportar vídeo (Ctrl+E)">
-            Exportar
-          </Button>
+          </div>
         </div>
       </header>
 

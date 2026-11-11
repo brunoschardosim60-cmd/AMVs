@@ -9,7 +9,7 @@ import {
   type ChangeSet,
   type ChatMessage,
 } from '@amv/assistant';
-import type { EpisodeAnalysis, MusicAnalysis } from '@amv/analysis';
+import type { EpisodeAnalysis, EpisodeVision, MusicAnalysis } from '@amv/analysis';
 import { Bot, Check, Eye, Loader2, Minus, Send, Settings2, Sparkles, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { isLocal, loadAiSettings, saveAiSettings, secretName, type AiSettings } from '../../core/aiSettings';
@@ -31,14 +31,16 @@ const QUICK = ['Analise meu AMV', 'Ideias para este AMV', 'Deixe os cortes mais 
 function buildContext(session: ProjectSession): AssistantContext {
   const music = new Map<string, MusicAnalysis>();
   const episodes = new Map<string, EpisodeAnalysis>();
+  const visions = new Map<string, EpisodeVision>();
   for (const a of session.project.assets) {
     if (a.tags.includes('sfx')) continue;
     const rt = session.assetRuntime(a.id);
     if (rt.music) music.set(a.id, rt.music);
     if (rt.episode) episodes.set(a.id, rt.episode);
+    if (rt.vision) visions.set(a.id, rt.vision);
   }
   const ed = useEditor.getState();
-  return { project: session.project, selection: ed.selection, playheadUs: ed.playheadUs, music, episodes };
+  return { project: session.project, selection: ed.selection, playheadUs: ed.playheadUs, music, episodes, visions };
 }
 
 
@@ -149,6 +151,11 @@ export function AssistantPanel({ session, onClose }: { session: ProjectSession; 
   const list = useRef<HTMLDivElement>(null);
   const selection = useEditor((s) => s.selection);
   const draft = useEditor((s) => s.assistantDraft);
+  const visionAssetIds = [...new Set(session.project.clips.flatMap((clip) => {
+    if (!clip.assetId) return [];
+    const asset = session.project.assets.find((item) => item.id === clip.assetId);
+    return asset?.kind === 'video' ? [asset.id] : [];
+  }))].sort().join(',');
   useEffect(() => {
     if (draft) {
       setInput(draft);
@@ -159,6 +166,12 @@ export function AssistantPanel({ session, onClose }: { session: ProjectSession; 
   useEffect(() => {
     if (platform) void loadAiSettings(platform).then(setSettings);
   }, [platform]);
+  useEffect(() => {
+    const videoIds = visionAssetIds ? visionAssetIds.split(',') : [];
+    void Promise.all(videoIds.map((id) => session.loadVision(id))).catch((error: unknown) => {
+      toast({ tone: 'warn', title: 'Não foi possível carregar parte da análise visual', body: error instanceof Error ? error.message : String(error) });
+    });
+  }, [session, visionAssetIds, toast]);
   useEffect(() => {
     list.current?.scrollTo({ top: list.current.scrollHeight, behavior: 'smooth' });
   }, [entries, busy]);

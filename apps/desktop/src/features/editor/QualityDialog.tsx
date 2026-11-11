@@ -1,7 +1,7 @@
 import type { EpisodeAnalysis, EpisodeVision, MusicAnalysis } from '@amv/analysis';
 import { evaluateAudiovisualQuality, type QualityDimension, type QualityIssue } from '@amv/automv';
 import { formatTimecode } from '@amv/project';
-import { Check, ChevronRight, ScanSearch } from 'lucide-react';
+import { Bot, Check, ChevronRight, ScanSearch } from 'lucide-react';
 import { useMemo } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
@@ -53,6 +53,17 @@ export function QualityDialog({ session, onClose }: { session: ProjectSession; o
     useEditor.getState().select(item.clipIds);
     useEditor.getState().setPlayhead(item.startUs);
     getPlayer(session).seek(item.startUs);
+  };
+
+  const askAssistant = (item: QualityIssue) => {
+    const evidence = item.evidence.join('; ');
+    useEditor.setState({
+      selection: item.clipIds,
+      playheadUs: item.startUs,
+      assistantOpen: true,
+      assistantDraft: `Analise este problema do meu AMV: ${item.type}. ${item.reason} Evidências: ${evidence}. Sugestão local: ${item.suggestion}. Proponha uma correção pequena para eu revisar; não altere o projeto sem aprovação.`,
+    });
+    onClose();
   };
 
   const applyFix = (item: QualityIssue) => {
@@ -126,6 +137,7 @@ export function QualityDialog({ session, onClose }: { session: ProjectSession; o
                 <p className="mt-1 text-xs leading-relaxed text-muted"><strong className="font-medium text-ink-soft">Sugestão:</strong> {item.suggestion}</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button size="sm" icon={<ChevronRight size={13} />} onClick={() => navigateTo(item)}>Ver trecho</Button>
+                  <Button size="sm" icon={<Bot size={13} />} onClick={() => askAssistant(item)}>Pedir proposta à assistente</Button>
                   {item.fix && <Button size="sm" variant="primary" icon={<Check size={13} />} onClick={() => applyFix(item)}>{item.fix.label}</Button>}
                 </div>
               </li>

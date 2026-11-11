@@ -934,7 +934,7 @@ export function Inspector({ session, project, selectedAssetId }: { session: Proj
 
   if (clips.length === 1) {
     return (
-      <aside className="w-[300px] shrink-0 overflow-y-auto border-l border-line bg-panel" aria-label="Propriedades">
+      <aside className="editor-inspector w-[300px] shrink-0 overflow-y-auto border-l border-line" aria-label="Propriedades">
         <AskAi />
         <ClipInspector session={session} project={project} clip={clips[0]!} />
       </aside>
@@ -949,7 +949,7 @@ export function Inspector({ session, project, selectedAssetId }: { session: Proj
     const selectedTracks = clips.map((clip) => project.tracks.find((track) => track.id === clip.trackId));
     const canGroup = selectedTracks.every((track) => track && !track.locked && track.kind === selectedTracks[0]?.kind);
     return (
-      <aside className="w-[300px] shrink-0 border-l border-line bg-panel p-4 text-sm" aria-label="Propriedades">
+      <aside className="editor-inspector w-[300px] shrink-0 border-l border-line p-4 text-sm" aria-label="Propriedades">
         <p className="font-semibold">{clips.length} clipes selecionados</p>
         <p className="mt-1 text-xs text-muted">Arraste para mover juntos, Delete para excluir, Ctrl+C para copiar.</p>
         <div className="mt-3 grid grid-cols-2 gap-1">
@@ -1051,7 +1051,7 @@ function EmptyInspector({ project }: { project: Project }) {
     [hasClips, 'Monte o vídeo', 'Use "Gerar meu AMV" no topo, ou arraste cenas das abas Cenas e Falas para a timeline.'],
   ];
   return (
-    <aside className="w-[300px] shrink-0 overflow-y-auto border-l border-line bg-panel p-4" aria-label="Propriedades">
+    <aside className="editor-inspector w-[300px] shrink-0 overflow-y-auto border-l border-line p-4" aria-label="Propriedades">
       {hasClips ? (
         <>
           <p className="text-sm font-semibold text-ink-soft">Nada selecionado</p>

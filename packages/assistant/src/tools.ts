@@ -1,4 +1,4 @@
-import type { EpisodeAnalysis, MusicAnalysis, Shot } from '@amv/analysis';
+import { shotKey, type EpisodeAnalysis, type EpisodeVision, type MusicAnalysis, type Shot } from '@amv/analysis';
 import { generateAmv, STYLES, type StyleId } from '@amv/automv';
 import { applyCommand, clipEndUs, newId, sourceTimeAt, splitClip, TextContentSchema, timelineLocalAtSource, type Clip, type Command, type EffectInstance, type Project } from '@amv/project';
 import type { ChangeItem, ChangeSet } from './changeset.js';
@@ -14,6 +14,7 @@ export interface AssistantContext {
   playheadUs: number;
   music: Map<string, MusicAnalysis>;
   episodes: Map<string, EpisodeAnalysis>;
+  visions?: Map<string, EpisodeVision>;
 }
 
 // ------------------------------------------------------------------ leitura
@@ -46,9 +47,25 @@ export function beatsOnTimeline(ctx: AssistantContext): { beats: number[]; drops
   return { beats: map(m.a.beats), drops: map(m.a.drops) };
 }
 
-function clipLine(p: Project, c: Clip, i: number): string {
+function clipLine(ctx: AssistantContext, c: Clip, i: number): string {
+  const p = ctx.project;
   const what = c.text ? `texto "${c.text.text.slice(0, 40)}"` : `${assetName(p, c.assetId)} ${mmss(c.sourceInUs / S)}`;
-  return `#${i} [${c.id}] ${trackName(p, c.trackId)} ${mmss(c.timelineStartUs / S)}–${mmss(clipEndUs(c) / S)} ${what}${c.speed !== 1 ? ` vel ${c.speed}` : ''}${c.effects.length ? ` efeitos: ${c.effects.map((e) => e.effect).join(',')}` : ''}${c.origin === 'ai' ? ' (IA)' : ''}`;
+  const sourceMidpointS = sourceTimeAt(c, c.durationUs / 2) / S;
+  const shot = c.assetId
+    ? ctx.episodes.get(c.assetId)?.shots.find((item) => sourceMidpointS >= item.startS && sourceMidpointS < item.endS)
+    : undefined;
+  const vision = c.assetId && shot
+    ? ctx.visions?.get(c.assetId)?.shots[shotKey(shot.startS)]
+    : undefined;
+  const visual = vision
+    ? ` [análise visual${vision.confidence === undefined ? '' : ` ${Math.round(vision.confidence * 100)}%`}: ${[
+        ...vision.characters,
+        vision.action,
+        vision.emotion,
+        vision.note,
+      ].filter(Boolean).join(', ') || 'sem rótulos'}]`
+    : '';
+  return `#${i} [${c.id}] ${trackName(p, c.trackId)} ${mmss(c.timelineStartUs / S)}–${mmss(clipEndUs(c) / S)} ${what}${visual}${c.speed !== 1 ? ` vel ${c.speed}` : ''}${c.effects.length ? ` efeitos: ${c.effects.map((e) => e.effect).join(',')}` : ''}${c.origin === 'ai' ? ' (IA)' : ''}`;
 }
 
 /** Resumo compacto do projeto para o modelo (nunca o JSON inteiro). */
@@ -65,7 +82,7 @@ export function projectSummary(ctx: AssistantContext, maxClips = 60): string {
   }
   const clips = [...p.clips].sort((a, b) => a.timelineStartUs - b.timelineStartUs);
   lines.push(`Timeline: ${clips.length} clipes.`);
-  clips.slice(0, maxClips).forEach((c, i) => lines.push(clipLine(p, c, i)));
+  clips.slice(0, maxClips).forEach((c, i) => lines.push(clipLine(ctx, c, i)));
   if (clips.length > maxClips) lines.push(`… mais ${clips.length - maxClips} clipes.`);
   if (ctx.selection.length) lines.push(`Selecionados: ${ctx.selection.join(', ')}.`);
   return lines.join('\n');

@@ -358,3 +358,21 @@ Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Video
 | Influência na montagem | implementada | Ênfases de ação/emoção alteram o peso de sinais já existentes; emoção principal só recebe bônus quando a análise visual tem confiança suficiente. A justificativa do clipe explicita o sinal usado. |
 | Persistência e compatibilidade | implementadas | Perfis personalizados são validados e gravados atomicamente em `perfis-criativos.json` na pasta local do app; perfis padrão ficam no código. Nenhuma migração de `.amvproj` é necessária. Arquivo inválido não é sobrescrito silenciosamente. |
 | Testes | passou | Auto AMV: 122/122; desktop: 2/2 testes de persistência; typechecks de Auto AMV e desktop e build de produção Vite passaram. O bundle principal segue acima de 500 kB. Falta validação visual em WebView2, montagem editorial com mídia real autorizada e benchmark no hardware-alvo. |
+
+## Redesign visual do editor
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Cabeçalho do projeto, biblioteca, preview, timeline e painéis laterais | implementado; inspeção visual pendente | JSX/CSS reorganizados sem trocar os handlers ou os dados exibidos; typecheck e build do desktop passaram. |
+| Regressão dos fluxos de player e sessão | passou | 24/24 testes (`player-audio` e `session`) com `AMV_FFMPEG` e `AMV_FFPROBE` apontando para os sidecars locais. |
+| Aplicativo em execução no Windows/WebView2 | pendente | Não havia janela nem executável Tauri local disponível; o navegador confirma que o frontend exige o shell desktop. Não declarar o redesign visual validado até conferir o app rodando. |
+
+## Revisão assistida do AMV
+
+| Item | Estado | Como foi verificado |
+|---|---|---|
+| Análise visual por personagem | otimização implementada | A extração de quadros para classificação por IA agora roda em lotes de até três processos FFmpeg concorrentes; cache por cena, lotes do provedor e cancelamento foram preservados. |
+| Contexto visual no assistente | primeira fatia implementada | Ao revisar a timeline, o assistente carrega rótulos visuais já existentes do cache e os associa aos clipes usados, incluindo confiança; o prompt proíbe afirmar que viu o vídeo. |
+| Revisão de problemas com a assistente | implementada | Cada achado do Avaliador audiovisual pode abrir o Assistente com o trecho selecionado e pedir uma proposta revisável; não altera a timeline sem aprovação. |
+| Verificação | passou parcialmente | Desktop: typecheck e 24/24 testes de sessão/player; Assistant: teste do resumo visual e suíte do pacote. A build/tempo de inferência com modelo real ainda precisam de verificação. |
+| Análise semântica do arquivo exportado | pendente | Exportação já verifica integridade, duração, FPS, streams, sincronismo A/V e trechos pretos; ainda não há revisão semântica de quadros do arquivo final por IA nem comparação editorial completa com a timeline. |

@@ -157,9 +157,9 @@ export function EditorView({ session }: { session: ProjectSession }) {
   }, [project.clips, selection, select]);
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="editor-workspace flex h-full min-h-0">
       <MediaPanel session={session} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex min-h-0 flex-1">
           <Preview session={session} project={project} />
           <Inspector session={session} project={project} selectedAssetId={selection.length ? null : selectedAssetId} />
@@ -168,7 +168,7 @@ export function EditorView({ session }: { session: ProjectSession }) {
           role="separator"
           aria-orientation="horizontal"
           aria-label="Redimensionar timeline"
-          className="h-1.5 shrink-0 cursor-row-resize bg-line-soft hover:bg-violet/50"
+          className="editor-resize-grip h-1.5 shrink-0 cursor-row-resize"
           onPointerDown={(e) => {
             (e.target as HTMLElement).setPointerCapture(e.pointerId);
             dragRef.current = { y: e.clientY, h: timelineH };
@@ -179,7 +179,7 @@ export function EditorView({ session }: { session: ProjectSession }) {
           }}
           onPointerUp={() => (dragRef.current = null)}
         />
-        <div className="flex shrink-0 flex-col" style={{ height: timelineH }}>
+        <div className="editor-timeline flex shrink-0 flex-col" style={{ height: timelineH }}>
           <Timeline session={session} project={project} />
         </div>
       </div>

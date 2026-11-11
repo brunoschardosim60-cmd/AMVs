@@ -778,6 +778,7 @@ export class ProjectSession {
     let frameFailures = 0;
     let analyzed = 0;
     const BATCH = 6;
+    const FRAME_CONCURRENCY = 3;
     const samples = scope === 'all' ? [0.2, 0.5, 0.8] : [0.5];
     const scenesPerBatch = Math.max(1, Math.floor(BATCH / samples.length));
     for (let i = 0; i < targets.length; i += scenesPerBatch) {
@@ -785,21 +786,29 @@ export class ProjectSession {
       const chunk = targets.slice(i, i + scenesPerBatch);
       const frames: { id: string; jpegBase64: string }[] = [];
       const idsByScene = new Map<string, string[]>();
+      const frameJobs: { id: string; timeS: number }[] = [];
       for (const t of chunk) {
         const key = shotKey(t.startS);
         const ids: string[] = [];
         for (const [sample, fraction] of samples.entries()) {
           const timeS = t.startS + (t.endS - t.startS) * fraction;
           const id = `${key}:${sample}`;
+          frameJobs.push({ id, timeS });
+          ids.push(id);
+        }
+        idsByScene.set(key, ids);
+      }
+      for (let start = 0; start < frameJobs.length; start += FRAME_CONCURRENCY) {
+        const extracted = await Promise.all(frameJobs.slice(start, start + FRAME_CONCURRENCY).map(async ({ id, timeS }) => {
           try {
-            frames.push({ id, jpegBase64: toBase64(await grabFrameJpeg(env.runner, src, timeS, 448, o.signal)) });
-            ids.push(id);
+            return { id, jpegBase64: toBase64(await grabFrameJpeg(env.runner, src, timeS, 448, o.signal)) };
           } catch (error) {
             if (o.signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
             frameFailures++;
+            return null;
           }
-        }
-        idsByScene.set(key, ids);
+        }));
+        frames.push(...extracted.filter((frame): frame is NonNullable<typeof frame> => frame !== null));
       }
       const labels: Record<string, (typeof vision.shots)[string]> = {};
       if (frames.length) {

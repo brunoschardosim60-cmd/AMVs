@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EpisodeAnalysis, MusicAnalysis, Shot } from '@amv/analysis';
 import { applyCommand, clipEndUs, createProject, insertAsset, type Asset, type Project } from '@amv/project';
-import { chat, closeSelection, fetchWithTimeout, findWeakPoints, listModels, localTurn, parseAnthropic, PRESETS, runTurn, validateSelection, type AssistantContext, type FetchLike } from '../src/index.js';
+import { chat, closeSelection, fetchWithTimeout, findWeakPoints, listModels, localTurn, parseAnthropic, PRESETS, projectSummary, runTurn, validateSelection, type AssistantContext, type FetchLike } from '../src/index.js';
 
 const S = 1_000_000;
 function setup(): AssistantContext {
@@ -31,6 +31,21 @@ describe('pontos fracos (sem IA)', () => {
     expect(text).toMatch(/100 ms fora da batida/);
     expect(text).toMatch(/Cena repetida/);
     expect(text).toMatch(/Tela preta de 0\.1 s/);
+  });
+});
+
+describe('resumo visual do AMV para o assistente', () => {
+  it('associa rótulos visuais já analisados aos clipes usados na timeline', () => {
+    const ctx = setup();
+    ctx.visions = new Map([['ep', {
+      version: 'v2',
+      model: 'modelo de teste',
+      shots: {
+        t1200: { characters: ['Personagem A'], fight: true, note: 'prepara o golpe', action: 'preparação', confidence: 0.8 },
+      },
+    }]]);
+
+    expect(projectSummary(ctx)).toContain('[análise visual 80%: Personagem A, preparação, prepara o golpe]');
   });
 });
 

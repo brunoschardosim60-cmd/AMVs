@@ -1,5 +1,5 @@
 import { clipEndUs, evaluateKeyframes, formatTimecode, frameToUs, projectDurationUs, upsertKeyframe, usToFrame, type Clip, type Project } from '@amv/project';
-import { ChevronFirst, ChevronLast, Pause, Play, StepBack, StepForward } from 'lucide-react';
+import { ChevronFirst, ChevronLast, MonitorPlay, Pause, Play, StepBack, StepForward } from 'lucide-react';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
@@ -128,6 +128,8 @@ export function Preview({ session, project }: { session: ProjectSession; project
   const selectedClip = selection.length === 1 ? project.clips.find((clip) => clip.id === selection[0]) : undefined;
   const selectedTrack = selectedClip && project.tracks.find((track) => track.id === selectedClip.trackId);
   const selectedAsset = selectedClip?.assetId ? project.assets.find((asset) => asset.id === selectedClip.assetId) : undefined;
+  const aspect = P.width / P.height;
+  const aspectLabel = Math.abs(aspect - 16 / 9) < 0.02 ? '16:9' : Math.abs(aspect - 9 / 16) < 0.02 ? '9:16' : Math.abs(aspect - 1) < 0.02 ? '1:1' : `${P.width}:${P.height}`;
   const canManipulate = !!selectedClip && !!selectedTrack && selectedTrack.kind !== 'audio' && !selectedTrack.hidden &&
     playheadUs >= selectedClip.timelineStartUs && playheadUs < clipEndUs(selectedClip);
   let handleBox: { left: number; top: number; width: number; height: number; rotation: number; x: number; y: number; scale: number } | null = null;
@@ -211,12 +213,18 @@ export function Preview({ session, project }: { session: ProjectSession; project
   };
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label="Pré-visualização">
-      <div ref={boxRef} className="grid min-h-0 flex-1 place-items-center overflow-hidden bg-[#0e0f12] p-3">
+    <section className="editor-preview flex min-h-0 min-w-0 flex-1 flex-col" aria-label="Pré-visualização">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line-soft px-4">
+        <MonitorPlay size={15} className="text-violet-strong" />
+        <span className="text-[11px] font-semibold tracking-wide text-ink">Prévia</span>
+        <span className="rounded border border-line-soft bg-base px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-muted">Proxy</span>
+        <span className="ml-auto tnum text-[10px] text-muted">{P.width}×{P.height} · {aspectLabel} · {P.fps.num}/{P.fps.den} fps</span>
+      </div>
+      <div ref={boxRef} className="preview-stage grid min-h-0 flex-1 place-items-center overflow-hidden p-4">
         <div ref={frameRef} className="relative shrink-0">
           <canvas
             ref={canvasRef}
-            className="bg-black shadow-lg shadow-black/40"
+            className="preview-canvas bg-black"
             onClick={() => setPlaying(!playing)}
           />
           {handleBox && (
@@ -245,9 +253,10 @@ export function Preview({ session, project }: { session: ProjectSession; project
           )}
         </div>
       </div>
-      <div className="flex h-11 shrink-0 items-center gap-1 border-t border-line-soft bg-panel px-3">
-        <span className="tnum w-28 text-sm text-ink">{formatTimecode(playheadUs, P.fps)}</span>
+      <div className="flex h-12 shrink-0 items-center gap-2 border-t border-line-soft bg-panel px-3">
+        <span className="tnum w-[92px] shrink-0 font-mono text-[13px] font-semibold tracking-tight text-ink">{formatTimecode(playheadUs, P.fps)}</span>
         <div className="flex flex-1 items-center justify-center gap-0.5">
+          <div className="flex items-center rounded-lg border border-line-soft bg-base/80 p-0.5">
           <IconButton label="Início (Home)" onClick={() => go(0)}>
             <ChevronFirst size={17} />
           </IconButton>
@@ -269,16 +278,17 @@ export function Preview({ session, project }: { session: ProjectSession; project
           <IconButton label="Fim (End)" onClick={() => go(end)}>
             <ChevronLast size={17} />
           </IconButton>
+          </div>
         </div>
-        <label className="flex w-28 items-center justify-end gap-1.5 text-xs text-muted">
-          Qualidade
+        <label className="flex w-[112px] shrink-0 items-center justify-end gap-1.5 text-[10px] text-muted">
+          Escala
           <select
-            className="rounded border border-line bg-base px-1 py-0.5 text-xs text-ink"
+            className="h-7 rounded-md border border-line bg-base px-1.5 text-[11px] text-ink"
             value={previewScale}
             onChange={(e) => setPreviewScale(Number(e.target.value) as 1 | 0.5 | 0.25)}
-            title="Só o preview; a exportação usa sempre a qualidade total"
+            title="Resolução do preview; a exportação usa sempre a qualidade total"
           >
-            <option value={1}>Total</option>
+            <option value={1}>100%</option>
             <option value={0.5}>1/2</option>
             <option value={0.25}>1/4</option>
           </select>

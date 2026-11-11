@@ -1,5 +1,5 @@
 import { isSfxAsset, type Asset } from '@amv/project';
-import { AudioLines, Film, Image as ImageIcon, Plus } from 'lucide-react';
+import { AudioLines, Film, Image as ImageIcon, LibraryBig, Plus } from 'lucide-react';
 import { useEffect, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { duration } from '../../format';
@@ -37,8 +37,13 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
   };
 
   return (
-    <aside className="flex w-[248px] shrink-0 flex-col border-r border-line bg-panel" aria-label="Mídia do projeto">
-      <div className="flex h-10 shrink-0 items-center gap-0.5 px-2" role="tablist">
+    <aside className="editor-side-panel flex w-[250px] shrink-0 flex-col border-r border-line" aria-label="Mídia do projeto">
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line-soft px-3">
+        <LibraryBig size={15} className="text-violet-strong" />
+        <span className="text-xs font-semibold tracking-wide text-ink">Biblioteca</span>
+        <span className="ml-auto rounded-full border border-line-soft bg-base px-1.5 py-0.5 text-[10px] text-muted">{assets.length}</span>
+      </div>
+      <div className="flex h-10 shrink-0 items-center gap-0.5 overflow-x-auto px-2" role="tablist">
         {(
           [
             ['media', 'Mídia'],
@@ -53,7 +58,7 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
             role="tab"
             aria-selected={tab === k}
             onClick={() => setTab(k)}
-            className={`rounded-control px-2 py-1 text-xs ${tab === k ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}
+            className={`shrink-0 rounded-md px-2 py-1.5 text-[11px] transition-colors ${tab === k ? 'bg-raised font-semibold text-ink shadow-sm' : 'text-muted hover:bg-raised/50 hover:text-ink'}`}
           >
             {label}
           </button>
@@ -61,16 +66,20 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
       </div>
       {tab === 'media' && (
         // fora da linha de abas: lá ele era empurrado para além dos 248 px do painel e ficava atrás do preview
-        <div className="shrink-0 px-2 pb-2">
-          <Button size="sm" variant="ghost" className="w-full border border-line" icon={<Plus size={14} />} onClick={() => importMedia()}>
+        <div className="shrink-0 px-3 py-2">
+          <Button size="sm" variant="secondary" className="w-full justify-start border-line-soft bg-base" icon={<Plus size={14} />} onClick={() => importMedia()}>
             Importar episódios e músicas
           </Button>
         </div>
       )}
       {tab === 'subs' ? <SubtitlesPanel session={session} /> : tab === 'scenes' ? <ScenesPanel session={session} /> : tab === 'lines' ? <LinesPanel session={session} /> : assets.length === 0 ? (
-        <p className="px-3 text-xs leading-relaxed text-muted">Importe episódios e músicas. Depois arraste para a timeline.</p>
+        <div className="mx-3 mt-2 rounded-lg border border-dashed border-line bg-base/60 px-3 py-4">
+          <Film size={17} className="mb-2 text-faint" />
+          <p className="text-xs font-medium text-ink-soft">Sua biblioteca está vazia</p>
+          <p className="mt-1 text-2xs leading-relaxed text-muted">Importe episódios e músicas. Depois, arraste um item para a timeline.</p>
+        </div>
       ) : (
-        <ul className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
+        <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           {assets.map((a) => {
             const Icon = ICON[a.kind];
             const poster = session.assetRuntime(a.id).artifacts?.posterPath;
@@ -83,19 +92,19 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
                   onPointerDown={(e) => startDrag(e, a)}
                   onKeyDown={(e) => e.key === 'Enter' && selectAsset(a.id)}
                   title={a.status === 'missing' ? `${a.name} — arquivo não encontrado` : `${a.name} — arraste para a timeline`}
-                  className={`flex cursor-grab items-center gap-2 rounded-md px-1.5 py-1 active:cursor-grabbing ${sel ? 'bg-violet/15' : 'hover:bg-raised'} ${a.status === 'missing' ? 'opacity-50' : ''}`}
+                  className={`group flex cursor-grab items-center gap-2 rounded-lg border px-1.5 py-1.5 transition-colors active:cursor-grabbing ${sel ? 'border-violet/35 bg-violet/10' : 'border-transparent hover:border-line-soft hover:bg-raised/70'} ${a.status === 'missing' ? 'opacity-55' : ''}`}
                 >
                   {poster && a.status !== 'missing' ? (
-                    <img src={platform!.fileUrl(poster)} alt="" draggable={false} className="h-8 w-14 shrink-0 rounded-[3px] bg-black object-cover" />
+                    <img src={platform!.fileUrl(poster)} alt="" draggable={false} className="h-9 w-14 shrink-0 rounded-md bg-black object-cover" />
                   ) : (
-                    <span className={`grid h-8 w-14 shrink-0 place-items-center rounded-[3px] ${a.kind === 'audio' ? 'bg-azure-deep text-azure' : 'bg-raised text-faint'}`}>
+                    <span className={`grid h-9 w-14 shrink-0 place-items-center rounded-md ${a.kind === 'audio' ? 'bg-azure-deep/70 text-azure' : 'bg-raised text-faint'}`}>
                       <Icon size={14} />
                     </span>
                   )}
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs text-ink">{a.name}</span>
-                    <span className="tnum block text-2xs text-muted">
-                      {a.status === 'processing' ? 'preparando…' : a.status === 'missing' ? 'não encontrada' : a.kind === 'image' ? 'imagem' : a.probe ? duration(a.probe.durationUs) : ''}
+                    <span className="block truncate text-[11px] font-medium text-ink" title={a.name}>{a.name}</span>
+                    <span className={`tnum block truncate text-[10px] ${a.status === 'missing' ? 'text-warn' : a.status === 'processing' ? 'text-azure' : 'text-muted'}`}>
+                      {a.status === 'processing' ? 'Processando mídia…' : a.status === 'missing' ? 'Arquivo não encontrado' : a.kind === 'image' ? 'Imagem' : a.probe ? duration(a.probe.durationUs) : 'Aguardando análise'}
                     </span>
                   </span>
                 </div>

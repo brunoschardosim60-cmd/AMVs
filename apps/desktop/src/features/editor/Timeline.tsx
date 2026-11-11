@@ -21,7 +21,7 @@ import {
   type Project,
   type Track,
 } from '@amv/project';
-import { ChevronDown, ChevronUp, Eye, EyeOff, Lock, LockOpen, Magnet, Plus, ScanSearch, SlidersHorizontal, Sparkles, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronDown, ChevronUp, Eye, EyeOff, Layers3, Lock, LockOpen, Magnet, Plus, ScanSearch, SlidersHorizontal, Sparkles, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
@@ -34,7 +34,7 @@ import { QualityDialog } from './QualityDialog';
 import { GenerateDialog } from '../automv/GenerateDialog';
 import { AudioMixerDialog } from './AudioMixerDialog';
 
-const HEADER_W = 168;
+const HEADER_W = 180;
 const RULER_H = 26;
 export const TRACK_H: Record<Track['kind'], number> = { video: 58, audio: 50, text: 34 };
 const SNAP_PX = 8;
@@ -48,7 +48,11 @@ type Gesture =
   | null;
 
 function trackColor(t: Track): string {
-  return t.kind === 'video' ? 'bg-violet-deep/80 border-violet/60' : t.kind === 'audio' ? 'bg-azure-deep/80 border-azure/50' : 'bg-raised border-ink-soft/40';
+  return t.kind === 'video'
+    ? 'bg-violet-deep/85 border-violet/55'
+    : t.kind === 'audio'
+      ? 'bg-azure-deep/85 border-azure/45'
+      : 'bg-[#34453f] border-[#82b79c]/50';
 }
 
 // --------------------------------------------------------------------------- régua
@@ -589,62 +593,72 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
 
   return (
     <>
-    <section className="flex min-h-0 flex-1 flex-col border-t border-line bg-base" aria-label="Timeline">
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-line-soft px-2">
-        <IconButton label={snapping ? 'Encaixe ligado (segure Alt para ignorar)' : 'Encaixe desligado'} aria-pressed={snapping} className={snapping ? 'text-violet-strong' : ''} onClick={() => setSnapping(!snapping)}>
-          <Magnet size={15} />
-        </IconButton>
-        <span className="mx-1 h-4 w-px bg-line" />
-        <IconButton label="Diminuir zoom (−)" onClick={() => setZoom(zoom / 1.4)}>
-          <ZoomOut size={15} />
-        </IconButton>
-        <input
-          type="range"
-          aria-label="Zoom da timeline"
-          className="w-28 accent-violet"
-          min={Math.log(ZOOM_MIN)}
-          max={Math.log(ZOOM_MAX)}
-          step={0.01}
-          value={Math.log(zoom)}
-          onChange={(e) => setZoom(Math.exp(Number(e.target.value)))}
-        />
-        <IconButton label="Aumentar zoom (+)" onClick={() => setZoom(zoom * 1.4)}>
-          <ZoomIn size={15} />
-        </IconButton>
-        <button type="button" className="ml-1 rounded px-2 py-1 text-xs text-muted hover:bg-raised hover:text-ink" onClick={fitAll}>
-          Ajustar tudo
-        </button>
-        <span className="mx-1 h-4 w-px bg-line" />
-        <button type="button" className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-ink-soft hover:bg-raised hover:text-ink" onClick={addText} title="Adicionar texto no playhead (T)">
-          <Type size={14} /> Texto
-        </button>
-        <button type="button" className="flex items-center gap-1 rounded px-2 py-1 text-xs text-ink-soft hover:bg-raised hover:text-ink" onClick={() => addTrack('text')} title="Adicionar trilha de texto">
-          <Plus size={13} /> Faixa de texto
-        </button>
-        <button type="button" className="flex items-center gap-1 rounded px-2 py-1 text-xs text-ink-soft hover:bg-raised hover:text-ink" onClick={() => addTrack('video')} title="Adicionar camada de vídeo">
-          <Plus size={13} /> Vídeo
-        </button>
-        <button type="button" className="flex items-center gap-1 rounded px-2 py-1 text-xs text-ink-soft hover:bg-raised hover:text-ink" onClick={() => addTrack('audio')} title="Adicionar faixa de áudio">
-          <Plus size={13} /> Áudio
-        </button>
-        <IconButton label="Abrir mixer de áudio" onClick={() => setAudioMixerOpen(true)}>
-          <SlidersHorizontal size={15} />
-        </IconButton>
-        <IconButton label="Avaliar qualidade audiovisual" onClick={() => setQualityOpen(true)}>
-          <ScanSearch size={15} />
-        </IconButton>
-        <button
-          type="button"
-          className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-ink-soft hover:bg-raised hover:text-ink disabled:cursor-not-allowed disabled:text-faint"
-          title={localizedRange ? 'Gerar uma alternativa apenas para os clipes de vídeo selecionados' : 'Selecione clipes de vídeo na trilha principal'}
-          disabled={!localizedRange}
-          onClick={() => setRegenerateOpen(true)}
-        >
-          <Sparkles size={14} /> Melhorar seleção
-        </button>
-        <span className="tnum ml-auto pr-2 text-xs text-muted">
-          {selection.length ? `${selection.length} selecionado(s) · ` : ''}duração {formatTimecode(durationUs, project.settings.fps)}
-        </span>
+    <section className="editor-timeline-panel flex min-h-0 flex-1 flex-col border-t border-line" aria-label="Timeline">
+      <div className="shrink-0 border-b border-line-soft bg-panel">
+        <div className="flex h-9 items-center gap-1 px-2">
+          <div className="mr-2 flex shrink-0 items-center gap-2 pl-1">
+            <Layers3 size={14} className="text-violet-strong" />
+            <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-ink-soft">Timeline</span>
+          </div>
+          <span className="h-4 w-px shrink-0 bg-line" />
+          <IconButton label={snapping ? 'Encaixe ligado (segure Alt para ignorar)' : 'Encaixe desligado'} aria-pressed={snapping} className={`size-7 ${snapping ? 'text-violet-strong' : ''}`} onClick={() => setSnapping(!snapping)}>
+            <Magnet size={14} />
+          </IconButton>
+          <span className="mx-1 h-4 w-px shrink-0 bg-line" />
+          <IconButton label="Diminuir zoom (−)" className="size-7" onClick={() => setZoom(zoom / 1.4)}>
+            <ZoomOut size={14} />
+          </IconButton>
+          <input
+            type="range"
+            aria-label="Zoom da timeline"
+            className="w-24 accent-violet"
+            min={Math.log(ZOOM_MIN)}
+            max={Math.log(ZOOM_MAX)}
+            step={0.01}
+            value={Math.log(zoom)}
+            onChange={(e) => setZoom(Math.exp(Number(e.target.value)))}
+          />
+          <IconButton label="Aumentar zoom (+)" className="size-7" onClick={() => setZoom(zoom * 1.4)}>
+            <ZoomIn size={14} />
+          </IconButton>
+          <button type="button" className="ml-1 shrink-0 rounded-md px-2 py-1 text-[11px] text-muted transition-colors hover:bg-raised hover:text-ink" onClick={fitAll}>
+            Ajustar tudo
+          </button>
+          <span className="tnum ml-auto shrink-0 pr-2 text-[10px] text-muted">
+            {selection.length ? `${selection.length} selecionado(s) · ` : ''}{formatTimecode(durationUs, project.settings.fps)}
+          </span>
+        </div>
+        <div className="flex h-9 items-center gap-1 overflow-x-auto border-t border-line-soft/60 px-2">
+          <span className="mr-1 shrink-0 text-[9px] font-bold uppercase tracking-[0.12em] text-faint">Adicionar</span>
+          <button type="button" className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-ink-soft transition-colors hover:bg-raised hover:text-ink" onClick={addText} title="Adicionar texto no playhead (T)">
+            <Type size={13} /> Texto
+          </button>
+          <button type="button" className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-ink-soft transition-colors hover:bg-raised hover:text-ink" onClick={() => addTrack('text')} title="Adicionar trilha de texto">
+            <Plus size={12} /> Trilha de texto
+          </button>
+          <button type="button" className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-ink-soft transition-colors hover:bg-raised hover:text-ink" onClick={() => addTrack('video')} title="Adicionar camada de vídeo">
+            <Plus size={12} /> Vídeo
+          </button>
+          <button type="button" className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-ink-soft transition-colors hover:bg-raised hover:text-ink" onClick={() => addTrack('audio')} title="Adicionar faixa de áudio">
+            <Plus size={12} /> Áudio
+          </button>
+          <span className="mx-1 h-4 w-px shrink-0 bg-line" />
+          <IconButton label="Abrir mixer de áudio" className="size-7" onClick={() => setAudioMixerOpen(true)}>
+            <SlidersHorizontal size={14} />
+          </IconButton>
+          <IconButton label="Avaliar qualidade audiovisual" className="size-7" onClick={() => setQualityOpen(true)}>
+            <ScanSearch size={14} />
+          </IconButton>
+          <button
+            type="button"
+            className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-ink-soft transition-colors hover:bg-raised hover:text-ink disabled:cursor-not-allowed disabled:text-faint"
+            title={localizedRange ? 'Gerar uma alternativa apenas para os clipes de vídeo selecionados' : 'Selecione clipes de vídeo na trilha principal'}
+            disabled={!localizedRange}
+            onClick={() => setRegenerateOpen(true)}
+          >
+            <Sparkles size={13} /> Melhorar seleção
+          </button>
+        </div>
       </div>
 
       <div
@@ -665,7 +679,9 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
         <div className="relative" style={{ width: HEADER_W + contentW, minHeight: '100%' }}>
           {/* régua */}
           <div className="sticky top-0 z-20 flex">
-            <div className="sticky left-0 z-30 shrink-0 border-r border-b border-line bg-panel" style={{ width: HEADER_W, height: RULER_H }} />
+            <div className="editor-ruler-gutter sticky left-0 z-30 flex shrink-0 items-center border-r border-b border-line px-3" style={{ width: HEADER_W, height: RULER_H }}>
+              <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-faint">Trilhas · tempo</span>
+            </div>
             <Ruler zoom={zoom} width={contentW} fps={project.settings.fps} playheadUs={playheadUs} onScrub={startScrub} />
           </div>
 
@@ -675,9 +691,9 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
             const sameKind = tracks.filter((item) => item.kind === t.kind);
             const trackPosition = sameKind.findIndex((item) => item.id === t.id);
             return (
-              <div key={t.id} className="flex border-b border-line-soft" style={{ height: h }}>
-                <div className="sticky left-0 z-10 flex shrink-0 items-center gap-0.5 border-r border-line bg-panel px-2" style={{ width: HEADER_W }}>
-                  <span className={`mr-auto truncate text-xs font-medium ${t.hidden || t.muted ? 'text-faint' : 'text-ink-soft'}`}>{t.name}</span>
+              <div key={t.id} className="editor-track-row flex border-b border-line-soft" style={{ height: h }}>
+                <div className="editor-track-header sticky left-0 z-10 flex shrink-0 items-center gap-0.5 border-r border-line px-2" style={{ width: HEADER_W }}>
+                  <span className={`mr-auto min-w-0 truncate text-[11px] font-semibold ${t.hidden || t.muted ? 'text-faint' : 'text-ink-soft'}`} title={t.name}>{t.name}</span>
                   <IconButton label="Mover trilha para cima" className="size-6" disabled={trackPosition === 0} onClick={() => moveTrack(t, -1)}>
                     <ChevronUp size={13} />
                   </IconButton>
@@ -762,7 +778,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                   aria-label={`${c.label ?? asset?.name ?? 'clipe'} em ${formatTimecode(c.timelineStartUs, project.settings.fps)}`}
                   title={`${c.label ?? asset?.name ?? 'Texto'}${c.groupId ? '\nElemento agrupado' : ''}${c.reason ? `\nIA: ${c.reason}` : ''}`}
                   onPointerDown={(e) => onClipPointerDown(e, c)}
-                  className={`pointer-events-auto absolute overflow-hidden rounded-md border ${trackColor(t)} ${sel ? 'ring-2 ring-ink' : ''} ${box.dragging ? 'opacity-80 shadow-lg shadow-black/50' : ''} ${missing ? 'border-dashed border-warn' : ''} ${t.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
+                  className={`pointer-events-auto absolute overflow-hidden rounded-md border ${trackColor(t)} ${sel ? 'ring-2 ring-azure ring-offset-1 ring-offset-base shadow-lg shadow-azure/10' : ''} ${box.dragging ? 'opacity-80 shadow-lg shadow-black/50' : ''} ${missing ? 'border-dashed border-warn' : ''} ${t.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
                   style={{ left, width, top: trackTops.tops[ti]! + 2, height: h - 4, zIndex: box.dragging ? 5 : 1 }}
                 >
                   {t.kind === 'video' && asset?.kind === 'video' && width > 30 && <Thumbs clip={c} widthPx={width} zoom={zoom} session={session} height={h - 4} />}

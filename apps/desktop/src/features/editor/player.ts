@@ -346,11 +346,13 @@ export class Player {
     if (kind === 'image') {
       const img = new Image();
       img.decoding = 'async';
+      img.crossOrigin = 'anonymous';
       img.src = url;
       el = img;
     } else {
       const m = document.createElement(kind === 'video' ? 'video' : 'audio');
       m.preload = 'auto';
+      m.crossOrigin = 'anonymous';
       if (m instanceof HTMLVideoElement) {
         m.muted = true; // vídeo nas trilhas de vídeo é só imagem; o som vem das trilhas de áudio
         m.playsInline = true;

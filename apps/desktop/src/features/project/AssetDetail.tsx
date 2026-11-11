@@ -77,7 +77,7 @@ export function AssetDetail({ asset, session }: { asset: Asset; session: Project
   };
 
   return (
-    <aside className="flex w-[340px] shrink-0 flex-col overflow-y-auto border-l border-line bg-panel" aria-label="Detalhes da mídia">
+    <aside className="editor-inspector flex w-[340px] shrink-0 flex-col overflow-y-auto border-l border-line" aria-label="Detalhes da mídia">
       <div className="p-4">
         <Preview asset={asset} session={session} />
         <h2 className="mt-3 text-sm font-semibold break-words">{asset.name}</h2>

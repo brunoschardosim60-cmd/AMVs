@@ -106,3 +106,82 @@ select,
   );
   animation: amv-scan 0.9s linear infinite;
 }
+
+.editor-workspace {
+  background: #13141a;
+}
+
+.editor-side-panel {
+  background: #1b1d24;
+}
+
+.editor-preview {
+  background: #171920;
+}
+
+.preview-stage {
+  background-color: #111217;
+  background-image:
+    radial-gradient(ellipse at 50% 45%, rgb(56 53 73 / 0.22), transparent 66%),
+    linear-gradient(90deg, rgb(255 255 255 / 0.012) 1px, transparent 1px),
+    linear-gradient(rgb(255 255 255 / 0.012) 1px, transparent 1px);
+  background-size: auto, 32px 32px, 32px 32px;
+}
+
+.preview-canvas {
+  display: block;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: 3px;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.42), 0 0 0 1px rgb(0 0 0 / 0.55);
+}
+
+.editor-resize-grip {
+  position: relative;
+  background: #20222a;
+  transition: background-color 140ms ease;
+}
+
+.editor-resize-grip::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 42px;
+  height: 2px;
+  border-radius: 999px;
+  background: #5d6170;
+  content: '';
+  transform: translate(-50%, -50%);
+}
+
+.editor-resize-grip:hover,
+.editor-resize-grip:active {
+  background: rgb(139 108 255 / 0.22);
+}
+
+.editor-resize-grip:hover::after,
+.editor-resize-grip:active::after {
+  background: #a68eff;
+}
+
+.editor-timeline-panel {
+  background: #15171d;
+}
+
+.editor-track-header {
+  background: #1b1d24;
+}
+
+.editor-ruler-gutter {
+  background: #1b1d24;
+}
+
+.editor-track-header button {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border-radius: 5px;
+}
+
+.editor-inspector {
+  background: #1b1d24;
+}
