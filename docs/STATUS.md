@@ -27,7 +27,7 @@ Estado geral: Fase 1 concluída; Fase 2 ainda em andamento; Fases 3 a 5 implemen
 | Atalhos: Ctrl+N/O/S/Shift+S/I/Z/Shift+Z/Y; bloqueio de atalhos do navegador | feito | código; verificação manual pendente no Windows |
 | Aviso ao fechar com alterações não salvas | feito | código; verificação manual pendente no Windows |
 | Sidecar Python opcional (esqueleto: saúde, módulos, token) | feito | pytest |
-| CI no Windows: testes + instalador NSIS/MSI | feito | Release v0.6.10, run 43038637825 verde: runtime Python, typecheck, suíte completa e instaladores assinados; Release e `latest.json` apontam para 0.6.10. |
+| CI no Windows: testes + instalador NSIS/MSI | feito | Release v0.6.10, run 43047211586 verde: runtime Python, typecheck, suíte completa e instaladores assinados; Release e `latest.json` apontam para 0.6.10. |
 
 ### Pendente de verificação no Windows
 - Reprodução do proxy no painel de detalhes (WebView2). No Linux de desenvolvimento não dá para testar: o WebKitGTK não toca mídia pelo protocolo de arquivos do Tauri.
@@ -36,8 +36,8 @@ Estado geral: Fase 1 concluída; Fase 2 ainda em andamento; Fases 3 a 5 implemen
 ## Distribuição
 | Item | Estado | Como foi verificado |
 |---|---|---|
-| Atualização automática (plugin updater, assinatura minisign) | passou no teste manual | O app instalado v0.6.9 detectou e baixou a v0.6.10; após o reinício, a interface mostrou v0.6.10. O manifesto e os instaladores assinados foram publicados. A Release v0.6.10 e seu `latest.json` ficaram sem notas porque o workflow usava uma entrada não suportada; a coleta/publicação das notas foi corrigida no workflow para as próximas versões. |
-| Publicar versão: `node scripts/release.mjs x.y.z --push` (branch `release`) | feito | v0.6.10 publicada pelo workflow Release run 43038637825 |
+| Atualização automática (plugin updater, assinatura minisign) | passou no teste manual | O app instalado v0.6.9 detectou e baixou a v0.6.10; após o reinício, a interface mostrou v0.6.10. O manifesto `latest.json` e a página da Release agora contêm as notas; os instaladores NSIS/MSI assinados foram republicados. |
+| Publicar versão: `node scripts/release.mjs x.y.z --push` (branch `release`) | feito | v0.6.10 publicada pelo workflow Release run 43047211586 |
 
 ## Fase 2 — Editor (em andamento)
 
