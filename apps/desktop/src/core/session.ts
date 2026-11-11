@@ -874,7 +874,7 @@ export class ProjectSession {
   private async process(asset: Asset): Promise<void> {
     if (!asset.probe || asset.kind === 'image') {
       const rt = this.assetRuntime(asset.id);
-      this.runtime.set(asset.id, { ...rt, artifacts: { posterPath: asset.path, stripPath: null, waveformPath: null, proxyPath: null, audioProxyPath: null } });
+      this.runtime.set(asset.id, { ...rt, artifacts: { posterPath: asset.path, stripPath: null, waveformPath: null, proxyPath: null, audioProxyPath: null, audioStreamProxyPaths: {} } });
       this.setStatus(asset.id, 'ok', null);
       return;
     }

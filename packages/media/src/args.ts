@@ -65,8 +65,9 @@ export function needsAudioProxy(probe: ProbeInfo): boolean {
   return !codec || !WEB_AUDIO.has(codec);
 }
 
-export function audioProxyArgs(input: string, output: string): string[] {
-  return [...COMMON, '-i', input, '-map', '0:a:0', '-vn', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', ...PROGRESS, '-f', 'mp4', output];
+export function audioProxyArgs(input: string, output: string, streamIndex: number | null = null): string[] {
+  const map = streamIndex === null ? '0:a:0' : `0:${streamIndex}`;
+  return [...COMMON, '-i', input, '-map', map, '-vn', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', ...PROGRESS, '-f', 'mp4', output];
 }
 
 /** Uma miniatura (pôster) no instante `atS`. Seek antes do -i = rápido. */

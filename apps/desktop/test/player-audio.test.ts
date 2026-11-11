@@ -1,6 +1,6 @@
 import { ClipSchema, TrackSchema, createProject } from '@amv/project';
 import { describe, expect, it } from 'vitest';
-import { clipVolume } from '../src/features/editor/player';
+import { clipVolume, shouldHardSeekMedia } from '../src/features/editor/player';
 
 const track = TrackSchema.parse({ id: 'trk_audio', kind: 'audio', name: 'Música' });
 
@@ -91,5 +91,24 @@ describe('preview audio gain', () => {
     expect(clipVolume(musicClip, musicTrack, 500_000, false, project)).toBeCloseTo(10 ** (-16 / 20), 8);
     expect(clipVolume({ ...musicClip, audio: { ...musicClip.audio, duckingMode: 'auto' } }, musicTrack, 500_000, false, project))
       .toBeCloseTo(10 ** (-28 / 20), 8);
+  });
+
+  it('does not seek audio continuously while it is playing', () => {
+    expect(shouldHardSeekMedia('audio', 0.25, {
+      playing: true, seeking: false, readyState: 4, needsSeek: false, sinceLastSeekMs: 2000,
+    })).toBe(false);
+  });
+
+  it('seeks audio once when a clip or playhead changes', () => {
+    expect(shouldHardSeekMedia('audio', 0, {
+      playing: true, seeking: false, readyState: 4, needsSeek: true, sinceLastSeekMs: 0,
+    })).toBe(true);
+  });
+
+  it('corrects large video drift only after the cooldown and when not seeking', () => {
+    const state = { playing: true, seeking: false, readyState: 4, needsSeek: false, sinceLastSeekMs: 800 };
+    expect(shouldHardSeekMedia('video', 0.7, state)).toBe(true);
+    expect(shouldHardSeekMedia('video', 0.7, { ...state, sinceLastSeekMs: 100 })).toBe(false);
+    expect(shouldHardSeekMedia('video', 0.7, { ...state, seeking: true })).toBe(false);
   });
 });

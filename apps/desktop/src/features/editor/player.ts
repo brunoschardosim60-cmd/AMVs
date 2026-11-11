@@ -11,7 +11,7 @@ import { aggregateColorGrade, applyWhipPan, automaticDuckingGain, clipEndUs, cre
 export interface MediaSource {
   /** URL do proxy de vídeo (vídeos) ou do arquivo/proxy de áudio. */
   videoUrl(assetId: string): string | null;
-  audioUrl(assetId: string): string | null;
+  audioUrl(assetId: string, streamIndex?: number | null): string | null;
   imageUrl(assetId: string): string | null;
 }
 
@@ -24,14 +24,33 @@ interface Slot {
   lastUsed: number;
   sourceNode: MediaElementAudioSourceNode | null;
   gainNode: GainNode | null;
+  needsSeek: boolean;
+  lastSeekAtMs: number;
+  lastGain: number | null;
+  lastFrame: HTMLCanvasElement | null;
 }
 
 /** Margem para pré-carregar o próximo clipe antes de ele começar. */
 const PRELOAD_US = 2_000_000;
-/** Diferença tolerada entre o vídeo e o relógio antes de corrigir, tocando. */
-const DRIFT_PLAYING_S = 0.12;
+/** Corrige desvios visuais grandes sem seeks frequentes durante a reprodução. */
+const DRIFT_PLAYING_S = 0.6;
 /** Pausado: busca o quadro exato se estiver a mais de meio quadro. */
 const DRIFT_PAUSED_S = 0.02;
+const PLAYING_SEEK_COOLDOWN_MS = 750;
+const PLAYHEAD_UPDATE_MS = 50;
+
+export function shouldHardSeekMedia(
+  kind: 'video' | 'audio',
+  driftS: number,
+  state: { playing: boolean; seeking: boolean; readyState: number; needsSeek: boolean; sinceLastSeekMs: number },
+): boolean {
+  if (state.seeking || state.readyState < 1) return false;
+  if (state.needsSeek) return true;
+  if (!state.playing) return Math.abs(driftS) > DRIFT_PAUSED_S;
+  return kind === 'video'
+    && Math.abs(driftS) > DRIFT_PLAYING_S
+    && state.sinceLastSeekMs >= PLAYING_SEEK_COOLDOWN_MS;
+}
 /**
  * Poucos elementos de mídia vivos: cada um mantém uma conexão aberta com o proxy, e o
  * WebView2 só abre ~6 por endereço. Com 24 vivos, os novos ficavam esperando e o preview preto.
@@ -221,12 +240,15 @@ export class Player {
   private clockStartUs = 0;
   private clockStartPerf = 0;
   private pausedAtUs = 0;
+  private lastRenderAtMs = 0;
+  private lastNotifyAtMs = 0;
   private ctx: CanvasRenderingContext2D | null = null;
   private colorBuffer: HTMLCanvasElement | null = null;
   private readonly colorLuts = new Map<string, ColorGradeLut>();
   private colorGradeGpu: ColorGradeGpu | null | undefined;
   private audioContext: AudioContext | null = null;
   private audioLimiter: DynamicsCompressorNode | null = null;
+  private audioResume: Promise<void> | null = null;
   private listeners = new Set<(us: number) => void>();
   private endListeners = new Set<() => void>();
   private audioErrorListeners = new Set<(error: Error) => void>();
@@ -250,6 +272,8 @@ export class Player {
     for (const s of this.slots.values()) this.release(s);
     this.slots.clear();
     this.ctx = null;
+    this.lastRenderAtMs = 0;
+    this.lastNotifyAtMs = 0;
   }
 
   setProject(p: Project): void {
@@ -300,6 +324,7 @@ export class Player {
     } else {
       this.pausedAtUs = t;
     }
+    for (const slot of this.slots.values()) if (slot.kind !== 'image') slot.needsSeek = true;
   }
 
   play(): void {
@@ -309,6 +334,7 @@ export class Player {
     this.playing = true;
     this.clockStartUs = this.pausedAtUs;
     this.clockStartPerf = performance.now();
+    for (const slot of this.slots.values()) if (slot.kind !== 'image') slot.needsSeek = true;
   }
 
   pause(): void {
@@ -324,8 +350,15 @@ export class Player {
   private slotFor(clip: Clip, kind: Slot['kind'], slotKey = `${kind}:${clip.id}`): Slot | null {
     const existing = this.slots.get(slotKey);
     const url =
-      kind === 'video' ? this.media.videoUrl(clip.assetId!) : kind === 'audio' ? this.media.audioUrl(clip.assetId!) : this.media.imageUrl(clip.assetId!);
-    if (!url) return null;
+      kind === 'video' ? this.media.videoUrl(clip.assetId!) :
+      kind === 'audio' ? this.media.audioUrl(clip.assetId!, clip.audio.streamIndex) :
+      this.media.imageUrl(clip.assetId!);
+    if (!url) {
+      if (kind === 'audio') {
+        this.reportAudioError(new Error('A faixa escolhida ainda não tem um proxy de áudio pronto.'), 'Áudio do preview indisponível');
+      }
+      return null;
+    }
     if (existing && existing.url === url && existing.kind === kind) {
       existing.lastUsed = performance.now();
       return existing;
@@ -335,9 +368,11 @@ export class Player {
     for (const [id, s] of this.slots) {
       if (s.url === url && s.kind === kind && !this.frameUsed.has(id)) {
         this.slots.delete(id);
+        const clipChanged = s.clipId !== clip.id;
         s.clipId = clip.id;
         s.lastUsed = performance.now();
         s.slotKey = slotKey;
+        if (clipChanged) s.needsSeek = true;
         this.slots.set(slotKey, s);
         return s;
       }
@@ -371,12 +406,12 @@ export class Player {
       }
       m.src = url;
       el = m;
-      const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode, gainNode };
+      const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode, gainNode, needsSeek: true, lastSeekAtMs: 0, lastGain: null, lastFrame: null };
       this.slots.set(slotKey, slot);
       this.evict();
       return slot;
     }
-    const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode: null, gainNode: null };
+    const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode: null, gainNode: null, needsSeek: true, lastSeekAtMs: 0, lastGain: null, lastFrame: null };
     this.slots.set(slotKey, slot);
     this.evict();
     return slot;
@@ -431,6 +466,18 @@ export class Player {
     }
   }
 
+  private resumeAudioContext(): void {
+    const context = this.audioContext;
+    if (context?.state !== 'suspended' || this.audioResume) return;
+    const resume = context.resume();
+    this.audioResume = resume;
+    void resume
+      .catch((error: unknown) => this.reportAudioError(error, 'Não foi possível iniciar o áudio do preview'))
+      .finally(() => {
+        if (this.audioResume === resume) this.audioResume = null;
+      });
+  }
+
   private release(s: Slot): void {
     s.sourceNode?.disconnect();
     s.gainNode?.disconnect();
@@ -439,6 +486,11 @@ export class Player {
       m.pause();
       m.removeAttribute('src');
       m.load();
+    }
+    if (s.lastFrame) {
+      s.lastFrame.width = 0;
+      s.lastFrame.height = 0;
+      s.lastFrame = null;
     }
   }
 
@@ -451,31 +503,49 @@ export class Player {
     }
   }
 
-  private syncMedia(m: HTMLMediaElement, clip: Clip, atUs: number, volume: number | null, gainNode: GainNode | null = null): void {
+  private syncMedia(m: HTMLMediaElement, clip: Clip, atUs: number, volume: number | null, slot: Slot, kind: 'video' | 'audio'): void {
     const target = sourceTimeS(clip, atUs);
     if (volume !== null) {
       const context = this.audioContext;
-      if (!gainNode || !context) {
+      if (!slot.gainNode || !context) {
         this.reportAudioError(new Error('O clipe de áudio não tem um caminho de ganho ativo.'), 'Áudio do preview indisponível');
         m.volume = 0;
       } else {
         m.volume = 1;
-        gainNode.gain.setTargetAtTime(clip.reverse ? 0 : volume, context.currentTime, 0.015);
+        const gain = clip.reverse ? 0 : volume;
+        if (slot.lastGain === null || Math.abs(slot.lastGain - gain) >= 0.005) {
+          slot.gainNode.gain.setTargetAtTime(gain, context.currentTime, 0.015);
+          slot.lastGain = gain;
+        }
       }
     }
     m.preservesPitch = clip.audio.pitchMode === 'preserve';
     const playbackRate = speedAt(clip, atUs - clip.timelineStartUs);
+    const drift = m.currentTime - target;
     if (clip.reverse || playbackRate <= 0.001) {
       if (!m.paused) m.pause();
-      if (!m.seeking && m.readyState >= 1 && Math.abs(m.currentTime - target) > 0.015) m.currentTime = target;
+      if (!m.seeking && m.readyState >= 1 && (slot.needsSeek || Math.abs(drift) > 0.015)) {
+        m.currentTime = target;
+        slot.needsSeek = false;
+        slot.lastSeekAtMs = performance.now();
+      }
       return;
     }
     if (this.playing) {
-      if (this.audioContext?.state === 'suspended') {
-        void this.audioContext.resume().catch((error: unknown) => this.reportAudioError(error, 'Não foi possível iniciar o áudio do preview'));
-      }
+      this.resumeAudioContext();
       if (m.playbackRate !== playbackRate) m.playbackRate = playbackRate;
-      if (Math.abs(m.currentTime - target) > DRIFT_PLAYING_S && m.readyState >= 1) m.currentTime = target;
+      const now = performance.now();
+      if (shouldHardSeekMedia(kind, drift, {
+        playing: true,
+        seeking: m.seeking,
+        readyState: m.readyState,
+        needsSeek: slot.needsSeek,
+        sinceLastSeekMs: now - slot.lastSeekAtMs,
+      })) {
+        m.currentTime = target;
+        slot.needsSeek = false;
+        slot.lastSeekAtMs = now;
+      }
       if (m.paused) {
         void m.play().catch((error: unknown) => {
           if (volume !== null) this.reportAudioError(error, 'Não foi possível reproduzir o áudio do preview');
@@ -483,7 +553,17 @@ export class Player {
       }
     } else {
       if (!m.paused) m.pause();
-      if (Math.abs(m.currentTime - target) > DRIFT_PAUSED_S && !m.seeking && m.readyState >= 1) m.currentTime = target;
+      if (shouldHardSeekMedia(kind, drift, {
+        playing: false,
+        seeking: m.seeking,
+        readyState: m.readyState,
+        needsSeek: slot.needsSeek,
+        sinceLastSeekMs: performance.now() - slot.lastSeekAtMs,
+      })) {
+        m.currentTime = target;
+        slot.needsSeek = false;
+        slot.lastSeekAtMs = performance.now();
+      }
     }
   }
 
@@ -491,6 +571,7 @@ export class Player {
 
   private loop = () => {
     this.raf = requestAnimationFrame(this.loop);
+    const now = performance.now();
     const t = this.timeUs;
     const end = projectDurationUs(this.project);
     if (this.playing && end > 0 && t >= end) {
@@ -498,8 +579,16 @@ export class Player {
       this.pausedAtUs = end;
       for (const l of this.endListeners) l();
     }
-    this.renderAt(Math.min(t, end || t));
-    for (const l of this.listeners) l(this.timeUs);
+    const fps = this.project.settings.fps.num / this.project.settings.fps.den;
+    const frameIntervalMs = 1000 / Math.min(30, Math.max(12, fps));
+    if (now - this.lastRenderAtMs >= frameIntervalMs) {
+      this.lastRenderAtMs = now;
+      this.renderAt(Math.min(t, end || t));
+    }
+    if (this.playing && now - this.lastNotifyAtMs >= PLAYHEAD_UPDATE_MS) {
+      this.lastNotifyAtMs = now;
+      for (const l of this.listeners) l(this.timeUs);
+    }
   };
 
   /** Clipes que já pegaram um elemento neste quadro (não podem ser reaproveitados). */
@@ -524,7 +613,7 @@ export class Player {
         if (!slot) continue;
         used.add(slot.slotKey);
         const m = slot.el as HTMLMediaElement;
-        if (t >= c.timelineStartUs) this.syncMedia(m, c, t, clipVolume(c, track, t, anySolo, this.project), slot.gainNode);
+        if (t >= c.timelineStartUs) this.syncMedia(m, c, t, clipVolume(c, track, t, anySolo, this.project), slot, 'audio');
         else {
           // pré-carregado: parado no primeiro quadro
           if (!m.paused) m.pause();
@@ -548,7 +637,7 @@ export class Player {
           if (!slot) continue;
           used.add(slot.slotKey);
           const media = slot.el as HTMLMediaElement;
-          if (t >= c.timelineStartUs) this.syncMedia(media, c, t, clipVolume(c, audioTrack, t, anySolo, this.project), slot.gainNode);
+          if (t >= c.timelineStartUs) this.syncMedia(media, c, t, clipVolume(c, audioTrack, t, anySolo, this.project), slot, 'audio');
           else {
             if (!media.paused) media.pause();
             const first = sourceTimeS(c, c.timelineStartUs);
@@ -630,13 +719,23 @@ export class Player {
     used.add(slot.slotKey);
     if (kind === 'video') {
       const v = slot.el as HTMLVideoElement;
-      if (active) this.syncMedia(v, c, t, null);
+      if (active) this.syncMedia(v, c, t, null, slot, 'video');
       else {
         if (!v.paused) v.pause();
         const first = sourceTimeS(c, c.timelineStartUs);
         if (Math.abs(v.currentTime - first) > 0.05 && v.readyState >= 1 && !v.seeking) v.currentTime = first;
       }
-      if (active && v.readyState >= 2) this.drawMedia(ctx, v, v.videoWidth, v.videoHeight, c, k, look, localS);
+      if (active && v.readyState >= 2 && v.videoWidth && v.videoHeight && !v.seeking) {
+        slot.lastFrame ??= document.createElement('canvas');
+        if (slot.lastFrame.width !== v.videoWidth) slot.lastFrame.width = v.videoWidth;
+        if (slot.lastFrame.height !== v.videoHeight) slot.lastFrame.height = v.videoHeight;
+        slot.lastFrame.getContext('2d')?.drawImage(v, 0, 0);
+        this.drawMedia(ctx, v, v.videoWidth, v.videoHeight, c, k, look, localS);
+      } else if (active && slot.lastFrame?.width && slot.lastFrame.height) {
+        this.drawMedia(ctx, slot.lastFrame, slot.lastFrame.width, slot.lastFrame.height, c, k, look, localS);
+      } else if (active) {
+        this.drawPlaceholder(ctx, 'Carregando quadro…');
+      }
     } else if (active) {
       const img = slot.el as HTMLImageElement;
       if (img.complete && img.naturalWidth) this.drawMedia(ctx, img, img.naturalWidth, img.naturalHeight, c, k, look, localS);

@@ -72,11 +72,15 @@ Estado geral: Fase 1 concluída; Fase 2 ainda em andamento; Fases 3 a 5 implemen
 | Verificação desta etapa | passou | Typechecks render/project/desktop, build desktop, 24/24 testes de render com o FFmpeg empacotado e 2/2 testes do estimador/FPS passaram; black warning/gap, fallback, rollback, cancelamento, MKV, color grading e ducking manual validados |
 
 ### Limitações da Fase 2
-- O preview aplica ganho acima de 0 dB com Web Audio e compressão de pico; a seleção de faixa ainda não é respeitada, pois o proxy inclui a primeira faixa de áudio. O comportamento de áudio precisa ser confirmado no WebView2.
+- O preview aplica ganho acima de 0 dB com Web Audio e compressão de pico. Proxies AAC adicionais agora permitem selecionar outras faixas de áudio em vídeos; o comportamento de sincronização e seleção ainda precisa ser confirmado no WebView2.
 
 ### Ajuste do ganho no preview
 - `clipVolume()` agora preserva ganho linear acima de 1 para clipe, trilha e keyframes. O preview usa `GainNode` seguido de `DynamicsCompressorNode`; erros de preparação/reprodução do áudio são notificados.
 - Validação: 4 testes focados passaram; typecheck e build desktop passaram. A suíte ampla teve 7 falhas em testes de importação de biblioteca/sessão, fora dos arquivos deste ajuste. WebView2 ainda não foi validado manualmente.
+
+### Sincronização do preview e faixas de áudio
+- O player limita a correção de drift durante a reprodução para evitar seeks repetidos no áudio, e reduz a frequência de atualização do playhead. Vídeos com múltiplas faixas geram proxies AAC por stream alternativo; o preview consulta o `streamIndex` do clipe. A geração automática respeita o idioma selecionado e não duplica o áudio de falas destacadas.
+- Validação desta alteração: suíte global (448 testes) e typecheck dos 11 projetos passaram; build de produção do frontend também passou. A reprodução manual no WebView2 e o build nativo Tauri ainda estão pendentes; o toolchain Rust não está disponível nesta sessão.
 
 
 ## Fase 4 — Análise (feita)

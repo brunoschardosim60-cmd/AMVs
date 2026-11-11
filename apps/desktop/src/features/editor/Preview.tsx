@@ -26,11 +26,18 @@ export function createPlayer(session: ProjectSession, project: Project): Player 
       const path = session.assetRuntime(id).artifacts?.proxyPath;
       return path ? platform.fileUrl(path) : null;
     },
-    audioUrl: (id) => {
+    audioUrl: (id, streamIndex) => {
       const asset = session.project.assets.find((a) => a.id === id);
       if (!asset || asset.status === 'missing') return null;
       const art = session.assetRuntime(id).artifacts;
-      if (asset.kind === 'video') return art?.proxyPath ? platform.fileUrl(art.proxyPath) : null;
+      if (asset.kind === 'video') {
+        const defaultStream = asset.probe?.audio[0]?.index;
+        if (streamIndex !== null && streamIndex !== undefined && streamIndex !== defaultStream) {
+          const streamProxy = art?.audioStreamProxyPaths[streamIndex];
+          return streamProxy ? platform.fileUrl(streamProxy) : null;
+        }
+        return art?.proxyPath ? platform.fileUrl(art.proxyPath) : null;
+      }
       return platform.fileUrl(art?.audioProxyPath ?? asset.path);
     },
     imageUrl: (id) => {

@@ -12,6 +12,7 @@ import {
   pickLevel,
   planThumbStrip,
   ProgressParser,
+  audioProxyArgs,
   proxyArgs,
   proxyFps,
   type ProgressUpdate,
@@ -71,6 +72,18 @@ describe('argumentos', () => {
 
   it('fps do proxy ignora r_frame_rate absurdo', () => {
     expect(proxyFps(probe({ video: { ...probe().video!, fps: { num: 90000, den: 1 }, avgFps: { num: 25, den: 1 } } }))).toEqual({ num: 25, den: 1 });
+  });
+
+  it('proxy de áudio seleciona o índice exato da faixa do arquivo original', () => {
+    const args = audioProxyArgs('episode.mkv', 'japanese.m4a', 2);
+    expect(args).toContain('-map');
+    expect(args).toContain('0:2');
+    expect(args).toContain('-c:a');
+    expect(args).toContain('aac');
+  });
+
+  it('proxy de áudio padrão usa a primeira faixa do arquivo', () => {
+    expect(audioProxyArgs('episode.mkv', 'default.m4a', null).join(' ')).toContain('-map 0:a:0');
   });
 
   it('VFR e plano de miniaturas', () => {

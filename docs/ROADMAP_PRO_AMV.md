@@ -123,5 +123,5 @@ Nenhuma UI de isolamento, correção manual, camada de timeline, composição de
 - **Problema:** o inspetor aceitava ganho de até +12 dB, mas o player dependia de `HTMLMediaElement.volume`, que não representa ganho acima da unidade.
 - **Desenvolvimento:** preservar o cálculo existente de clipe/trilha/fades/keyframes e aplicá-lo por `GainNode`; uma compressão de pico no master reduz clipping audível. Falhas ao preparar ou iniciar o áudio são notificadas.
 - **Arquivos:** `apps/desktop/src/features/editor/player.ts`, `Preview.tsx`, `Inspector.tsx` e `apps/desktop/test/player-audio.test.ts`; estado e limitação registrados em `docs/STATUS.md` e `docs/LIMITATIONS.md`.
-- **Integração:** o áudio continua vindo dos mesmos proxies e trilhas, sem alterar projeto, exportação ou comandos de edição. A faixa escolhida (`streamIndex`) ainda só é aplicada na exportação.
+- **Integração:** áudio segue vindo dos proxies e trilhas sem alterar o projeto, a exportação ou os comandos de edição. Proxies AAC por faixa alternativa permitem que o preview respeite o `streamIndex` selecionado; sincronização final precisa de validação manual no WebView2.
 - **Validação:** testes focados de ganho/fades/mute-solo/keyframes, typecheck e build desktop; a verificação manual no WebView2 permanece pendente.

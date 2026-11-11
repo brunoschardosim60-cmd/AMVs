@@ -4,6 +4,7 @@ import type { JobQueue } from './jobs.js';
 import {
   cachePaths,
   makeAudioProxy,
+  makeAudioStreamProxy,
   makePoster,
   makeProxy,
   makeThumbStrip,
@@ -37,6 +38,7 @@ export interface MediaArtifacts {
   waveformPath: string | null;
   proxyPath: string | null;
   audioProxyPath: string | null;
+  audioStreamProxyPaths: Record<number, string>;
 }
 
 export interface MediaEnv {
@@ -146,8 +148,29 @@ export function prepareArtifacts(
         })()
       : Promise.resolve(null);
 
-  const artifacts = Promise.all([poster, strip, waveform, proxy, audioProxy]).then(
-    ([posterPath, stripPath, waveformPath, proxyPath, audioProxyPath]) => ({ posterPath, stripPath, waveformPath, proxyPath, audioProxyPath }),
+  const audioStreamProxies = hasVideo
+    ? Promise.all(probe.audio.slice(1).map(async (stream) => {
+        const target = paths.audioStreamProxy(stream.index);
+        const result = await cached(
+          target,
+          () => job('proxy', `Faixa de áudio ${stream.index} para preview`, `aproxy-${stream.index}`, ({ signal, report }) =>
+            makeAudioStreamProxy(env.runner, env.fs, asset.path, target, stream.index, probe.durationUs, report, signal),
+          ),
+          `faixa de áudio ${stream.index} para preview`,
+        );
+        return result ? [stream.index, result] as const : null;
+      }))
+    : Promise.resolve([]);
+
+  const artifacts = Promise.all([poster, strip, waveform, proxy, audioProxy, audioStreamProxies]).then(
+    ([posterPath, stripPath, waveformPath, proxyPath, audioProxyPath, streamProxies]) => ({
+      posterPath,
+      stripPath,
+      waveformPath,
+      proxyPath,
+      audioProxyPath,
+      audioStreamProxyPaths: Object.fromEntries(streamProxies.filter((item): item is NonNullable<typeof item> => item !== null)),
+    }),
   );
   return { artifacts, errors: artifacts.then(() => errors) };
 }

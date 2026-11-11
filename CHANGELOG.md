@@ -1,5 +1,13 @@
 # Novidades
 
+## 0.6.12
+
+**Estabiliza o preview e respeita a faixa de áudio selecionada**
+- Reduz seeks corretivos repetidos no áudio durante a reprodução, evitando cortes e vibração; mantém a correção de drift visual em desvios grandes.
+- Gera proxies AAC para faixas alternativas do vídeo e usa o `streamIndex` escolhido no preview e na montagem automática.
+- Preserva o último quadro válido enquanto o próximo quadro é buscado, evitando flashes pretos durante seeks.
+- Testes automatizados passaram; reprodução manual no WebView2 e validação com o episódio/música do usuário ainda precisam ser feitas.
+
 ## 0.6.11
 
 **Corrige a abertura e a mixagem do estilo Discurso**

@@ -580,6 +580,10 @@ function baseClip(trackId: string, assetId: string | null, startS: number, durS:
   };
 }
 
+function selectedVideoAudio(streamIndex: number | null, gainDb = 0): Clip['audio'] {
+  return { gainDb, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, pitchMode: 'preserve', streamIndex };
+}
+
 function adaptiveSpeedCurve(durationUs: number, impactAtUs: number, minimumFactor: number): Keyframe[] {
   const impact = Math.max(0, Math.min(durationUs, impactAtUs));
   const slowStart = Math.max(0, impact - 100_000);
@@ -1306,7 +1310,13 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     ]
       .filter(Boolean)
       .join(' — ');
-    const clip = baseClip(v1.id, c.ep.assetId, sl.startS, len, srcIn, why, { speed, sourceOutUs: us(srcIn) + us(srcLen), effects: clipEffects, transitionIn: transition });
+    const clip = baseClip(v1.id, c.ep.assetId, sl.startS, len, srcIn, why, {
+      speed,
+      sourceOutUs: us(srcIn) + us(srcLen),
+      effects: clipEffects,
+      transitionIn: transition,
+      audio: selectedVideoAudio(streamFor(c.ep)),
+    });
     clip.sourceOutUs = clip.sourceInUs + Math.round(clip.durationUs * speed);
     if (speedKeyframes.length) {
       clip.keyframes.speed = speedKeyframes;
@@ -1396,7 +1406,10 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       ? `Fala marcante antes do drop: ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada durante a fala`
       : `Fala intercalada: ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada`;
     const lead = b.atS - b.from;
-    cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, b.from, b.to - b.from, Math.max(0, s.startS - lead), reason, { effects: gradeFx(style.grade) }) });
+    cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, b.from, b.to - b.from, Math.max(0, s.startS - lead), reason, {
+      effects: gradeFx(style.grade),
+      audio: selectedVideoAudio(streamFor(ep), -60),
+    }) });
     cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: b.preDrop ? 3 : 2, fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
     if (opts.showText && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)));
     clipsMade++;

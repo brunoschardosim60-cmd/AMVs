@@ -80,8 +80,21 @@ export async function makeAudioProxy(
   signal?: AbortSignal,
 ): Promise<string | null> {
   if (!needsAudioProxy(probe)) return null;
+  return makeAudioStreamProxy(runner, fs, input, output, null, probe.durationUs, report, signal);
+}
+
+export async function makeAudioStreamProxy(
+  runner: ProcessRunner,
+  fs: FileSystem,
+  input: string,
+  output: string,
+  streamIndex: number | null,
+  durationUs: number,
+  report: Reporter,
+  signal?: AbortSignal,
+): Promise<string> {
   return atomicOutput(fs, output, async (tmp) => {
-    await runFfmpegWithProgress(runner, audioProxyArgs(input, tmp), probe.durationUs, report, signal);
+    await runFfmpegWithProgress(runner, audioProxyArgs(input, tmp, streamIndex), durationUs, report, signal);
     return output;
   });
 }
@@ -204,6 +217,7 @@ export function cachePaths(cacheRoot: string, hash: string, join: (...p: string[
     dir,
     proxy: join(dir, `proxy-${CACHE_VERSIONS.proxy}.mp4`),
     audioProxy: join(dir, `audio-${CACHE_VERSIONS.proxy}.m4a`),
+    audioStreamProxy: (streamIndex: number) => join(dir, `audio-${CACHE_VERSIONS.proxy}-stream-${streamIndex}.m4a`),
     poster: join(dir, `poster-${CACHE_VERSIONS.poster}.jpg`),
     strip: join(dir, `strip-${CACHE_VERSIONS.strip}.jpg`),
     stripPlan: join(dir, `strip-${CACHE_VERSIONS.strip}.json`),

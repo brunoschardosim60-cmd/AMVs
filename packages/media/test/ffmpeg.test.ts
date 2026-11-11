@@ -189,11 +189,16 @@ describe('importação completa', () => {
     for (const p of [a.posterPath, a.stripPath, a.waveformPath, a.proxyPath]) {
       expect(p && (await nodeFs.exists(p))).toBe(true);
     }
+    const alternateStreamIndex = asset.probe!.audio[1]!.index;
+    const alternateAudioPath = a.audioStreamProxyPaths[alternateStreamIndex];
+    expect(alternateAudioPath && (await nodeFs.exists(alternateAudioPath))).toBe(true);
+    const alternateAudio = await probeFile(runner, alternateAudioPath!);
+    expect(alternateAudio.probe.audio).toHaveLength(1);
     const wf = decodeWaveform(await nodeFs.readFile(a.waveformPath!));
     expect(wf.levels.length).toBeGreaterThan(0);
 
     const kinds = queue.list().map((j) => j.kind).sort();
-    expect(kinds).toEqual(['poster', 'probe', 'proxy', 'thumbnails', 'waveform']);
+    expect(kinds).toEqual(['poster', 'probe', 'proxy', 'proxy', 'thumbnails', 'waveform']);
     queue.clearFinished();
     await prepareArtifacts(env, { ...asset, probe: asset.probe! }).artifacts;
     expect(queue.list()).toEqual([]);

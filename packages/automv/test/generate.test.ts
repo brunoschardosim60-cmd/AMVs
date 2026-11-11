@@ -96,6 +96,41 @@ describe('trecho da música', () => {
       expect(videoClips.some((clip) => clip.assetId === 'ep1' && clip.sourceInUs === 33_333)).toBe(false);
     });
   });
+
+  describe('mixagem das faixas do episódio', () => {
+    it('usa o idioma escolhido e evita duplicar a fala na camada visual', () => {
+      const p = project();
+      const ep = episode('ep1', 150, 3);
+      ep.audioStreams = [
+        { index: 1, language: 'eng', title: 'English' },
+        { index: 2, language: 'jpn', title: 'Japanese' },
+      ];
+      const result = generateAmv(p, music(), [ep], {
+        ...base,
+        durationS: 60,
+        musicStartS: 0,
+        focus: 'mix',
+        voiceLang: 'original',
+        voiceMoments: 1,
+      });
+      const out = applyCommand(p, { type: 'batch', commands: result.commands }).project;
+      const videoTrackId = out.tracks.find((item) => item.name === 'V1')!.id;
+      const voiceTrackId = out.tracks.find((item) => item.name === 'Vozes')!.id;
+      const video = out.clips.filter((clip) => clip.trackId === videoTrackId && clip.assetId === ep.assetId);
+      const voices = out.clips.filter((clip) => clip.trackId === voiceTrackId);
+
+      expect(voices.length).toBeGreaterThan(0);
+      expect(voices.every((clip) => clip.audio.streamIndex === 2)).toBe(true);
+      expect(video.some((clip) => clip.audio.streamIndex !== 2)).toBe(false);
+      for (const voice of voices) {
+        const picture = video.find((clip) =>
+          clip.timelineStartUs < voice.timelineStartUs + voice.durationUs
+          && clip.timelineStartUs + clip.durationUs > voice.timelineStartUs,
+        );
+        expect(picture?.audio.gainDb).toBe(-60);
+      }
+    });
+  });
   describe('preservação de color grading', () => {
     it('mantém a correção manual das cenas ao regenerar a mesma região', () => {
       const p = project();
