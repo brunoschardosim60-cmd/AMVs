@@ -282,7 +282,7 @@ describe('falas intercaladas e música baixando', () => {
     for (let i = 1; i < voices.length; i++) expect(voices[i]!.timelineStartUs - clipEndUs(voices[i - 1]!)).toBeGreaterThanOrEqual(1.5 * S);
     // a música abaixa 3 vezes, com keyframes em ordem
     const kf = on('Música')[0]!.keyframes['audio.gainDb']!;
-    expect(kf.filter((k) => k.value === -4)).toHaveLength(6);
+    expect(kf.filter((k) => k.value === -16)).toHaveLength(6);
     for (let i = 1; i < kf.length; i++) expect(kf[i]!.atUs).toBeGreaterThan(kf[i - 1]!.atUs);
     // cada fala tem a imagem de quem fala
     const v1 = on('V1');

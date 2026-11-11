@@ -191,7 +191,7 @@ export function clipVolume(clip: Clip, track: Track, atUs: number, anySolo: bool
   const left = clipEndUs(clip) - atUs;
   if (clip.audio.fadeInUs > 0 && into < clip.audio.fadeInUs) v *= into / clip.audio.fadeInUs;
   if (clip.audio.fadeOutUs > 0 && left < clip.audio.fadeOutUs) v *= left / clip.audio.fadeOutUs;
-  if (project) v *= automaticDuckingGain(project, track.id, atUs);
+  if (project) v *= automaticDuckingGain(project, track.id, atUs, clip);
   return Math.max(0, v);
 }
 

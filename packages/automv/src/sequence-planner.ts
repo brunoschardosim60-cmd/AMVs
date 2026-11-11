@@ -98,10 +98,12 @@ export function planSequence<TCandidate extends SequencePlanCandidate, TSlot>(
       let eligible = candidates.filter((candidate) =>
         !state.used.has(candidate.id) && isForward(options.mode, candidate, state.last, state.progress),
       );
-      if (eligible.length && options.candidateWindow) {
-        eligible = options.candidateWindow(slotIndex, slot, eligible, state.progress, state.used);
+      const forward = eligible;
+      if (forward.length && options.candidateWindow) {
+        eligible = options.candidateWindow(slotIndex, slot, forward, state.progress, state.used);
       }
-      const repeated = eligible.length === 0;
+      const preferredSequences = new Set(eligible.map((candidate) => `${candidate.assetId}#${candidate.sequenceOrder}`));
+      const repeated = forward.length === 0;
       if (repeated && options.mode === 'chronological') {
         expanded.push({
           ...state,
@@ -111,8 +113,25 @@ export function planSequence<TCandidate extends SequencePlanCandidate, TSlot>(
         });
         continue;
       }
-      const pool = repeated ? candidates : eligible;
-      const ranked = pool
+      const currentSequence = repeated && options.mode === 'narrative' && state.last
+        ? candidates.filter((candidate) =>
+            candidate.assetId === state.last!.assetId
+            && candidate.sequenceOrder === state.last!.sequenceOrder,
+          )
+        : candidates;
+      const alternativesToLast = state.last
+        ? currentSequence.filter((candidate) => candidate.id !== state.last!.id)
+        : currentSequence;
+      let repeatedCandidates = alternativesToLast.length ? alternativesToLast : currentSequence;
+      if (repeated && options.mode === 'narrative' && state.last && repeatedCandidates.length) {
+        const anchorS = state.progress.get(state.last.assetId)?.sourceEndS ?? state.last.sourceEndS;
+        const nearestS = Math.min(...repeatedCandidates.map((candidate) => Math.abs(candidate.sourceStartS - anchorS)));
+        repeatedCandidates = repeatedCandidates.filter(
+          (candidate) => Math.abs(candidate.sourceStartS - anchorS) <= nearestS + 0.25,
+        );
+      }
+      const pool = repeated ? repeatedCandidates : eligible;
+      const rank = (items: TCandidate[]) => items
         .map((candidate) => {
           const score = options.score(slot, candidate, state.last, state.lastSlot);
           return {
@@ -123,6 +142,24 @@ export function planSequence<TCandidate extends SequencePlanCandidate, TSlot>(
         .filter((entry) => Number.isFinite(entry.score))
         .sort((a, b) => b.score - a.score || a.candidate.id.localeCompare(b.candidate.id))
         .slice(0, branchLimit);
+      const rankNearest = (items: TCandidate[]) => {
+        if (options.mode !== 'narrative' || !state.last) return rank(items);
+        for (const maxDistanceS of [2, 5, 10, 20, Number.POSITIVE_INFINITY]) {
+          const nearby = items.filter((candidate) => {
+            const progress = state.progress.get(candidate.assetId);
+            return !progress || Math.abs(candidate.sourceStartS - progress.sourceEndS) <= maxDistanceS;
+          });
+          const rankedNearby = rank(nearby);
+          if (rankedNearby.length) return rankedNearby;
+        }
+        return [];
+      };
+      let ranked = rank(pool);
+      if (!repeated && !ranked.length && options.candidateWindow) {
+        const sameSequence = forward.filter((candidate) => preferredSequences.has(`${candidate.assetId}#${candidate.sequenceOrder}`));
+        ranked = rankNearest(sameSequence);
+        if (!ranked.length) ranked = rankNearest(forward);
+      }
 
       if (!ranked.length) {
         expanded.push({
@@ -134,13 +171,15 @@ export function planSequence<TCandidate extends SequencePlanCandidate, TSlot>(
       }
 
       for (const entry of ranked) {
-        const used = repeated ? new Set<string>() : new Set(state.used);
+        const used = new Set(state.used);
         used.add(entry.candidate.id);
-        const progress = repeated ? new Map<string, Progress>() : new Map(state.progress);
-        progress.set(entry.candidate.assetId, {
-          sequenceOrder: entry.candidate.sequenceOrder,
-          sourceEndS: entry.candidate.sourceEndS,
-        });
+        const progress = new Map(state.progress);
+        if (!repeated) {
+          progress.set(entry.candidate.assetId, {
+            sequenceOrder: entry.candidate.sequenceOrder,
+            sourceEndS: entry.candidate.sourceEndS,
+          });
+        }
         expanded.push({
           choices: [...state.choices, entry.candidate],
           used,

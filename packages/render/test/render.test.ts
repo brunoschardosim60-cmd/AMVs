@@ -28,6 +28,7 @@ beforeAll(async () => {
   await ff(['-f', 'lavfi', '-i', 'color=c=blue:s=400x400', '-frames:v', '1', join(dir, 'blue.png')]);
   await ff(['-f', 'lavfi', '-i', 'color=c=white:s=100x100:r=30:d=5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', join(dir, 'white.mp4')]);
   await ff(['-f', 'lavfi', '-i', 'color=c=black:s=320x180:r=30:d=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', join(dir, 'black.mp4')]);
+  await ff(['-f', 'lavfi', '-i', 'color=c=0x804040:s=320x180:r=30:d=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', join(dir, 'grade-source.mp4')]);
   await ff(['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=5', '-af', 'volume=0.5', join(dir, 'tone.wav')]);
   await ff(['-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000:duration=5', '-af', 'volume=0.5', join(dir, 'voice-tone.wav')]);
   await ff(['-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=30:d=5', '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000:duration=5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', join(dir, 'video-audio.mp4')]);
@@ -51,7 +52,7 @@ function clip(trackId: string, assetId: string, start: number, dur: number, srcI
 
 async function project(clips: (p: Project) => Clip[]): Promise<Project> {
   let p = createProject({ name: 't', settings: { width: 320, height: 180, fps: { num: 30, den: 1 } } });
-  const assets = [await asset(join(dir, 'rg.mp4'), 'rg'), await asset(join(dir, 'green.mkv'), 'green'), await asset(join(dir, 'blue.png'), 'blue'), await asset(join(dir, 'white.mp4'), 'white'), await asset(join(dir, 'black.mp4'), 'black'), await asset(join(dir, 'tone.wav'), 'tone'), await asset(join(dir, 'voice-tone.wav'), 'voice-tone'), await asset(join(dir, 'video-audio.mp4'), 'av')];
+  const assets = [await asset(join(dir, 'rg.mp4'), 'rg'), await asset(join(dir, 'green.mkv'), 'green'), await asset(join(dir, 'blue.png'), 'blue'), await asset(join(dir, 'white.mp4'), 'white'), await asset(join(dir, 'black.mp4'), 'black'), await asset(join(dir, 'grade-source.mp4'), 'grade-source'), await asset(join(dir, 'tone.wav'), 'tone'), await asset(join(dir, 'voice-tone.wav'), 'voice-tone'), await asset(join(dir, 'video-audio.mp4'), 'av')];
   const cmds: Command[] = assets.map((a) => ({ type: 'asset.add', asset: a }));
   p = applyCommand(p, { type: 'batch', commands: cmds }).project;
   return applyCommand(p, { type: 'batch', commands: clips(p).map((c) => ({ type: 'clip.add', clip: c })) }).project;
@@ -92,8 +93,8 @@ async function rmsDb(file: string, start: number, dur: number): Promise<number> 
   return m ? (m[1] === '-inf' ? -200 : Number(m[1])) : -200;
 }
 
-async function rmsBandDb(file: string, start: number, dur: number, frequency: number): Promise<number> {
-  const r = await runner.run('ffmpeg', ['-hide_banner', '-ss', String(start), '-t', String(dur), '-i', file, '-af', `bandpass=f=${frequency}:width_type=h:width=80,volumedetect`, '-vn', '-f', 'null', '-']);
+async function rmsBandDb(file: string, start: number, dur: number, frequency: number, width = 80): Promise<number> {
+  const r = await runner.run('ffmpeg', ['-hide_banner', '-ss', String(start), '-t', String(dur), '-i', file, '-af', `bandpass=f=${frequency}:width_type=h:width=${width},volumedetect`, '-vn', '-f', 'null', '-']);
   const m = r.stderr.match(/mean_volume: (-?[\d.]+|-inf) dB/);
   return m ? (m[1] === '-inf' ? -200 : Number(m[1])) : -200;
 }
@@ -212,7 +213,7 @@ describe('exportação', () => {
 
   it('renderiza color grading com exposição, balanço tonal e vinheta via FFmpeg', async () => {
     const p = await project((p) => [
-      clip(track(p, 'V1'), 'rg', 0, 1 * S, 0, {
+      clip(track(p, 'V1'), 'grade-source', 0, 1 * S, 0, {
         effects: [{
           id: 'grade',
           effect: 'color',
@@ -236,7 +237,7 @@ describe('exportação', () => {
     const out = join(dir, 'color-grade.mp4');
     await renderProject(p, out, { width: 320, height: 180, enc: { codec: 'h264', quality: 0 }, audioBitrateK: 128 }, env(p, 'color-grade'), () => undefined);
     const graded = await pixel(out, 0.5);
-    expect(near(graded, RED, 15)).toBe(false);
+    expect(near(graded, [128, 64, 64], 15)).toBe(false);
     expect(graded.every((channel) => Number.isFinite(channel) && channel >= 0 && channel <= 255)).toBe(true);
   });
 
@@ -474,14 +475,16 @@ describe('exportação', () => {
     expect(renderResult.audioMetrics.clippingDetected).toBe(false);
   });
 
-  it('mantém a atenuação-alvo quando o keyframe da montagem e o ducking global atuam juntos', async () => {
+  it('não soma o ducking global sobre os keyframes manuais', async () => {
     let p = await project((p) => [
       clip(track(p, 'Música'), 'tone', 0, 3 * S, 0, {
+        audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null, duckingMode: 'manual' },
         keyframes: {
           'audio.gainDb': [
             { atUs: 0, value: 0, easing: 'linear' },
-            { atUs: S, value: -4, easing: 'linear' },
-            { atUs: 2 * S, value: -4, easing: 'linear' },
+            { atUs: 650_000, value: 0, easing: 'linear' },
+            { atUs: S, value: -16, easing: 'linear' },
+            { atUs: 2 * S, value: -16, easing: 'linear' },
             { atUs: 2 * S + 1, value: 0, easing: 'linear' },
           ],
         },
@@ -490,15 +493,17 @@ describe('exportação', () => {
     ]);
     p = applyCommand(p, {
       type: 'audioMix.update',
-      patch: { duckingAttackMs: 0, duckingReleaseMs: 0, duckingAmountDb: 12 },
+      patch: { duckingAttackMs: 0, duckingReleaseMs: 0, duckingAmountDb: 12, limiterEnabled: false },
     }).project;
     const output = join(dir, 'generated-dialogue-ducking.wav');
     await renderProject(p, output, {
       width: 320, height: 180, enc: { codec: 'h264', quality: 0 }, audioBitrateK: 192, audioOnly: true,
     }, env(p, 'generated-dialogue-ducking'), () => undefined);
-    const beforeSpeech = await rmsBandDb(output, 0.2, 0.5, 440);
-    const duringSpeech = await rmsBandDb(output, 1.2, 0.5, 440);
+    const beforeSpeech = await rmsBandDb(output, 0.2, 0.5, 440, 1);
+    const duringSpeech = await rmsBandDb(output, 1.2, 0.5, 440, 1);
+    const afterSpeech = await rmsBandDb(output, 2.2, 0.5, 440, 1);
     expect(beforeSpeech - duringSpeech).toBeCloseTo(16, 0);
+    expect(afterSpeech).toBeCloseTo(beforeSpeech, 1);
   });
 
   it('normaliza a mixagem WAV ao alvo EBU R128 configurado', async () => {

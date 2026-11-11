@@ -121,6 +121,17 @@ export const MIGRATIONS: Record<number, Migration> = {
       };
     }) : [],
   }),
+  9: (raw) => ({
+    ...raw,
+    clips: Array.isArray(raw.clips) ? raw.clips.map((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+      const clip = value as Record<string, unknown>;
+      const audio = clip.audio && typeof clip.audio === 'object' && !Array.isArray(clip.audio)
+        ? clip.audio as Record<string, unknown>
+        : {};
+      return { ...clip, audio: { ...audio, duckingMode: audio.duckingMode ?? 'auto' } };
+    }) : [],
+  }),
 };
 
 export type ParseResult =

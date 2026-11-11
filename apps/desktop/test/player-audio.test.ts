@@ -1,4 +1,4 @@
-import { ClipSchema, TrackSchema } from '@amv/project';
+import { ClipSchema, TrackSchema, createProject } from '@amv/project';
 import { describe, expect, it } from 'vitest';
 import { clipVolume } from '../src/features/editor/player';
 
@@ -56,5 +56,40 @@ describe('preview audio gain', () => {
     const expected = (1 + 10 ** (6 / 20)) / 2;
 
     expect(clipVolume(clip, track, 500_000, false)).toBeCloseTo(expected, 8);
+  });
+
+  it('does not stack global ducking onto manual gain keyframes', () => {
+    const project = createProject({ name: 'Mix test' });
+    const musicTrack = project.tracks.find((item) => item.role === 'music')!;
+    const voiceTrack = project.tracks.find((item) => item.role === 'voice')!;
+    const musicClip = ClipSchema.parse({
+      id: 'music',
+      trackId: musicTrack.id,
+      assetId: 'music-asset',
+      timelineStartUs: 0,
+      durationUs: 2_000_000,
+      sourceInUs: 0,
+      sourceOutUs: 2_000_000,
+      audio: { duckingMode: 'manual' },
+      keyframes: {
+        'audio.gainDb': [
+          { atUs: 0, value: -16, easing: 'linear' },
+          { atUs: 2_000_000, value: -16, easing: 'linear' },
+        ],
+      },
+    });
+    project.clips.push(ClipSchema.parse({
+      id: 'voice',
+      trackId: voiceTrack.id,
+      assetId: 'voice-asset',
+      timelineStartUs: 0,
+      durationUs: 2_000_000,
+      sourceInUs: 0,
+      sourceOutUs: 2_000_000,
+    }));
+
+    expect(clipVolume(musicClip, musicTrack, 500_000, false, project)).toBeCloseTo(10 ** (-16 / 20), 8);
+    expect(clipVolume({ ...musicClip, audio: { ...musicClip.audio, duckingMode: 'auto' } }, musicTrack, 500_000, false, project))
+      .toBeCloseTo(10 ** (-28 / 20), 8);
   });
 });

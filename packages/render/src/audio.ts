@@ -167,7 +167,7 @@ export function audioArgs(o: AudioJobInput): string[] {
     // volume ao longo do tempo (ducking): keyframes de "audio.gainDb"
     const kf = c.keyframes['audio.gainDb'];
     if (kf && kf.length) chain.push(`volume='${gainCurve(kf)}':eval=frame`);
-    const ducking = automaticDuckingExpression(o.project, pl.track.id, c.timelineStartUs);
+    const ducking = automaticDuckingExpression(o.project, pl.track.id, c.timelineStartUs, c);
     if (ducking) chain.push(`volume='${ducking}':eval=frame`);
     const ms = Math.round(c.timelineStartUs / 1000);
     chain.push(`adelay=${ms}|${ms}`);

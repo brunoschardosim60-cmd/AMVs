@@ -64,6 +64,7 @@ O relatório audiovisual é outra função do mesmo pacote: aponta problemas ver
 
 - `apps/desktop/src/features/editor` compõe a timeline no preview a partir dos proxies e dados do projeto.
 - `packages/render` constrói o plano de render e os filtros de FFmpeg a partir do projeto. Exportação gera um temporário, valida metadados e decodificação e só então publica a saída.
+- O áudio dos clipes tem `duckingMode`: `auto` aplica o ducking global; `manual` faz a automação de keyframes do clipe substituir esse ducking. A geração marca manualmente as curvas que posicionam falas e liberam o drop, para que preview e exportação não empilhem ganhos nem estendam a atenuação.
 - O projeto guarda especificações de efeitos e transições; o preview e o render usam implementações correspondentes. A existência de implementações paralelas não comprova paridade universal: verificações visuais no WebView2 e com mídia autorizada ainda são necessárias.
 - A exportação e a pré-escuta renderizada usam a cadeia FFmpeg de mixagem. O monitoramento em tempo real no preview usa Web Audio e possui diferenças conhecidas documentadas em `LIMITATIONS.md`.
 

@@ -1,5 +1,5 @@
 import { clipEndUs } from './timeline.js';
-import type { Project } from './schema.js';
+import type { Clip, Project } from './schema.js';
 
 function isAudibleTrack(project: Project, trackId: string): boolean {
   const track = project.tracks.find((item) => item.id === trackId);
@@ -16,10 +16,13 @@ function isVoiceClip(project: Project, clip: Project['clips'][number]): boolean 
 }
 
 /** Linear gain reduction from audible voice clips for a music track at timeline time. */
-export function automaticDuckingGain(project: Project, targetTrackId: string, atUs: number): number {
+export function automaticDuckingGain(project: Project, targetTrackId: string, atUs: number, targetClip?: Clip): number {
   const settings = project.audioMix;
   const target = project.tracks.find((track) => track.id === targetTrackId);
-  if (!settings.duckingEnabled || target?.role !== 'music' && target?.role !== 'music2' || !isAudibleTrack(project, targetTrackId)) return 1;
+  if (targetClip?.audio.duckingMode === 'manual'
+    || !settings.duckingEnabled
+    || target?.role !== 'music' && target?.role !== 'music2'
+    || !isAudibleTrack(project, targetTrackId)) return 1;
 
   const attackUs = settings.duckingAttackMs * 1000;
   const releaseUs = settings.duckingReleaseMs * 1000;
@@ -44,10 +47,13 @@ export function automaticDuckingGain(project: Project, targetTrackId: string, at
 }
 
 /** FFmpeg volume expression matching automaticDuckingGain over clip-local time `t`. */
-export function automaticDuckingExpression(project: Project, targetTrackId: string, targetStartUs: number): string | null {
+export function automaticDuckingExpression(project: Project, targetTrackId: string, targetStartUs: number, targetClip?: Clip): string | null {
   const settings = project.audioMix;
   const target = project.tracks.find((track) => track.id === targetTrackId);
-  if (!settings.duckingEnabled || (target?.role !== 'music' && target?.role !== 'music2') || !isAudibleTrack(project, targetTrackId)) return null;
+  if (targetClip?.audio.duckingMode === 'manual'
+    || !settings.duckingEnabled
+    || (target?.role !== 'music' && target?.role !== 'music2')
+    || !isAudibleTrack(project, targetTrackId)) return null;
 
   const attack = settings.duckingAttackMs / 1000;
   const release = settings.duckingReleaseMs / 1000;

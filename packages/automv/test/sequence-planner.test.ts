@@ -71,4 +71,44 @@ describe('planejador global de sequência', () => {
     expect(result.choices.map((item) => item?.id)).toEqual(['origem', 'alternativa']);
     expect(result.repeatedSlots).toEqual([]);
   });
+
+  it('tenta alternativas quando a janela de continuidade só contém opções incompatíveis', () => {
+    const candidates = [
+      candidate('anterior', 0, [20, 0]),
+      candidate('preferida-incompativel', 1, [0, Number.NEGATIVE_INFINITY]),
+      candidate('alternativa-na-mesma-sequencia', 2, [0, 9]),
+      { ...candidate('salto-para-outra-luta', 3, [0, 20]), sequenceOrder: 1 },
+    ];
+    const result = planSequence([0, 1], candidates, {
+      mode: 'narrative',
+      seed: 4,
+      score: (slot, item) => item.slotScores[slot]!,
+      candidateWindow: (slot, _item, forward) => slot === 1
+        ? forward.filter((item) => item.id === 'preferida-incompativel')
+        : forward,
+      beamWidth: 8,
+      branchLimit: 8,
+    });
+
+    expect(result.choices.map((item) => item?.id)).toEqual(['anterior', 'alternativa-na-mesma-sequencia']);
+    expect(result.repeatedSlots).toEqual([]);
+  });
+
+  it('repete dentro da sequência atual sem reiniciar o progresso narrativo', () => {
+    const candidates = [
+      candidate('cena-a', 0, [10, 0, 0, 0]),
+      candidate('cena-b', 1, [0, 10, 0, 0]),
+      candidate('cena-proxima', 0.5, [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, 0]),
+    ];
+    const result = planSequence([0, 1, 2, 3], candidates, {
+      mode: 'narrative',
+      seed: 5,
+      score: (slot, item) => item.slotScores[slot]!,
+      beamWidth: 8,
+      branchLimit: 8,
+    });
+
+    expect(result.choices.map((item) => item?.id)).toEqual(['cena-a', 'cena-b', 'cena-proxima', 'cena-b']);
+    expect(result.repeatedSlots).toEqual([2, 3]);
+  });
 });

@@ -22,6 +22,25 @@ describe('mixagem de áudio', () => {
     expect(automaticDuckingGain(project, music.id, 2_500_000)).toBeCloseTo(1);
   });
 
+  it('respeita o modo manual de ducking de keyframes na prévia e na expressão FFmpeg', () => {
+    let project = baseProject();
+    const music = track(project, 'Música');
+    const voice = track(project, 'Vozes');
+    const asset = audioAsset();
+    project = applyCommand(project, { type: 'asset.add', asset }).project;
+    const manualMusicClip = clip(music.id, asset.id, {
+      timelineStartUs: 1_000_000,
+      durationUs: 3_000_000,
+      audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null, duckingMode: 'manual' },
+    });
+    project = applyCommand(project, { type: 'clip.add', clip: manualMusicClip }).project;
+    project = applyCommand(project, { type: 'clip.add', clip: clip(voice.id, asset.id, { timelineStartUs: 2_000_000, durationUs: 1_000_000 }) }).project;
+
+    expect(automaticDuckingGain(project, music.id, 2_500_000, manualMusicClip)).toBe(1);
+    expect(automaticDuckingExpression(project, music.id, 1_000_000, manualMusicClip)).toBeNull();
+    expect(automaticDuckingExpression(project, music.id, 1_000_000)).toContain('min(1,');
+  });
+
   it('persiste as opções e desfaz a mudança de mixagem com o comando inverso', () => {
     const project = baseProject();
     const result = applyCommand(project, { type: 'audioMix.update', patch: { normalization: 'ebu-r128', targetLufs: -12, duckingEnabled: false } });

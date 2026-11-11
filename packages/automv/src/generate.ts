@@ -536,20 +536,14 @@ function findTracks(p: Project) {
   return { v1, text, music, voice, sfx };
 }
 
-function generatedVoiceDuckCompensationDb(project: Project, musicTrack: Track, voiceTrack: Track | undefined): number {
+function generatedVoiceAndMusicAreAudible(project: Project, musicTrack: Track, voiceTrack: Track | undefined): boolean {
   const mixTracks = project.tracks.filter((track) =>
     track.kind === 'audio' || (track.kind === 'video' && project.audioMix.includeVideoAudio),
   );
   const anySolo = mixTracks.some((track) => track.solo);
   const musicAudible = !musicTrack.muted && (!anySolo || musicTrack.solo);
-  const voiceAudible = !!voiceTrack && voiceTrack.role === 'voice' && !voiceTrack.muted && (!anySolo || voiceTrack.solo);
-  const automaticDuckDb = project.audioMix.duckingEnabled
-    && (musicTrack.role === 'music' || musicTrack.role === 'music2')
-    && musicAudible
-    && voiceAudible
-    ? project.audioMix.duckingAmountDb
-    : 0;
-  return automaticDuckDb;
+  const voiceAudible = !!voiceTrack && !voiceTrack.muted && (!anySolo || voiceTrack.solo);
+  return musicAudible && voiceAudible;
 }
 
 function baseClip(trackId: string, assetId: string | null, startS: number, durS: number, srcIn: number, reason: string, extra: Partial<Clip> = {}): Clip {
@@ -797,17 +791,17 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   }
   blocks.sort((a, b) => a.atS - b.atS);
   // a música abaixa durante cada fala e volta depois (no drop, rampa curta para o golpe entrar forte)
-  if (blocks.length) {
-    const musicDuckDb = DUCK_DB + generatedVoiceDuckCompensationDb(project, musicTrack, voice);
+  if (blocks.length && generatedVoiceAndMusicAreAudible(project, musicTrack, voice)) {
     const kf: { atUs: number; value: number; easing: 'linear' }[] = [];
     for (const b of blocks) {
       const a = b.atS;
       const end = b.preDrop ? dropT! : b.atS + b.len;
-      kf.push({ atUs: us(Math.max(0, a - 0.35)), value: 0, easing: 'linear' }, { atUs: us(a), value: musicDuckDb, easing: 'linear' });
-      if (b.preDrop) kf.push({ atUs: us(end - 0.06), value: musicDuckDb, easing: 'linear' }, { atUs: us(end), value: 0, easing: 'linear' });
-      else kf.push({ atUs: us(end), value: musicDuckDb, easing: 'linear' }, { atUs: us(end + 0.4), value: 0, easing: 'linear' });
+      kf.push({ atUs: us(Math.max(0, a - 0.35)), value: 0, easing: 'linear' }, { atUs: us(a), value: DUCK_DB, easing: 'linear' });
+      if (b.preDrop) kf.push({ atUs: us(end - 0.06), value: DUCK_DB, easing: 'linear' }, { atUs: us(end), value: 0, easing: 'linear' });
+      else kf.push({ atUs: us(end), value: DUCK_DB, easing: 'linear' }, { atUs: us(end + 0.4), value: 0, easing: 'linear' });
     }
     musicClip.keyframes['audio.gainDb'] = kf;
+    musicClip.audio.duckingMode = 'manual';
   }
   cmds.push({ type: 'clip.add', clip: musicClip });
 

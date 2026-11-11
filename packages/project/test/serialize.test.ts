@@ -245,6 +245,22 @@ describe('serialização', () => {
     }
   });
 
+  it('migra v9 mantendo ducking automático em clipes antigos', () => {
+    const raw = JSON.parse(serializeProject(richProject())) as {
+      schemaVersion: number;
+      clips: { audio: Record<string, unknown> }[];
+    };
+    raw.schemaVersion = 9;
+    for (const clip of raw.clips) delete clip.audio.duckingMode;
+
+    const result = parseProject(JSON.stringify(raw));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.migratedFrom).toBe(9);
+      expect(result.project.clips.every((clip) => clip.audio.duckingMode === 'auto')).toBe(true);
+    }
+  });
+
   it('migra projetos v2 sem alterar conteúdo e cria biblioteca de personagens vazia', () => {
     const raw = JSON.parse(serializeProject(richProject())) as Record<string, unknown>;
     raw.schemaVersion = 2;
@@ -256,7 +272,11 @@ describe('serialização', () => {
     if (!result.ok) return;
     expect(result.migratedFrom).toBe(2);
     expect(result.project.characterLibrary).toEqual([]);
-    expect(JSON.stringify(result.project.clips)).toBe(clipsBefore);
+    const clipsAfter = result.project.clips.map((clip) => ({
+      ...clip,
+      audio: { ...clip.audio, duckingMode: undefined },
+    }));
+    expect(JSON.stringify(clipsAfter)).toBe(clipsBefore);
   });
 });
 

@@ -275,18 +275,20 @@ describe('gerar AMV — hype', () => {
     expect(pic.sourceInUs).toBe(21 * S);
     expect(pic.assetId).toBe(voice[0]!.assetId);
     const m = on('Música')[0]!;
-    expect(m.keyframes['audio.gainDb']!.map((k) => k.value)).toEqual([0, -4, -4, 0]);
+    expect(m.keyframes['audio.gainDb']!.map((k) => k.value)).toEqual([0, -16, -16, 0]);
+    expect(m.audio.duckingMode).toBe('manual');
     expect(on('Legendas').map((c) => c.text?.text).join(' ')).toContain('Eu não vou desistir!');
     expect(r.summary.speech).toBe('Eu não vou desistir!');
   });
 
-  it('compensa o ducking global sem somar duas reduções completas na fala', () => {
+  it('usa os keyframes como automação final sem empilhar o ducking automático', () => {
     const configuredProject = applyCommand(project(), {
       type: 'audioMix.update',
       patch: { duckingAmountDb: 6 },
     }).project;
     const { on } = run({}, configuredProject);
-    expect(on('Música')[0]!.keyframes['audio.gainDb']!.map((keyframe) => keyframe.value)).toEqual([0, -10, -10, 0]);
+    expect(on('Música')[0]!.keyframes['audio.gainDb']!.map((keyframe) => keyframe.value)).toEqual([0, -16, -16, 0]);
+    expect(on('Música')[0]!.audio.duckingMode).toBe('manual');
 
     const duckingDisabledProject = applyCommand(project(), {
       type: 'audioMix.update',
@@ -294,6 +296,13 @@ describe('gerar AMV — hype', () => {
     }).project;
     expect(run({}, duckingDisabledProject).on('Música')[0]!.keyframes['audio.gainDb']!.map((keyframe) => keyframe.value))
       .toEqual([0, -16, -16, 0]);
+  });
+
+  it('não abaixa a música quando a trilha de voz gerada está silenciada', () => {
+    let p = project();
+    const voice = p.tracks.find((track) => track.role === 'voice')!;
+    p = applyCommand(p, { type: 'track.update', trackId: voice.id, patch: { muted: true } }).project;
+    expect(run({}, p).on('Música')[0]!.keyframes['audio.gainDb']).toBeUndefined();
   });
 
   it('mesma semente = mesma montagem; outra semente = outra montagem', () => {

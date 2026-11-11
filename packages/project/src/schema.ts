@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** Versão atual do formato `.amvproj`. Toda mudança incrementa e ganha uma migração. */
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 const us = z.number().int().safe();
 const nonNegUs = us.nonnegative();
@@ -119,6 +119,8 @@ export const ClipAudioSchema = z.object({
   pitchMode: z.enum(['preserve', 'follow']).default('preserve'),
   /** Qual stream de áudio do asset usar (episódios com várias faixas de idioma). */
   streamIndex: z.number().int().nullable().default(null),
+  /** Manual: keyframes do clipe substituem o ducking automático da mixagem. */
+  duckingMode: z.enum(['auto', 'manual']).optional(),
 });
 
 export const EffectInstanceSchema = z.object({

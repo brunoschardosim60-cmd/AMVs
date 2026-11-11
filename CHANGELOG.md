@@ -1,5 +1,12 @@
 # Novidades
 
+## 0.6.9
+
+**Montagem mais contínua e áudio mais previsível**
+- Quando as cenas preferidas não servem para um corte, a montagem procura alternativas próximas na mesma sequência antes de saltar para outra parte do episódio. A reutilização preserva o progresso narrativo e evita reiniciar a cronologia.
+- As curvas manuais de volume para falas/drop não recebem também o ducking automático, evitando reduções duplicadas. O preview e a exportação respeitam o modo definido no clipe.
+- A comparação local com episódio e música completos melhorou a continuidade e os golpes sinalizados como sincronizados; ainda há repetição, saltos e um quadro preto a revisar. Consulte a limitação documentada antes de exportar.
+
 ## 0.6.8
 
 **Música, letra e cena mais conectadas**

@@ -316,6 +316,11 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - Motivo: perfis precisam ser reutilizáveis entre projetos sem inflar nem alterar o schema do projeto; não criar métricas ou afirmações sem evidência. Os perfis não substituem a seleção contextual de episódios, personagens, música e intervalo.
 
 ## 2026-11-10 · Compensação do ducking na montagem automática
-- A montagem automática mantém a meta de atenuação de música em −16 dB durante falas escolhidas. Quando o ducking global está ativo e as trilhas de música/voz estão audíveis, os keyframes da música compensam o ducking global configurado; os dois ganhos em série não devem reduzir o sinal duas vezes.
-- Com ducking global desativado, os keyframes continuam fornecendo a atenuação de −16 dB. Trilhas mutadas ou isoladas (solo) respeitam o estado do mixer e não recebem compensação indevida.
-- Motivo: o render aplica os keyframes de volume e o ducking automático em filtros separados; sem compensação, o padrão de −16 dB mais −12 dB resultava em −28 dB durante a fala, enfraquecendo diálogos. A política permanece não destrutiva e usa a cadeia compartilhada de render.
+- `ClipAudioSchema` tem `duckingMode`: `auto` mantém o ducking global; `manual` não aplica ducking global ao clipe. Os keyframes continuam sendo ganho de automação somado aos ganhos base do clipe e da trilha. A montagem usa `manual` nas curvas de fala/drop e as trilhas mutadas ou excluídas por solo não criam automação de música.
+- Migração v9→v10 preserva o modo `auto` nos projetos antigos.
+- Motivo: somar keyframes com o ducking global duplicava reduções e estendia a atenuação para depois de um grito que termina no drop. A política explícita por clipe preserva o ducking automático nos demais clipes e faz preview e render respeitarem a mesma escolha.
+
+## 2026-11-10 · Alternativas para slots sem cena compatível
+- A busca global mantém a janela de continuidade quando uma cena nela é válida. Se não for, tenta primeiro alternativas próximas da mesma sequência e amplia a busca progressivamente; a repetição narrativa permanece na sequência atual e não reinicia o progresso temporal.
+- Motivo: preencher um slot não justifica saltar para outra luta ou reiniciar a cronologia. Quando o material da sequência se esgota, proximidade e continuidade têm prioridade sobre escolher uma cena distante por score isolado.
+- Validação: teste determinístico cobre alternativa incompatível, proximidade e repetição sem reinício. No A/B com análise completa dos mesmos arquivos, a nova busca selecionou 56 cenas únicas em 62 clipes (baseline: 53/53), mapeando os clipes aos planos analisados; o maior salto de origem caiu de 16,18 s para 5,98 s, e os golpes sinalizados como sincronizados subiram de 20/50 para 25/56. Ainda houve repetição e aviso de quadro preto; isso não comprova qualidade editorial superior.
