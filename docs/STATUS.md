@@ -1,6 +1,6 @@
 # Status
 
-Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira versão completa. ~150 testes TS com FFmpeg real e LLM simulado. Falta o teste manual no Windows do Bruno.
+Estado geral: Fase 1 concluída; Fase 2 ainda em andamento; Fases 3 a 5 implementadas com limitações documentadas; Fases 6 a 8 têm primeira versão, ainda incompleta. A Release v0.6.10 passou no CI Windows (typecheck, suíte completa e empacotamento assinado). No teste manual desta validação, o app instalado foi atualizado de v0.6.9 para v0.6.10 e a tela inicial abriu; timeline/preview com mídia, importação/exportação, viewport 1920×1080 e viewport menor continuam sem validação manual completa.
 
 ## Fase 1 — Fundação
 
@@ -27,7 +27,7 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 | Atalhos: Ctrl+N/O/S/Shift+S/I/Z/Shift+Z/Y; bloqueio de atalhos do navegador | feito | código; verificação manual pendente no Windows |
 | Aviso ao fechar com alterações não salvas | feito | código; verificação manual pendente no Windows |
 | Sidecar Python opcional (esqueleto: saúde, módulos, token) | feito | pytest |
-| CI no Windows: testes + instalador NSIS/MSI | feito | Release v0.6.5, run 42551137777 verde: runtime Python, typecheck, suíte completa e instaladores assinados; Release e `latest.json` apontam para 0.6.5. |
+| CI no Windows: testes + instalador NSIS/MSI | feito | Release v0.6.10, run 43038637825 verde: runtime Python, typecheck, suíte completa e instaladores assinados; Release e `latest.json` apontam para 0.6.10. |
 
 ### Pendente de verificação no Windows
 - Reprodução do proxy no painel de detalhes (WebView2). No Linux de desenvolvimento não dá para testar: o WebKitGTK não toca mídia pelo protocolo de arquivos do Tauri.
@@ -36,8 +36,8 @@ Fases 1 a 5 feitas; 6 (assistente), 7 (músicas) e 8 (legendas) com a primeira v
 ## Distribuição
 | Item | Estado | Como foi verificado |
 |---|---|---|
-| Atualização automática (plugin updater, assinatura minisign) | feito | Release v0.6.5 publicada com `latest.json` e assinaturas; o manifesto aponta para 0.6.5 e os instaladores NSIS/MSI respondem HTTP 200. |
-| Publicar versão: `node scripts/release.mjs x.y.z --push` (branch `release`) | feito | v0.6.5 publicada pelo workflow Release run 42551137777 |
+| Atualização automática (plugin updater, assinatura minisign) | passou no teste manual | O app instalado v0.6.9 detectou e baixou a v0.6.10; após o reinício, a interface mostrou v0.6.10. O manifesto e os instaladores assinados foram publicados. A Release v0.6.10 e seu `latest.json` ficaram sem notas porque o workflow usava uma entrada não suportada; a coleta/publicação das notas foi corrigida no workflow para as próximas versões. |
+| Publicar versão: `node scripts/release.mjs x.y.z --push` (branch `release`) | feito | v0.6.10 publicada pelo workflow Release run 43038637825 |
 
 ## Fase 2 — Editor (em andamento)
 
@@ -374,9 +374,9 @@ Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Video
 
 | Item | Estado | Como foi verificado |
 |---|---|---|
-| Cabeçalho do projeto, biblioteca, preview, timeline e painéis laterais | implementado; inspeção visual pendente | JSX/CSS reorganizados sem trocar os handlers ou os dados exibidos; typecheck e build do desktop passaram. |
+| Cabeçalho do projeto, biblioteca, preview, timeline e painéis laterais | implementado; inspeção visual parcial | JSX/CSS reorganizados sem trocar os handlers ou os dados exibidos; typecheck e build do desktop passaram. A abertura Windows mostrou a tela inicial em 1386×788; timeline, preview e painéis do editor não foram conferidos nesta sessão. |
 | Regressão dos fluxos de player e sessão | passou | 24/24 testes (`player-audio` e `session`) com `AMV_FFMPEG` e `AMV_FFPROBE` apontando para os sidecars locais. |
-| Aplicativo em execução no Windows/WebView2 | pendente | Não havia janela nem executável Tauri local disponível; o navegador confirma que o frontend exige o shell desktop. Não declarar o redesign visual validado até conferir o app rodando. |
+| Aplicativo em execução no Windows/WebView2 | passou parcialmente | O app desktop instalado abriu na v0.6.10 após a atualização; a tela inicial foi observada. O teste foi interrompido quando houve interação do usuário; não foram exercitados projeto aberto, mídia, timeline ou preview. |
 
 ## Revisão assistida do AMV
 
@@ -396,4 +396,4 @@ Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Video
 | Início, editor, música, cenas, efeitos sonoros, assistente e geração | primeira camada implementada | Hierarquia visual, espaçamento, responsividade e estados existentes foram preservados; a timeline e o preview mantêm os mesmos handlers. |
 | Transporte do preview | implementado | Busca temporal por quadro e tela cheia usam o playhead e o monitor existentes. |
 | Build e testes do desktop | passou | Build/typecheck de produção passou; 42/42 testes passaram com `AMV_FFMPEG` e `AMV_FFPROBE` apontando para os sidecars locais. |
-| Inspeção visual 1920×1080 e viewport menor no Windows/WebView2 | pendente | Não há toolchain Rust/Cargo nem executável Tauri local disponível. Não declarar a validação visual concluída até abrir e conferir o app no WebView2. |
+| Inspeção visual 1920×1080 e viewport menor no Windows/WebView2 | pendente | Só foi observada a janela em 1386×788. A comparação nos viewports solicitados, a inspeção visual da timeline/preview e a paridade com render real ainda não foram feitas. |

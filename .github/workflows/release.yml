@@ -67,9 +67,18 @@ jobs:
         shell: bash
         run: |
           version=$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")
-          awk -v v="## $version" '$0 ~ "^## " { p = ($0 == v) ; next } p' CHANGELOG.md > notes.md
+          awk -v v="## $version" '
+            /^## / { p = ($0 == v); next }
+            p && NF { started = 1 }
+            p && started { print }
+          ' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "Versão $version" > notes.md
           cat notes.md
+          {
+            echo "body<<EOF"
+            cat notes.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -80,7 +89,7 @@ jobs:
           tauriScript: pnpm tauri
           tagName: v__VERSION__
           releaseName: AMV Studio v__VERSION__
-          releaseBodyPath: notes.md
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
