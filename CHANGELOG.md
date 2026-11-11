@@ -1,5 +1,12 @@
 # Novidades
 
+## 0.6.11
+
+**Corrige a abertura e a mixagem do estilo Discurso**
+- A primeira fala e sua imagem agora começam em 0 s, sem quadro preto inicial.
+- A música permanece no ganho normal fora das falas e abaixa temporariamente durante cada trecho falado, voltando em seguida.
+- Testes de regressão cobrem o início da imagem e a curva de ducking da música.
+
 ## 0.6.10
 
 **Editor visual e montagem de ação mais cuidadosos**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { shotKey, type EpisodeAnalysis, type MusicAnalysis, type Shot } from '@amv/analysis';
-import { applyCommand, ClipSchema, clipEndUs, createProject, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
+import { applyCommand, ClipSchema, clipEndUs, createProject, evaluateKeyframes, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
 import { chooseMusicRange, generateAmv, lyricCueKey, makeSlots, recommendStyle, styleDef, type EpisodeInput, type GenerateOptions, type MusicInput } from '../src/index.js';
 
 const S = 1_000_000;
@@ -443,7 +443,16 @@ describe('outros estilos', () => {
   it('discurso: as falas viram frases em unidade e indicam precisão por segmento', () => {
     const { on } = run({ style: 'discurso', durationS: 20 });
     expect(on('Vozes').length).toBeGreaterThan(0);
-    expect(on('Música')[0]!.audio.gainDb).toBe(-14);
+    expect(on('Música')[0]!.audio.gainDb).toBe(0);
+    expect(on('Música')[0]!.audio.duckingMode).toBe('manual');
+    expect(on('V1')[0]!.timelineStartUs).toBe(0);
+    expect(on('Vozes')[0]!.timelineStartUs).toBe(0);
+    expect(evaluateKeyframes(on('Música')[0]!.keyframes['audio.gainDb'], 0, 0)).toBe(-16);
+    expect(evaluateKeyframes(
+      on('Música')[0]!.keyframes['audio.gainDb'],
+      clipEndUs(on('Vozes')[0]!) + 250_000,
+      0,
+    )).toBe(0);
     expect(on('V1').every((c) => c.effects.some((e) => e.effect === 'color' && e.params.saturation === 0))).toBe(true);
     expect(on('Legendas').every((c) => c.text?.timingPrecision === 'segment')).toBe(true);
   });

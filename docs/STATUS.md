@@ -90,6 +90,7 @@ Estado geral: Fase 1 concluída; Fase 2 ainda em andamento; Fases 3 a 5 implemen
 | Item | Estado | Como foi verificado |
 |---|---|---|
 | Estilos Hype, Impacto rápido, Superação, Letra, Discurso e Emocional; modo Aberto com recomendação local | feito | testes determinísticos de recomendação e subdivisão da batida em `packages/automv` |
+| Estilo Discurso: entrada visual sem quadro preto e música baixa apenas durante as falas | corrigido | 132 testes do Auto AMV passaram; regressão confirma clipes em 0 s, música em 0 dB fora da fala e ducking/restauração por keyframes |
 | Cortes na batida, cena forte no drop, fala terminando no drop com ducking, legendas, efeitos, motivo em cada clipe | feito | testes + app real |
 | Poucas cenas: divide slots na batida, sem buraco | feito | teste + bug real achado no app |
 | Gerar outra versão, versões guardadas e voltar | feito | teste de sessão + app real |

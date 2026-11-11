@@ -329,6 +329,11 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - Migração v9→v10 preserva o modo `auto` nos projetos antigos.
 - Motivo: somar keyframes com o ducking global duplicava reduções e estendia a atenuação para depois de um grito que termina no drop. A política explícita por clipe preserva o ducking automático nos demais clipes e faz preview e render respeitarem a mesma escolha.
 
+## 2026-11-11 · Estilo Discurso: imagem inicial e música dinâmica
+- A montagem Discurso inicia a primeira fala e sua imagem em 0 s; a música fica em 0 dB fora das falas e usa keyframes manuais para baixar durante cada fala e retornar em seguida.
+- Motivo: evitar quadro preto antes da primeira cena e não manter a trilha musical permanentemente baixa.
+- Validação: regressão determinística verifica início em 0 s, ganho-base e ducking/restauração da música.
+
 ## 2026-11-10 · Alternativas para slots sem cena compatível
 - A busca global mantém a janela de continuidade quando uma cena nela é válida. Se não for, tenta primeiro alternativas próximas da mesma sequência e amplia a busca progressivamente; a repetição narrativa permanece na sequência atual e não reinicia o progresso temporal.
 - Motivo: preencher um slot não justifica saltar para outra luta ou reiniciar a cronologia. Quando o material da sequência se esgota, proximidade e continuidade têm prioridade sobre escolher uma cena distante por score isolado.

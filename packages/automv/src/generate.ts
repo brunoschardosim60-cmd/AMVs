@@ -792,7 +792,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   // ---------------------------------------------------------------- música
   const fadeOut = Math.min(2, D * 0.08);
   const musicClip = baseClip(musicTrack.id, music.assetId, 0, D, range[0], `Trecho ${fmt(range[0])}–${fmt(range[1])} de ${music.name}${dropT !== null ? `: drop em ${fmt(dropT)} do vídeo` : ''}`, {
-    audio: { gainDb: opts.style === 'discurso' ? -14 : 0, fadeInUs: range[0] > 0.5 ? us(0.3) : 0, fadeOutUs: us(fadeOut), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null },
+    audio: { gainDb: 0, fadeInUs: range[0] > 0.5 ? us(0.3) : 0, fadeOutUs: us(fadeOut), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null },
   });
 
   // ---------------------------------------------------------------- falas (antes do drop e intercaladas)
@@ -857,8 +857,6 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     musicClip.keyframes['audio.gainDb'] = kf;
     musicClip.audio.duckingMode = 'manual';
   }
-  cmds.push({ type: 'clip.add', clip: musicClip });
-
   // ---------------------------------------------------------------- estilo discurso: as falas são a espinha
   const used = new Set<string>();
   let clipsMade = 0;
@@ -868,7 +866,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       .flatMap((ep) => ep.analysis.speech.map((s) => ({ ep, s })))
       .filter((x) => x.s.endS - x.s.startS >= 0.8 && x.s.endS - x.s.startS <= 6)
       .sort((x, y) => y.s.impact - x.s.impact + (rand() - 0.5) * 0.1);
-    let t = 0.4;
+    let t = 0;
     const chosen: typeof lines = [];
     for (const l of lines) {
       if (t >= D - 0.8) break;
@@ -878,9 +876,12 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       t += len + 0.35;
     }
     if (!chosen.length) warnings.push('O estilo discurso precisa de falas: importe episódios com legenda ou com falas claras.');
-    t = 0.4;
+    t = 0;
+    const speechIntervals: { startS: number; endS: number }[] = [];
     for (const { ep, s } of chosen) {
       const len = s.endS - s.startS;
+      const startS = t;
+      speechIntervals.push({ startS, endS: startS + len });
       const sourceText = speechTextMatchesAudio(ep, s, lang) ? s.text : null;
       const reason = `Fala ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}" ` : ''}de ${ep.name} ${fmt(s.startS)} (impacto ${s.impact.toFixed(2)})`;
       cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, t, len + 0.35, s.startS, reason, { effects: [...gradeFx(style.grade)] }) });
@@ -890,8 +891,24 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       clipsMade++;
       t += len + 0.35;
     }
+    if (speechIntervals.length && generatedVoiceAndMusicAreAudible(project, musicTrack, voice)) {
+      const keyframes: Keyframe[] = [];
+      for (const interval of speechIntervals) {
+        const duckStartS = Math.max(0, interval.startS - 0.1);
+        if (interval.startS > 0) keyframes.push({ atUs: us(duckStartS), value: 0, easing: 'linear' });
+        keyframes.push(
+          { atUs: us(interval.startS), value: DUCK_DB, easing: 'linear' },
+          { atUs: us(interval.endS), value: DUCK_DB, easing: 'linear' },
+          { atUs: us(interval.endS + 0.25), value: 0, easing: 'linear' },
+        );
+      }
+      musicClip.keyframes['audio.gainDb'] = keyframes;
+      musicClip.audio.duckingMode = 'manual';
+    }
+    cmds.push({ type: 'clip.add', clip: musicClip });
     return { commands: cmds, summary: { clips: clipsMade, cuts: clipsMade, speech: chosen[0] && speechTextMatchesAudio(chosen[0].ep, chosen[0].s, lang) ? chosen[0].s.text : null, musicRange: range, drop: dropT, focus: 'mix', fights: [], voices: chosen.length, hitsSynced: 0, speedRamps: 0, sfx: 0, direction }, warnings };
   }
+  cmds.push({ type: 'clip.add', clip: musicClip });
 
   // ---------------------------------------------------------------- cortes na batida
   const REPEAT_WARNING = 'Poucas cenas em sequência para o tamanho do vídeo: algumas se repetem. Importe mais episódios ou escolha mais lutas.';
