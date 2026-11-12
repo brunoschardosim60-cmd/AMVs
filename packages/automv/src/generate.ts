@@ -671,6 +671,7 @@ function textClip(
   impact = 0,
   timing?: NonNullable<Cue['words']>[number][],
   preset: 'lyrics-cinematic' | 'dialogue-dramatic' = kind === 'word' ? 'lyrics-cinematic' : 'dialogue-dramatic',
+  translation?: string | null,
 ): Clip {
   const word = kind === 'word';
   const startUs = Math.round(startS * 1e6);
@@ -689,37 +690,83 @@ function textClip(
     }];
   });
   const isLyrics = preset === 'lyrics-cinematic';
+  const isClimaxImpact = highlight || impact >= 0.75;
+  const isDialogue = preset === 'dialogue-dramatic';
+  const sizeMultiplier = 1 + (isClimaxImpact ? 0.35 : 0.25) * Math.max(0, Math.min(1, impact));
+  const baseSize = word ? 0.105 : isLyrics ? 0.09 : (impact < 0.45 ? 0.056 : 0.065);
+  const glowIntensity = isClimaxImpact ? Math.round(12 + 16 * Math.max(0, Math.min(1, impact))) : 0;
+  const displayText = translation && translation !== text ? translation : text;
+
   return baseClip(trackId, null, startS, durS, 0, reason, {
     transform: { x: 0, y: word ? 0 : Math.round(H * (isLyrics ? 0.22 : 0.28)), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
     text: TextContentSchema.parse({
-      text: word ? text.toUpperCase() : text,
+      text: word ? displayText.toUpperCase() : displayText,
       font: 'Manrope Variable',
-      size: Math.round(H * (word ? 0.105 : (isLyrics ? 0.09 : 0.062) * (1 + 0.25 * Math.max(0, Math.min(1, impact))))),
-      weight: word ? 900 : isLyrics ? 800 : 700,
+      size: Math.round(H * baseSize * sizeMultiplier),
+      weight: word || isClimaxImpact ? 900 : isLyrics ? 800 : 700,
       color: highlight ? '#fff0a6' : '#ffffff',
       outlineColor: '#000000',
-      outlineWidth: word ? 5 : 3,
+      outlineWidth: word ? 5 : isClimaxImpact ? 4 : 3,
       shadow: true,
       animationIn: 'pop',
       animationOut: 'fade',
       background: isLyrics ? 'none' : 'box',
-      backgroundOpacity: 0.78,
+      backgroundOpacity: isDialogue ? (impact < 0.45 ? 0.65 : 0.8) : 0.78,
       alignment: 'center',
       maxWidthRatio: 0.86,
       marginX: Math.round(H * 0.06),
       marginY: Math.round(H * 0.04),
       padding: Math.round(H * 0.025),
       highlightColor: highlight ? '#fff0a6' : '#ffd166',
-      highlightScale: 1.18,
+      highlightScale: isClimaxImpact ? 1.25 : 1.18,
+      fillStyle: isClimaxImpact && !word ? 'linear-gradient' : 'solid',
+      gradientStartColor: highlight ? '#fff8cc' : '#ffe259',
+      gradientEndColor: highlight ? '#ffd166' : '#ff6b6b',
+      glowColor: highlight ? '#ffd166' : '#ff7a00',
+      glowIntensity,
+      section: isClimaxImpact ? 'climax' : word ? 'chorus' : 'verse',
+      letterSpacing: word ? 2 : 0,
       timingPrecision: wordTimings.length ? 'word' : 'segment',
       wordTimings,
+      ...(translation && translation !== text
+        ? {
+            textSource: 'translation' as const,
+            original: text,
+            lang: 'pt',
+            translations: { pt: translation },
+          }
+        : translation
+          ? { translations: { pt: translation } }
+          : {}),
     }),
   });
 }
 
-function addCaptionPhrases(commands: Command[], trackId: string, startS: number, durationS: number, text: string, height: number, reason: string, impact = 0): void {
+function findSubtitleTranslation(ep: EpisodeInput, startS: number, endS: number): string | null {
+  for (const c of ep.analysis.subtitles ?? []) {
+    if ((c.language === 'pt' || c.language === 'por') && c.startS < endS && c.endS > startS && c.text.trim()) {
+      return c.text.trim();
+    }
+  }
+  return null;
+}
+
+function addCaptionPhrases(
+  commands: Command[],
+  trackId: string,
+  startS: number,
+  durationS: number,
+  text: string,
+  height: number,
+  reason: string,
+  impact = 0,
+  translation?: string | null,
+): void {
   if (!text.trim() || durationS <= 0) return;
-  commands.push({ type: 'clip.add', clip: textClip(trackId, startS, durationS, text, height, 'line', reason, false, impact, undefined, 'dialogue-dramatic') });
+  commands.push({
+    type: 'clip.add',
+    clip: textClip(trackId, startS, durationS, text, height, 'line', reason, false, impact, undefined, 'dialogue-dramatic', translation),
+  });
 }
 
 /** Gera a montagem. Não mexe em nada: devolve os comandos para aplicar (um único desfazer). */
@@ -732,7 +779,8 @@ export function generateAmv(project: Project, music: MusicInput, episodes: Episo
     const asset = project.assets.find((a) => a.id === c.clip.assetId);
     if (asset) {
       const base = defaultScale(project, asset);
-      c.clip.transform = { ...c.clip.transform, scale: base };
+      const userScale = c.clip.transform.scale || 1;
+      c.clip.transform = { ...c.clip.transform, scale: base * userScale };
       if (c.clip.keyframes['transform.scale']?.length) {
         c.clip.keyframes['transform.scale'] = c.clip.keyframes['transform.scale'].map((frame) => ({
           ...frame,
@@ -915,7 +963,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const reason = `Fala ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}" ` : ''}de ${ep.name} ${fmt(s.startS)} (impacto ${s.impact.toFixed(2)})`;
       cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, t, len + 0.35, s.startS, reason, { effects: [...gradeFx(style.grade)] }) });
       cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: 2, fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
-      if (opts.showText && text && sourceText) addCaptionPhrases(cmds, text.id, t, len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)));
+      const ptTranslation = findSubtitleTranslation(ep, s.startS, s.endS);
+      if (opts.showText && text && sourceText) addCaptionPhrases(cmds, text.id, t, len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), ptTranslation);
       used.add(`${ep.assetId}@${s.startS}`);
       clipsMade++;
       t += len + 0.35;
@@ -1308,20 +1357,48 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       if (speedKeyframes.length) speedProbe.sourceOutUs = speedProbe.sourceInUs + speedProbe.durationUs;
       impactLocalUs = timelineLocalAtSource(speedProbe, us(c.shot.peakS));
     }
+    // Recorte inteligente de ênfase no personagem (punch-in e enquadramento pelo centro de massa)
+    let punchScale = 1;
+    let punchX = 0;
+    let punchY = 0;
+    let characterFramingReason: string | null = null;
+    const centerOfMass = currentLocal?.centerOfVisualMass;
+    const hasCenterOfMass = Boolean(centerOfMass && centerOfMass.length === 2 && Number.isFinite(centerOfMass[0]) && Number.isFinite(centerOfMass[1]));
+    const wantsCharacterPunch = Boolean(
+      hasCenterOfMass
+      && ((hit && sl.energy >= 0.7)
+        || (sl.isDrop && hasVisualImpact)
+        || (c.shot.tags.includes('fala') && len >= 0.8)
+        || (c.shot.tags.includes('grito') || (c.shot.tags.includes('impacto') && sl.energy >= 0.6)))
+      && editorialDirection !== 'cinematic',
+    );
+    if (wantsCharacterPunch && hasCenterOfMass) {
+      punchScale = sl.isDrop || (hit && sl.energy >= 0.85) ? 1.14 : 1.08;
+      const [cx, cy] = centerOfMass!;
+      const maxShiftX = (punchScale - 1) * project.settings.width * 0.45;
+      const maxShiftY = (punchScale - 1) * project.settings.height * 0.45;
+      punchX = Math.round(Math.max(-maxShiftX, Math.min(maxShiftX, -(cx - 0.5) * project.settings.width)));
+      punchY = Math.round(Math.max(-maxShiftY, Math.min(maxShiftY, -(cy - 0.5) * project.settings.height)));
+      characterFramingReason = 'recorte focado no personagem centralizado pelo centro de massa visual';
+    }
+
     if (fxOn && hit && hasVisualImpact && impactLocalUs !== null) {
       const zoomStrength = editorialDirection === 'cinematic' ? 0.035 : editorialDirection === 'hype' ? 0.075 : 0.055;
-      visualScaleKeyframes = impactZoomCurve(us(len), impactLocalUs, 1, zoomStrength);
+      visualScaleKeyframes = impactZoomCurve(us(len), impactLocalUs, punchScale, zoomStrength);
       visualImpactReason = 'zoom de impacto animado no golpe sincronizado';
     } else if (fxOn && !visualScaleKeyframes.length && editorialDirection !== 'cinematic' && style.impactFx >= 0.7) {
       if (sl.isDrop || (sl.energy >= 0.8 && (sl.musicCue?.includes('acento') || len <= 0.5))) {
         const punchStrength = editorialDirection === 'hype' ? 0.04 : 0.025;
-        visualScaleKeyframes = beatPunchCurve(us(len), 1, punchStrength);
+        visualScaleKeyframes = beatPunchCurve(us(len), punchScale, punchStrength);
         visualImpactReason = 'micro-pulso rítmico no ataque da batida';
       }
     }
     if (fxOn && sl.isDrop) {
       const flashStrength = editorialDirection === 'cinematic' ? 0.5 : editorialDirection === 'hype' ? 1.15 : 1;
       effects.push(fx('flash', { duration: editorialDirection === 'cinematic' ? 0.12 : 0.2, white: 1, strength: flashStrength }));
+      if (editorialDirection !== 'cinematic') {
+        effects.push(fx('rgb_split', { amount: editorialDirection === 'hype' ? 14 : 9, duration: 0.25 }));
+      }
       if (hasVisualImpact) {
         const shakeIntensity = editorialDirection === 'cinematic' ? 8 : editorialDirection === 'hype' ? 28 : 22;
         effects.push(fx('shake', { intensity: shakeIntensity, frequency: 14, duration: editorialDirection === 'cinematic' ? 0.2 : 0.45 }));
@@ -1330,6 +1407,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const visualConfidence = Math.max(visual?.confidence ?? 0, c.shot.motion);
       const intensity = (editorialDirection === 'hype' ? 8 : 5) + Math.round(visualConfidence * (editorialDirection === 'hype' ? 12 : 8));
       effects.push(fx('shake', { intensity, frequency: 12, duration: Math.min(0.22, len) }));
+      if (sl.energy >= 0.78 && editorialDirection === 'hype') {
+        effects.push(fx('rgb_split', { amount: 8, duration: Math.min(0.18, len) }));
+      }
     }
     const previousVision = prev ? visionOf(prev.ep, prev.shot) : undefined;
     const currentVision = visionOf(c.ep, c.shot);
@@ -1362,6 +1442,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       best.breakdown.reasons.length ? `critérios: ${best.breakdown.reasons.join(', ')}` : null,
       sequencePlan.repeatedSlots.includes(slotIndex) ? 'cena repetida por falta de material novo' : null,
       hit ? 'golpe na batida' : null,
+      characterFramingReason,
       motionCropReason,
       speed < 1 ? `câmera lenta ${speed.toFixed(2)}×` : null,
       adaptiveSpeedReason,
@@ -1378,6 +1459,14 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       effects: clipEffects,
       transitionIn: transition,
       audio: selectedVideoAudio(streamFor(c.ep)),
+      transform: {
+        x: punchX,
+        y: punchY,
+        scale: punchScale,
+        rotation: 0,
+        opacity: 1,
+        crop: { left: 0, top: 0, right: 0, bottom: 0 },
+      },
     });
     clip.sourceOutUs = clip.sourceInUs + Math.round(clip.durationUs * speed);
     if (speedKeyframes.length) {
@@ -1472,16 +1561,38 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   for (const b of blocks) {
     const { ep, s } = b;
     const sourceText = speechTextMatchesAudio(ep, s, lang) ? s.text : null;
+    const ptTranslation = findSubtitleTranslation(ep, s.startS, s.endS);
     const reason = b.preDrop
       ? `Fala marcante antes do drop: ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada durante a fala`
       : `Fala intercalada: ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada`;
     const lead = b.atS - b.from;
+    const speechShot = ep.analysis.shots.find((sh) => s.startS >= sh.startS - 0.1 && s.startS <= sh.endS);
+    const speechLocal = speechShot ? visionOf(ep, speechShot)?.local : undefined;
+    const com = speechLocal?.centerOfVisualMass;
+    let voicePunchX = 0;
+    let voicePunchY = 0;
+    let voicePunchScale = 1;
+    if (com && com.length === 2 && Number.isFinite(com[0]) && Number.isFinite(com[1])) {
+      voicePunchScale = 1.06;
+      const maxShiftX = (voicePunchScale - 1) * project.settings.width * 0.45;
+      const maxShiftY = (voicePunchScale - 1) * project.settings.height * 0.45;
+      voicePunchX = Math.round(Math.max(-maxShiftX, Math.min(maxShiftX, -(com[0] - 0.5) * project.settings.width)));
+      voicePunchY = Math.round(Math.max(-maxShiftY, Math.min(maxShiftY, -(com[1] - 0.5) * project.settings.height)));
+    }
     cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, b.from, b.to - b.from, Math.max(0, s.startS - lead), reason, {
       effects: gradeFx(style.grade),
       audio: selectedVideoAudio(streamFor(ep), -60),
+      transform: {
+        x: voicePunchX,
+        y: voicePunchY,
+        scale: voicePunchScale,
+        rotation: 0,
+        opacity: 1,
+        crop: { left: 0, top: 0, right: 0, bottom: 0 },
+      },
     }) });
     cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: b.preDrop ? 3 : 2, fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
-    if (opts.showText && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)));
+    if (opts.showText && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), ptTranslation);
     clipsMade++;
   }
 

@@ -1,5 +1,14 @@
 # Novidades
 
+## 0.6.17
+
+**Geração de AMV aprimorada: inteligência de luta, recortes focados nos personagens, legendas cinéticas com tradução e continuidade coreográfica**
+- **Inteligência de luta vs momentos calmos**: Discriminação explícita de cenas de combate e impacto nos momentos de alta energia musical (≥ 70%), penalizando cenas calmas no clímax e reservando cenas atmosféricas/diálogos para aberturas e estrofes calmas (≤ 35%).
+- **Recorte inteligente focado no personagem ("Punch-in" e enquadramento)**: Centraliza dinamicamente os personagens no quadro com zoom de ênfase de 8% a 14% guiado pelo centro de massa visual (`centerOfVisualMass`) em golpes, falas e momentos de impacto.
+- **Continuidade coreográfica de combate ("Cenas Conectadas")**: Bonifica cortes sequenciais imediatos (< 4 s) dentro da mesma sequência de batalha, preservando a fluidez da ação e a direção do movimento.
+- **Legendas cinéticas e suporte a tradução em português**: Integra legendas com tipografia dinâmica, brilho (*glow*), gradientes de cor no clímax e detecção automática de traduções em português (`pt`) das falas dos episódios, exibindo o texto traduzido e preservando o idioma original nos metadados.
+- **Efeito rítmico de separação RGB (*glitch*)**: Adiciona efeito de separação cromática RGB de curta duração em impactos no drop e golpes de combate de alta energia.
+
 ## 0.6.16
 
 **Elimina congelamento/lentidão no player e acelera renderização de vídeo**

@@ -578,3 +578,91 @@ describe('ênfase de perfil criativo', () => {
     }
   });
 });
+
+describe('melhorias avançadas de AMV', () => {
+  it('aplica recorte inteligente focado no personagem pelo centro de massa visual', () => {
+    const p = project();
+    const ep = episode('ep1', 30, 7);
+    ep.analysis.shots[0]!.intensity = 0.95;
+    ep.analysis.shots[0]!.tags = ['ação', 'impacto'];
+    ep.analysis.shots[0]!.motion = 0.85;
+    ep.analysis.shots[0]!.peakS = ep.analysis.shots[0]!.startS + 0.5;
+    const key = shotKey(ep.analysis.shots[0]!.startS);
+    ep.vision = {
+      version: 'v2',
+      model: 'teste',
+      shots: {
+        [key]: {
+          characters: ['Goku'],
+          action: 'combate',
+          fight: true,
+          note: 'Luta',
+          confidence: 0.9,
+          local: {
+            version: 3 as const,
+            samples: 5,
+            lumaGrid: [],
+            edgeGrid: [],
+            colorHistogram: [],
+            brightness: 0.5,
+            saturation: 0.5,
+            entropy: 0.5,
+            edgeDensity: 0.5,
+            centerOfVisualMass: [0.65, 0.4],
+            temporalMotion: 0.7,
+            globalShift: [0, 0],
+            globalMotion: 0.5,
+            motionEvents: [],
+            motionConfidence: 0.8,
+            fingerprint: 'fp',
+            sceneType: 'action',
+            sceneTypeConfidence: 0.9,
+          },
+        },
+      },
+    };
+
+    const res = generateAmv(p, music(), [ep], { ...base, durationS: 10, musicStartS: 40 });
+    const videoClips = res.commands.flatMap((c) =>
+      c.type === 'clip.add' && c.clip.assetId === 'ep1' ? [c.clip] : [],
+    );
+    const framedClip = videoClips.find((c) => c.reason?.includes('recorte focado no personagem'));
+    expect(framedClip).toBeDefined();
+    expect(framedClip?.transform.scale).toBeGreaterThan(1);
+    expect(framedClip?.transform.x).toBeLessThan(0); // compensa o deslocamento para a direita (0.65 > 0.5)
+  });
+
+  it('injeta tradução em português e estilo cinético em legendas de falas', () => {
+    const p = project();
+    const ep = episode('ep1', 30, 3);
+    ep.analysis.subtitles = [
+      { startS: 20.8, endS: 23.5, language: 'pt', text: 'Eu jamais vou me render!' },
+    ];
+
+    const res = generateAmv(p, music(), [ep], { ...base, durationS: 60, useSpeech: true, showText: true });
+    const textTrackId = p.tracks.find((t) => t.kind === 'text')!.id;
+    const textClips = res.commands.flatMap((c) =>
+      c.type === 'clip.add' && c.clip.trackId === textTrackId ? [c.clip] : [],
+    );
+    const speechCaption = textClips.find((c) => c.reason?.includes('Legenda da fala'));
+    expect(speechCaption).toBeDefined();
+    expect(speechCaption?.text?.text).toBe('Eu jamais vou me render!');
+    expect(speechCaption?.text?.translations.pt).toBe('Eu jamais vou me render!');
+    expect(speechCaption?.text?.gradientStartColor).toBeDefined();
+    expect(speechCaption?.text?.glowIntensity).toBeGreaterThan(0);
+  });
+
+  it('aplica efeito de separação RGB (glitch) no drop com impacto visual', () => {
+    const p = project();
+    const ep = episode('ep1', 30, 3);
+    const res = generateAmv(p, music(), [ep], { ...base, durationS: 60, style: 'hype', useEffects: true });
+    const v1TrackId = p.tracks.find((t) => t.name === 'V1')!.id;
+    const videoClips = res.commands.flatMap((c) =>
+      c.type === 'clip.add' && c.clip.trackId === v1TrackId ? [c.clip] : [],
+    );
+    const dropClip = videoClips.find((c) => c.reason?.includes('Drop em'));
+    expect(dropClip).toBeDefined();
+    const hasRgbSplit = dropClip?.effects.some((fx) => fx.effect === 'rgb_split');
+    expect(hasRgbSplit).toBe(true);
+  });
+});

@@ -257,4 +257,38 @@ describe('pontuação contextual de cenas', () => {
     expect(contrasted.reasons).toContain('contraste de movimento alinhado a uma mudança musical');
     expect(uncertain.reasons.some((reason) => reason.includes('movimento'))).toBe(false);
   });
+
+  it('discrimina luta de cenas calmas conforme a energia da música', () => {
+    const calmShot = { ...shot, intensity: 0.2, tags: ['calma'] as Shot['tags'] };
+    const impactShot = { ...shot, intensity: 0.85, tags: ['impacto', 'ação'] as Shot['tags'] };
+
+    // Em trecho intenso (>= 0.70): penaliza cena calma
+    const calmInHype = scoreSceneCandidate({ ...base, shot: calmShot, musicEnergy: 0.85 });
+    expect(calmInHype.reasons).toContain('cena calma evitada em trecho de alta energia musical');
+    expect(calmInHype.action).toBeLessThan(0);
+
+    // Em trecho calmo (<= 0.35): penaliza impacto de luta e favorece calma
+    const impactInQuiet = scoreSceneCandidate({ ...base, shot: impactShot, musicEnergy: 0.25 });
+    expect(impactInQuiet.reasons).toContain('impacto evitado em trecho calmo da música');
+
+    const calmInQuiet = scoreSceneCandidate({ ...base, shot: calmShot, musicEnergy: 0.25 });
+    expect(calmInQuiet.action).toBeGreaterThan(0);
+  });
+
+  it('recompensa continuidade coreográfica em cortes sequenciais imediatos da mesma luta', () => {
+    const previous = { assetId: 'ep', sequenceId: 'fight-1', sourceEndS: 4.0 };
+    const immediateCut = scoreSceneCandidate({
+      ...base,
+      current: { assetId: 'ep', sequenceId: 'fight-1', sourceStartS: 5.0 },
+      previous,
+    });
+    const distantCut = scoreSceneCandidate({
+      ...base,
+      current: { assetId: 'ep', sequenceId: 'fight-1', sourceStartS: 15.0 },
+      previous,
+    });
+
+    expect(immediateCut.transition).toBeGreaterThan(distantCut.transition);
+    expect(immediateCut.reasons).toContain('continuidade coreográfica de combate em sequência imediata');
+  });
 });

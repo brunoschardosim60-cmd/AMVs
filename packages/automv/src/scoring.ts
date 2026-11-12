@@ -142,8 +142,20 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
     if (trusted(vision) && vision.fight) action += 0.12;
   }
   if (input.isDrop && shot.tags.includes('impacto')) action += 0.5;
-  if (input.musicEnergy > 0.7 && shot.tags.includes('ação')) action += 0.15;
-  if (input.musicEnergy < 0.35 && shot.tags.includes('calma')) action += 0.2;
+  if (input.musicEnergy >= 0.7) {
+    if (shot.tags.includes('ação')) action += 0.15;
+    if (shot.tags.includes('calma')) {
+      action -= 0.25;
+      reasons.push('cena calma evitada em trecho de alta energia musical');
+    }
+  }
+  if (input.musicEnergy <= 0.35) {
+    if (shot.tags.includes('calma')) action += 0.2;
+    if (shot.tags.includes('impacto')) {
+      action -= 0.2;
+      reasons.push('impacto evitado em trecho calmo da música');
+    }
+  }
   if (shot.tags.includes('fala') && style.id !== 'discurso') action -= 0.08;
   if (vision && (vision.confidence === undefined || trusted(vision))) {
     if (vision.fight) action += input.musicEnergy > 0.5 ? 0.1 : 0;
@@ -267,6 +279,10 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
           transition += current.sourceStartS >= previous.sourceEndS - 0.05
             ? 0.25 * Math.exp(-(current.sourceStartS - previous.sourceEndS) / 12)
             : -0.25;
+          if (current.sourceStartS >= previous.sourceEndS - 0.05 && current.sourceStartS - previous.sourceEndS <= 5.0) {
+            transition += 0.16;
+            reasons.push('continuidade coreográfica de combate em sequência imediata');
+          }
         }
       }
     } else if (input.current.sequenceId && input.current.sequenceId !== previous.sequenceId) {
