@@ -8,20 +8,18 @@ function createMusic(overrides: Partial<MusicAnalysis> = {}): MusicInput {
     version: 'm2',
     durationS: 90,
     bpm: 145,
-    intensity: 85,
+    bpmConfidence: 0.9,
     beats: [0.5, 1.0, 1.5, 2.0],
     downbeats: [0, 1.0, 2.0],
-    segments: [],
-    curve: [],
-    curveStepS: 0.1,
+    energy: [0.5, 0.8, 0.9, 0.85],
+    energyStepS: 0.1,
+    intensity: 85,
+    loudnessDb: -12,
     drops: [15],
-    dropSegments: [],
     sections: [
-      { name: 'intro', startS: 0, endS: 15, intensity: 40, role: 'intro' },
-      { name: 'drop', startS: 15, endS: 45, intensity: 90, role: 'climax' },
+      { label: 'intro', startS: 0, endS: 15, energy: 0.3 },
+      { label: 'drop', startS: 15, endS: 45, energy: 0.9 },
     ],
-    energyDistribution: { low: 0.2, mid: 0.5, high: 0.3 },
-    energyCurve: [],
     ...overrides,
   };
   return {
@@ -59,12 +57,12 @@ function createEpisode(hasPtAudio = false): EpisodeInput {
       sequences: [
         {
           id: 'seq1',
-          name: 'Luta do Becos',
           startS: 10,
           endS: 50,
           kind: 'luta',
           intensity: 0.9,
-          dominantEmotion: 'raiva',
+          peak: 0.95,
+          shotCount: 1,
         },
       ],
       subtitles: [],
@@ -80,7 +78,7 @@ function createEpisode(hasPtAudio = false): EpisodeInput {
 
 describe('recommendEpisodePreset', () => {
   it('gera preset com intensidade alta para música acelerada de combate', () => {
-    const music = createMusic({ bpm: 150, intensity: 88, drops: [18] });
+    const music = createMusic({ bpm: 150, energy: [0.88], drops: [18] });
     const ep = createEpisode(false);
 
     const preset = recommendEpisodePreset([ep], music);
@@ -99,7 +97,7 @@ describe('recommendEpisodePreset', () => {
   });
 
   it('detecta faixa em português e calibra voiceLang como pt', () => {
-    const music = createMusic({ bpm: 120, intensity: 60, drops: [28] });
+    const music = createMusic({ bpm: 120, energy: [0.6], drops: [28] });
     const ep = createEpisode(true);
 
     const preset = recommendEpisodePreset([ep], music);
@@ -109,7 +107,7 @@ describe('recommendEpisodePreset', () => {
   });
 
   it('calibra para modo suave e direção cinematográfica em música calma', () => {
-    const music = createMusic({ bpm: 85, intensity: 30, drops: [] });
+    const music = createMusic({ bpm: 85, energy: [0.3], drops: [] });
     const ep = createEpisode(false);
 
     const preset = recommendEpisodePreset([ep], music);

@@ -151,16 +151,6 @@ export function chooseSceneTransition(input: TransitionChoiceInput): TransitionC
       && ['contemplação', 'diálogo', 'ambiente'].includes(scene.vision?.action ?? ''));
   const bothCalm = calm(outgoing) && calm(incoming);
   const allowsDissolve = ['emocional', 'superacao', 'discurso'].includes(style) || direction === 'cinematic';
-  if ((direction === 'cinematic' || style === 'discurso' || style === 'superacao')
-    && durationS >= 0.7 && energy <= 0.4 && (brightnessGap >= 0.28 || bothCalm)) {
-    return {
-      transition: createTransition('dip_black', Math.min(0.7, durationS / 2), {}),
-      reason: brightnessGap >= 0.28
-        ? 'dip to black: separa cenas com luminosidade muito diferente num trecho musical calmo'
-        : 'dip to black: cria respiro entre cenas em um trecho musical calmo',
-    };
-  }
-
   if (isDrop && energy >= 0.72 && durationS >= 0.3
     && (incoming.shot.tags.includes('impacto') || incoming.shot.intensity >= 0.72)) {
     return {
@@ -174,6 +164,14 @@ export function chooseSceneTransition(input: TransitionChoiceInput): TransitionC
     return {
       transition: createTransition('dissolve', Math.min(0.45, durationS / 3), {}),
       reason: 'dissolve: planos calmos e longos permitem uma passagem suave',
+    };
+  }
+
+  if ((direction === 'cinematic' || style === 'discurso')
+    && durationS >= 0.8 && energy <= 0.28 && brightnessGap >= 0.45) {
+    return {
+      transition: createTransition('dip_black', Math.min(0.2, durationS / 5), { intensity: 0.6 }),
+      reason: 'dip to black sutil: transição breve entre cenas de contraste extremo em trecho calmo',
     };
   }
 

@@ -35,10 +35,14 @@ function createCandidate(id: string, shotOverrides: Partial<Shot> = {}, speechTe
   };
   return {
     id,
+    assetId: ep.assetId,
     ep,
     shot,
     seq: 'ep1#seq1',
-    duration: shot.endS - shot.startS,
+    sequenceOrder: 0,
+    episodeOrder: 0,
+    sourceStartS: shot.startS,
+    sourceEndS: shot.endS,
   };
 }
 

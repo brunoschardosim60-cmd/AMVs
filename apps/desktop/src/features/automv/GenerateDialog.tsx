@@ -107,6 +107,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [candidateMode, setCandidateMode] = useState(false);
   const [compareFraction, setCompareFraction] = useState(0.5);
   const [busy, setBusy] = useState(false);
+  const [generationStep, setGenerationStep] = useState<string | null>(null);
+  const [generationProgress, setGenerationProgress] = useState(0);
   const [creativeProfiles, setCreativeProfiles] = useState<CreativeProfile[]>([...DEFAULT_CREATIVE_PROFILES]);
   const [profilesLoaded, setProfilesLoaded] = useState(false);
   const [profileStorageError, setProfileStorageError] = useState(false);
@@ -625,6 +627,11 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       // efeitos sonoros: grava/registra uma vez; se falhar, o AMV sai sem eles e avisa
       let sfxAssets: GenerateOptions['sfxAssets'];
       let sfxError: string | null = null;
+      setBusy(true);
+      setGenerationStep('Mapeando compassos, batidas e energia da música...');
+      setGenerationProgress(20);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
       if (useSfx) {
         try {
           sfxAssets = await session.ensureSfx();
@@ -632,9 +639,23 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           sfxError = (e as Error).message;
         }
       }
+
+      setGenerationStep('Examinando tomadas, continuidade de combate e personagens...');
+      setGenerationProgress(45);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
       const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
       const m = musics.find((a) => a.id === musicId)!;
+
+      setGenerationStep('Otimizando narrativa, versos da letra e falas dramáticas...');
+      setGenerationProgress(70);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
       const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
+
+      setGenerationStep('Sincronizando golpes com a batida e aplicando efeitos...');
+      setGenerationProgress(90);
+      await new Promise((resolve) => setTimeout(resolve, 120));
       if (sfxError) r.warnings.push(`Não consegui preparar os efeitos sonoros (${sfxError}): o vídeo saiu sem eles.`);
       // guarda o que estava antes: nada se perde
       await session.saveVersion(`Antes de gerar (${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})`);
@@ -656,6 +677,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       toast({ tone: 'error', title: 'Não deu para gerar', body: (e as Error).message });
     } finally {
       setBusy(false);
+      setGenerationStep(null);
+      setGenerationProgress(0);
     }
   };
 
@@ -697,6 +720,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       toast({ tone: 'error', title: 'Não foi possível aplicar a regeneração', body: detail });
     } finally {
       setBusy(false);
+      setGenerationStep(null);
+      setGenerationProgress(0);
     }
   };
 
@@ -889,6 +914,23 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         </>
       }
     >
+      {busy && generationStep && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center rounded-lg bg-base/85 backdrop-blur-sm p-6 text-center">
+          <div className="relative mb-4 flex items-center justify-center">
+            <div className="h-14 w-14 rounded-full border-2 border-violet/30 border-t-violet animate-spin" />
+            <Sparkles size={20} className="absolute text-violet-strong" />
+          </div>
+          <h4 className="text-sm font-semibold text-ink">Inteligência Artificial Analisando & Gerando AMV</h4>
+          <p className="mt-1 text-xs font-medium text-violet-strong transition-all duration-200">{generationStep}</p>
+          <div className="mt-4 h-1.5 w-64 overflow-hidden rounded-full border border-line bg-base">
+            <div
+              className="h-full bg-gradient-to-r from-violet to-violet-strong transition-all duration-300"
+              style={{ width: `${generationProgress}%` }}
+            />
+          </div>
+          <p className="mt-2 text-2xs text-muted">Avaliando continuidade coreográfica, impactos e sincronização rítmica</p>
+        </div>
+      )}
       {localizedRange && (
         <div className="mb-4 rounded-control border border-violet/30 bg-violet/5 p-3">
           <p className="text-sm font-semibold text-ink">Regeneração não destrutiva</p>

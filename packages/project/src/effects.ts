@@ -514,9 +514,14 @@ export function evalClipLook(clip: Pick<Clip, 'effects' | 'transitionIn' | 'tran
         look.highlights += param(fx, 'highlights');
         look.vignette = Math.max(look.vignette, param(fx, 'vignette'));
         break;
-      case 'rgb_split':
-        look.rgbSplit += param(fx, 'amount');
+      case 'rgb_split': {
+        const d = param(fx, 'duration');
+        if (d <= 0 || localS < d) {
+          const factor = d > 0 ? Math.max(0, 1 - localS / d) : 1;
+          look.rgbSplit += param(fx, 'amount') * factor;
+        }
         break;
+      }
       case 'vignette':
         look.vignette = Math.max(look.vignette, param(fx, 'strength'));
         break;

@@ -15,12 +15,12 @@ function createEpisode(id: string, shots: Shot[]): EpisodeInput {
       sequences: [
         {
           id: 'seq1',
-          name: 'Luta Principal',
           startS: 20,
           endS: 60,
           kind: 'luta',
           intensity: 0.9,
-          dominantEmotion: 'raiva',
+          peak: 0.95,
+          shotCount: 1,
         },
       ],
       subtitles: [],
@@ -109,6 +109,8 @@ describe('findHeroCoverFrame', () => {
       {
         ep,
         seq: ep.analysis.sequences![0]!,
+        usableS: 5,
+        shotCount: 1,
       },
     ];
 
@@ -138,7 +140,7 @@ describe('findHeroCoverFrame', () => {
       confidence: 0.9,
       note: '',
       local: {
-        version: 1,
+        version: 3,
         samples: 2,
         lumaGrid: [],
         edgeGrid: [],

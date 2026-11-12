@@ -42,9 +42,10 @@ export function recommendEpisodePreset(
   const style = styleRec.style;
 
   // 2. Intensidade dos cortes baseada em BPM e energia musical
+  const avgEnergy = m.energy.length ? m.energy.reduce((a, b) => a + b, 0) / m.energy.length : 0.5;
   let intensity: 0 | 1 | 2 | 3 = 2;
-  if (m.bpm >= 140 || m.intensity >= 78) intensity = 3;
-  else if (m.bpm <= 95 && m.intensity <= 35) intensity = 1;
+  if (m.bpm >= 140 || avgEnergy >= 0.75) intensity = 3;
+  else if (m.bpm <= 95 && avgEnergy <= 0.35) intensity = 1;
   else intensity = 2;
 
   // 3. Direção editorial

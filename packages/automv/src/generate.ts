@@ -426,6 +426,20 @@ export function chooseSequences(eps: EpisodeInput[], neededS: number, o: { seque
     have += e.usableS;
     count += e.shotCount;
   }
+  // Se as lutas não forem suficientes para cobrir o vídeo solicitado (ex.: 45s ou 60s),
+  // complementa com as sequências mais dinâmicas restantes para evitar repetições desnecessárias.
+  if (have < neededS * POOL_ROOM && fights.length > 0) {
+    const remaining = all
+      .filter((e) => !pool.some((p) => p.ep.assetId === e.ep.assetId && p.seq.id === e.seq.id))
+      .map((e) => ({ e, sc: score(e) }))
+      .sort((a, b) => b.sc - a.sc);
+    for (const { e } of remaining) {
+      if (have >= neededS * POOL_ROOM && count >= needCount) break;
+      pool.push(e);
+      have += e.usableS;
+      count += e.shotCount;
+    }
+  }
   return pool.sort((a, b) => a.ep.assetId.localeCompare(b.ep.assetId) || a.seq.startS - b.seq.startS);
 }
 
@@ -1035,6 +1049,16 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       for (const shot of ep.analysis.shots) consider(ep, shot);
     }
   }
+  if (!candidates.length && fight) {
+    // Fallback automático para garantir que o AMV nunca saia sem vídeo na primeira tentativa
+    for (const ep of episodes) {
+      if (exclude.has(ep.assetId)) continue;
+      for (const shot of ep.analysis.shots) consider(ep, shot);
+    }
+    if (candidates.length) {
+      warnings.push('A luta selecionada tinha poucas cenas aproveitáveis: usei cenas dinâmicas do restante do episódio para preencher o vídeo.');
+    }
+  }
   if (!candidates.length) {
     warnings.push(plan.wanted
       ? `Nenhuma cena analisada corresponde aos personagens selecionados (${[...plan.wanted].join(', ')}); não misturei outros personagens.`
@@ -1101,7 +1125,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
 
   const scoreCandidate = (sl: Slot, c: Candidate, previous: Candidate | null, previousSlot: Slot | null) => {
     const len = sl.endS - sl.startS;
-    if (c.shot.endS - c.shot.startS + 1e-6 < len * 0.6) return null;
+    const shotLen = c.shot.endS - c.shot.startS;
+    if (shotLen + 1e-6 < len * 0.45 && shotLen < 0.25) return null;
     const narrativeBeat = narrativeAt(direction, (sl.startS + sl.endS) / 2);
     const target = Math.min(1, Math.max(0, lowI + (highI - lowI) * sl.energy + boost + (sl.isDrop ? 0.15 : 0)));
     const previousVision = previous ? visionOf(previous.ep, previous.shot) : undefined;

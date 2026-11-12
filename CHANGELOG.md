@@ -1,5 +1,14 @@
 # Novidades
 
+## 0.6.19
+
+**Geração de vídeo garantida de primeira, fim de repetições em vídeos longos (45s+), transições suaves sem telas pretas e progresso da IA**
+- **Geração de vídeo garantida de primeira tentativa**: Adiciona fallback inteligente que puxa tomadas dinâmicas do restante do episódio caso a seleção de luta fique restrita, além de tolerância adaptativa de cadência (`len * 0.45`), garantindo que a timeline sempre receba clipes de vídeo e áudio completos de primeira, sem nunca gerar apenas a faixa de música.
+- **Eliminação da repetição dos últimos 15 segundos em vídeos longos (45s / 60s)**: Quando uma luta isolada possui menos segundos de material do que a duração desejada do AMV, o motor agora complementa automaticamente o conjunto com as próximas sequências dinâmicas do episódio e cicla suavemente as cenas menos utilizadas, sem nunca ficar travado nos cortes finais da tomada.
+- **Remoção de telas pretas prolongadas nas transições**: Substitui o mergulho escuro (`dip_black`) de 0,7s em cenas calmas por `dissolve` suave e cortes diretos de ritmo natural; `dip_black` fica restrito a saltos de contraste extremo e com duração máxima de 0,2s.
+- **Decaimento animado no efeito de separação RGB (*glitch*)**: O efeito `rgb_split` agora diminui gradualmente sua intensidade ao longo do tempo do impacto, criando um efeito de pulso orgânico no drop.
+- **Indicador de progresso e síntese multi-etapas da IA**: O diálogo de geração agora apresenta um overlay com o progresso de cada fase da inteligência (mapeamento de batidas, exame de personagens e coreografia, casamento semântico de letras e sincronia de golpes), mostrando com clareza o processamento e a análise profunda executada.
+
 ## 0.6.18
 
 **Inteligência semântica de letra vs cena, presets inteligentes por episódio, capa heroica automática e suporte bilíngue (PT/EN)**
