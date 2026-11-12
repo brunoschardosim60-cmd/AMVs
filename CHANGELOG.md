@@ -1,5 +1,14 @@
 # Novidades
 
+## 0.6.14
+
+**Aprimora o algoritmo de geração de AMV (enquadramento, anti-repetição, pontos de corte inteligentes e transições)**
+- **Progressão fluida de enquadramento**: Premia transições naturais de escala de plano (aberto → médio → primeiro plano) e penaliza saltos abruptos ou planos repetidos em sequência.
+- **Anti-repetição inteligente**: Penaliza cenas e sequências reutilizadas recentemente na mesma geração, garantindo maior variedade visual.
+- **Seleção inteligente de ponto de entrada (`srcIn`)**: Em cenas mais longas que o corte musical, centraliza a ação nos momentos de pico de velocidade/movimento ou impacto, em vez de um corte aleatório.
+- **Transição de zoom dinâmico**: Adiciona efeito de zoom rápido para cortes de impacto fora do drop com movimento de câmera detectado.
+- **Beam Search adaptativo**: Aumenta o espaço de busca quando há mais candidatos, explorando melhores combinações narrativas.
+
 ## 0.6.13
 
 **Corrige o carregamento do vídeo recortado e elimina travamento/tela preta no player**
