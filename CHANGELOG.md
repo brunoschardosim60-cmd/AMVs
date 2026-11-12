@@ -1,5 +1,13 @@
 # Novidades
 
+## 0.6.15
+
+**Aceleração de cortes pré-drop, micro-pulsos de batida e transições dinâmicas**
+- **Correção da cadência de cortes pré-drop**: Corrige o cálculo da distância temporal até o drop em faixas de música com offset inicial (`drop - cur`), ativando a aceleração frenética de cortes nos 2,5 segundos que antecedem o impacto do clímax.
+- **Micro-pulsos de batida ("Beat Punch")**: Adiciona uma animação sutil de pulso de escala (2 a 4% com decaimento suave em ~110 ms) em cortes que coincidem com acentos de graves e entradas energéticas.
+- **Transição de impacto luminoso (`dip_white`)**: Aplica clarões de transição expressivos em cortes de impacto fora do drop com movimento de câmera compatível.
+- **Contraste dramático no drop**: O algoritmo de pontuação favorece transições de iluminação contrastante (cena escura de tensão seguida de clímax visual iluminado) na entrada do drop.
+
 ## 0.6.14
 
 **Aprimora o algoritmo de geração de AMV (enquadramento, anti-repetição, pontos de corte inteligentes e transições)**
