@@ -106,9 +106,12 @@ export async function makePoster(
   output: string,
   probe: ProbeInfo,
   signal?: AbortSignal,
+  atSeconds?: number,
 ): Promise<string> {
-  // 10% da duração (evita tela preta de abertura), no máximo 30 s
-  const at = Math.min(30, (probe.durationUs / 1e6) * 0.1);
+  // Se informado, usa o segundo específico (ex.: melhor quadro heroico/capa); senão 10% da duração
+  const at = typeof atSeconds === 'number' && Number.isFinite(atSeconds) && atSeconds >= 0
+    ? Math.min(probe.durationUs / 1e6, atSeconds)
+    : Math.min(30, (probe.durationUs / 1e6) * 0.1);
   return atomicOutput(fs, output, async (tmp) => {
     // -f image2 porque o .part esconde a extensão
     const args = posterArgs(input, tmp, at);

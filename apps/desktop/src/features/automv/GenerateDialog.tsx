@@ -1,5 +1,5 @@
 import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type CameraMotionType, type Cue, type SceneEmotion } from '@amv/analysis';
-import { canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, prepareLocalizedRegeneration, recommendStyle, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
+import { canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, prepareLocalizedRegeneration, recommendEpisodePreset, recommendStyle, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
 import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { loadCreativeProfiles, saveCreativeProfiles } from '../../core/creativeProfiles';
@@ -183,6 +183,32 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     () => (music && inputs.length ? recommendStyle(inputs.map((input) => ({ analysis: input.analysis, visual: input.vision })), music, !!lyrics?.cues.length) : null),
     [inputs, music, lyrics],
   );
+  const smartPreset = useMemo(() => {
+    if (!music || !inputs.length) return null;
+    return recommendEpisodePreset(
+      inputs,
+      { assetId: musicId, name: selectedMusic?.name ?? 'Música', analysis: music },
+      lyrics?.cues,
+    );
+  }, [inputs, music, musicId, selectedMusic?.name, lyrics?.cues]);
+
+  const applySmartPreset = () => {
+    if (!smartPreset) return;
+    setStyle(smartPreset.style);
+    setStyleMode('manual');
+    setIntensity(smartPreset.intensity);
+    setDuration(smartPreset.durationS);
+    if (smartPreset.musicStartS !== null) setMusicStart(smartPreset.musicStartS);
+    setEditorialDirection(smartPreset.editorialDirection);
+    setOrganizationMode(smartPreset.organizationMode);
+    setFocus(smartPreset.focus);
+    setVoiceMoments(smartPreset.voiceMoments);
+    setVoiceLang(smartPreset.voiceLang);
+    setUseEffects(smartPreset.useEffects);
+    setHitSync(smartPreset.hitSync);
+    setAdaptiveSpeed(smartPreset.adaptiveSpeed);
+    toast({ tone: 'ok', title: 'Configuração padrão aplicada', body: smartPreset.explanation.title });
+  };
   const selectedStyle = styleMode === 'auto' ? recommendation?.style ?? style : style;
   const activeCreativeProfile = creativeProfiles.find((profile) => profile.id === activeProfileId);
   const activeProfileIsCustom = !!activeCreativeProfile && !isBuiltInCreativeProfile(activeCreativeProfile);
@@ -966,6 +992,27 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                   <span className="text-sm font-semibold text-ink">{STYLES.find((item) => item.id === selectedStyle)!.label}</span>
                 </div>
                 <p className="mt-1 text-xs text-ink-soft">{recommendation ? `Recomendado por: ${recommendation.reason}.` : 'Aguardando a análise da música e dos episódios selecionados.'}</p>
+                {smartPreset && (
+                  <div className="mt-2.5 pt-2 border-t border-violet/20">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-2xs font-medium text-violet-strong">Preset Automático do Episódio</span>
+                      <Button size="sm" variant="primary" onClick={applySmartPreset}>
+                        <Sparkles size={12} className="mr-1 inline" />
+                        Aplicar Tudo Ajustado
+                      </Button>
+                    </div>
+                    <ul className="mt-1.5 space-y-0.5 text-2xs text-muted list-disc list-inside">
+                      {smartPreset.explanation.reasons.map((r, i) => (
+                        <li key={i}>{r}</li>
+                      ))}
+                    </ul>
+                    {smartPreset.heroCover && (
+                      <p className="mt-1 text-2xs text-ink-soft">
+                        🖼️ <strong>Capa heroica:</strong> {smartPreset.heroCover.reason} ({smartPreset.heroCover.episodeName} aos {smartPreset.heroCover.timestampS.toFixed(1)}s)
+                      </p>
+                    )}
+                  </div>
+                )}
                 <p className="mt-1 text-2xs text-muted">A escolha usa BPM, energia, cenas, falas e letra carregada. É automática e local; você ainda pode mudar para um estilo manual.</p>
               </div>
             ) : (

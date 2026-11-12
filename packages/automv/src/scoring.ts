@@ -289,7 +289,15 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
       transition -= 0.1;
     }
 
-    if (sharedCharacter(previous.vision, vision)) {
+    if (trusted(previous.vision) && trusted(vision) && previous.vision.characters.length > 0 && vision.characters.length > 0) {
+      if (sharedCharacter(previous.vision, vision)) {
+        transition += 0.14;
+        reasons.push('continuidade de personagens na cena (mesmos personagens no corte)');
+      } else if (previous.sequenceId !== input.current.sequenceId && !input.transitionCue) {
+        transition -= 0.28;
+        reasons.push('penalidade por mistura abrupta de personagens/lutas distintas');
+      }
+    } else if (sharedCharacter(previous.vision, vision)) {
       transition += 0.08;
       reasons.push('personagem em comum nas cenas consecutivas (análise visual confiável)');
     }

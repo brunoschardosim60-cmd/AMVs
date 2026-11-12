@@ -191,7 +191,7 @@ describe('pontuação contextual de cenas', () => {
     const withoutContinuity = scoreSceneCandidate(base);
     expect(withContinuity.transition).toBeGreaterThan(withoutContinuity.transition);
     expect(withContinuity.reasons).toContain('continuidade visual sugerida entre preparação/ação/reação');
-    expect(withContinuity.reasons).toContain('personagem em comum nas cenas consecutivas (análise visual confiável)');
+    expect(withContinuity.reasons).toContain('continuidade de personagens na cena (mesmos personagens no corte)');
 
     const uncertain = scoreSceneCandidate({
       ...base,

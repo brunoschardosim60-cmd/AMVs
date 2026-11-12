@@ -9,3 +9,6 @@ export * from './sequence-planner.js';
 export * from './quality.js';
 export * from './regenerate.js';
 export * from './creative-profiles.js';
+export * from './lyric-matcher.js';
+export * from './hero-cover.js';
+export * from './smart-preset.js';

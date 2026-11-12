@@ -1,5 +1,14 @@
 # Novidades
 
+## 0.6.18
+
+**Inteligência semântica de letra vs cena, presets inteligentes por episódio, capa heroica automática e suporte bilíngue (PT/EN)**
+- **Casamento semântico automático de letra com cena (determinístico e local)**: Motor de análise semântica que relaciona versos da música com as características visuais e narrativas das cenas (7 temas fundamentais: combate/confronto, poder/determinação, fogo/chamas, escuridão/noite, luz/brilho, emoção/dor/lágrimas e velocidade/movimento), além de cruzar falas do personagem que coincidam com a letra da música. Funciona de forma 100% local, instantânea e sem depender de APIs externas.
+- **Preset inteligente de configuração por episódio ("Configuração Ideal")**: Analisa o anime e a música para gerar um perfil personalizado pré-ajustado em um clique na interface (estilo recomendado, intensidade dos cortes calibrada por BPM, direção editorial, duração sugerida, foco em luta, falas marcantes e idioma). O usuário pode aplicar todas as configurações ideais com um único botão ("Aplicar Tudo Ajustado").
+- **Seleção inteligente de capa heroica (Hero Cover Frame)**: Algoritmo que escolhe automaticamente o melhor quadro do episódio/luta para servir de pôster e capa, avaliando exposição equilibrada (evitando clarões estourados e telas pretas), nitidez/densidade de bordas, centralização do personagem (`centerOfVisualMass`) e o ápice coreográfico de impacto.
+- **Proteção contra mistura desordenada de personagens**: Reforça a continuidade narrativa penalizando a troca repentina de personagens e lutas distintas sem justificativa musical (`-0.28`), mantendo sequências coerentes e conectadas.
+- **Suporte a legendas bilíngues (Português e Inglês)**: O sistema de legendas cinéticas agora suporta e detecta faixas de legendas em português (`pt`/`por`) e inglês (`en`/`eng`), armazenando os textos traduzidos e mantendo a fala original sincronizada.
+
 ## 0.6.17
 
 **Geração de AMV aprimorada: inteligência de luta, recortes focados nos personagens, legendas cinéticas com tradução e continuidade coreográfica**
