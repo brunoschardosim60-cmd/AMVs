@@ -237,11 +237,11 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
         && timelineS >= event.timelineS && timelineS < event.timelineS + (event.durationS ?? 0),
     );
     if (activePause) cadence *= style.pauseHold;
-    const toDrop = drop === null ? Infinity : drop - (cur + a);
+    const toDrop = drop === null ? Infinity : drop - cur;
     if (toDrop > 0 && toDrop <= 2.5) {
       cadence *= Math.max(0.55, 1 - style.preDropAcceleration * (1 - toDrop / 2.5));
     }
-    const inEnding = !!m.events && (sectionAt(m, cur + a)?.label === 'final' || cur >= (b - a) * 0.9);
+    const inEnding = !!m.events && (sectionAt(m, cur)?.label === 'final' || timelineS >= (b - a) * 0.9);
     if (inEnding) cadence *= style.endingHold;
     let n = Math.max(1, Math.round((cadence / subdivision)));
     // não atravessa o drop: o drop sempre abre um corte novo
@@ -630,6 +630,18 @@ function impactZoomCurve(durationUs: number, impactAtUs: number, baseScale: numb
     { atUs: impact, value: baseScale * (1 + strength), easing: 'ease-out' },
     { atUs: Math.min(durationUs, impact + 100_000), value: baseScale * (1 + strength * 0.45), easing: 'ease-in-out' },
     { atUs: Math.min(durationUs, impact + 260_000), value: baseScale, easing: 'linear' },
+  ];
+  return points
+    .map((point) => ({ ...point, atUs: Math.max(0, Math.min(durationUs, point.atUs)) }))
+    .filter((point, index, all) => index === 0 || point.atUs > all[index - 1]!.atUs);
+}
+
+function beatPunchCurve(durationUs: number, baseScale: number, strength: number): Keyframe[] {
+  const decayUs = Math.min(Math.round(durationUs * 0.35), 110_000);
+  const points: { atUs: number; value: number; easing: Keyframe['easing'] }[] = [
+    { atUs: 0, value: baseScale * (1 + strength), easing: 'ease-out' },
+    { atUs: decayUs, value: baseScale, easing: 'ease-in-out' },
+    { atUs: durationUs, value: baseScale, easing: 'linear' },
   ];
   return points
     .map((point) => ({ ...point, atUs: Math.max(0, Math.min(durationUs, point.atUs)) }))
@@ -1300,6 +1312,12 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const zoomStrength = editorialDirection === 'cinematic' ? 0.035 : editorialDirection === 'hype' ? 0.075 : 0.055;
       visualScaleKeyframes = impactZoomCurve(us(len), impactLocalUs, 1, zoomStrength);
       visualImpactReason = 'zoom de impacto animado no golpe sincronizado';
+    } else if (fxOn && !visualScaleKeyframes.length && editorialDirection !== 'cinematic' && style.impactFx >= 0.7) {
+      if (sl.isDrop || (sl.energy >= 0.8 && (sl.musicCue?.includes('acento') || len <= 0.5))) {
+        const punchStrength = editorialDirection === 'hype' ? 0.04 : 0.025;
+        visualScaleKeyframes = beatPunchCurve(us(len), 1, punchStrength);
+        visualImpactReason = 'micro-pulso rítmico no ataque da batida';
+      }
     }
     if (fxOn && sl.isDrop) {
       const flashStrength = editorialDirection === 'cinematic' ? 0.5 : editorialDirection === 'hype' ? 1.15 : 1;

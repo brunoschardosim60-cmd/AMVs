@@ -181,17 +181,16 @@ export function chooseSceneTransition(input: TransitionChoiceInput): TransitionC
     return { transition: null, reason: 'corte seco: preserva a precisão rítmica do drop' };
   }
 
-  // zoom rápido para impactos não-drop com alta energia
-  if (!isDrop && energy >= 0.6 && durationS >= 0.3 && durationS <= 1.2
+  // dip to white para impactos não-drop com alta energia e movimento
+  if (!isDrop && energy >= 0.65 && durationS >= 0.35 && durationS <= 1.2
     && direction !== 'cinematic'
-    && (incoming.shot.tags.includes('impacto') || incoming.shot.intensity >= 0.7)
-    && inMotion && inMotion.speed >= 0.03) {
+    && (incoming.shot.tags.includes('impacto') || incoming.shot.intensity >= 0.72)
+    && inMotion && inMotion.speed >= 0.035) {
     return {
-      transition: createTransition('zoom', Math.min(0.18, durationS / 4), {
-        intensity: Math.min(0.6, 0.3 + energy * 0.2),
-        direction: inMotion.cameraMotion === 'zoom-out' ? -1 : 1,
+      transition: createTransition('dip_white', Math.min(0.14, durationS / 4), {
+        intensity: Math.min(0.65, 0.35 + energy * 0.2),
       }),
-      reason: 'zoom rápido: impacto visual fora do drop com movimento de câmera detectado',
+      reason: 'dip to white breve: impacto visual luminoso fora do drop com movimento de câmera detectado',
     };
   }
 

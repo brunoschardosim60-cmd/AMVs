@@ -286,6 +286,10 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
         visual += 0.06;
         reasons.push('continuidade visual com estrutura e personagem em comum');
       }
+      if (input.isDrop && Math.abs(previous.local.brightness - input.local.brightness) >= 0.28) {
+        visual += 0.08;
+        reasons.push('contraste luminoso expressivo na entrada do drop');
+      }
     }
     if (actionTransition(previous.vision, vision)) {
       transition += 0.12;
