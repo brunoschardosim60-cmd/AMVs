@@ -57,7 +57,7 @@ export function shouldHardSeekMedia(
 /**
  * Elementos de mídia vivos: mantém uma conexão por clipe ativo/próximo.
  */
-const MAX_SLOTS = 10;
+const MAX_SLOTS = 8;
 /** Elemento fora do playhead há mais que isso é fechado (libera a conexão). */
 const IDLE_RELEASE_MS = 1500;
 
@@ -279,6 +279,7 @@ export class Player {
   }
 
   setProject(p: Project): void {
+    if (this.project === p) return;
     this.project = p;
     if (this.audioLimiter) {
       this.audioLimiter.threshold.value = p.audioMix.limiterCeilingDb;
@@ -293,8 +294,10 @@ export class Player {
       }
     }
     this.colorLuts.clear();
-    for (const slot of this.slots.values()) {
-      if (slot.kind !== 'image') slot.needsSeek = true;
+    if (!this.playing) {
+      for (const slot of this.slots.values()) {
+        if (slot.kind !== 'image') slot.needsSeek = true;
+      }
     }
     this.lastRenderAtMs = 0;
   }
@@ -735,16 +738,16 @@ export class Player {
         const first = sourceTimeS(c, c.timelineStartUs);
         if (Math.abs(v.currentTime - first) > 0.05 && v.readyState >= 1 && !v.seeking) v.currentTime = first;
       }
-      if (active && v.readyState >= 2 && v.videoWidth && v.videoHeight && !v.seeking) {
-        slot.lastFrame ??= document.createElement('canvas');
-        if (slot.lastFrame.width !== v.videoWidth) slot.lastFrame.width = v.videoWidth;
-        if (slot.lastFrame.height !== v.videoHeight) slot.lastFrame.height = v.videoHeight;
-        slot.lastFrame.getContext('2d')?.drawImage(v, 0, 0);
+      if (active && v.readyState >= 2 && v.videoWidth && v.videoHeight) {
+        if (!v.seeking && (!slot.lastFrame || !this.playing)) {
+          slot.lastFrame ??= document.createElement('canvas');
+          if (slot.lastFrame.width !== v.videoWidth) slot.lastFrame.width = v.videoWidth;
+          if (slot.lastFrame.height !== v.videoHeight) slot.lastFrame.height = v.videoHeight;
+          slot.lastFrame.getContext('2d')?.drawImage(v, 0, 0);
+        }
         this.drawMedia(ctx, v, v.videoWidth, v.videoHeight, c, k, look, localS);
       } else if (active && slot.lastFrame?.width && slot.lastFrame.height) {
         this.drawMedia(ctx, slot.lastFrame, slot.lastFrame.width, slot.lastFrame.height, c, k, look, localS);
-      } else if (active && v.readyState >= 2 && v.videoWidth && v.videoHeight) {
-        this.drawMedia(ctx, v, v.videoWidth, v.videoHeight, c, k, look, localS);
       } else if (active) {
         this.drawPlaceholder(ctx, 'Carregando quadro…');
       }
@@ -787,39 +790,49 @@ export class Player {
     const grade = aggregateColorGrade(c.effects);
     const filters: string[] = [];
     if (!isColorGradeNeutral(grade)) {
-      const gradeKey = JSON.stringify(grade);
-      let lut = this.colorLuts.get(gradeKey);
-      if (!lut) {
-        lut = createColorGradeLut(grade);
-        this.colorLuts.set(gradeKey, lut);
-        if (this.colorLuts.size > 64) this.colorLuts.delete(this.colorLuts.keys().next().value!);
-      }
-      this.colorBuffer ??= document.createElement('canvas');
-      const buffer = this.colorBuffer;
-      const bufferWidth = Math.max(1, Math.round(w * k));
-      const bufferHeight = Math.max(1, Math.round(h * k));
-      if (buffer.width !== bufferWidth) buffer.width = bufferWidth;
-      if (buffer.height !== bufferHeight) buffer.height = bufferHeight;
-      const bufferContext = buffer.getContext('2d', { willReadFrequently: true });
-      if (!bufferContext) throw new Error('Não foi possível iniciar o processamento de cor do preview.');
-      bufferContext.drawImage(src, sx, sy, cw, ch, 0, 0, bufferWidth, bufferHeight);
-      if (this.colorGradeGpu === undefined) {
-        this.colorGradeGpu = ColorGradeGpu.create();
-        if (!this.colorGradeGpu) console.warn('WebGL2 indisponível para o color grade; usando processamento GPU 2D.');
-      }
-      const gpuOutput = this.colorGradeGpu?.apply(buffer, gradeKey, lut);
-      if (gpuOutput) {
-        drawable = gpuOutput;
-        sx = 0;
-        sy = 0;
-        cw = bufferWidth;
-        ch = bufferHeight;
-      } else {
+      const isSimple = grade.temperature === 0 && grade.tint === 0 && grade.shadows === 0 && grade.midtones === 0 && grade.highlights === 0;
+      if (isSimple) {
         if (grade.brightness || grade.exposure) filters.push(`brightness(${Math.max(0, 1 + grade.brightness + grade.exposure)})`);
         if (grade.contrast !== 1) filters.push(`contrast(${Math.max(0, grade.contrast)})`);
         if (grade.saturation !== 1) filters.push(`saturate(${Math.max(0, grade.saturation)})`);
         if (grade.hue) filters.push(`hue-rotate(${grade.hue}deg)`);
         drawable = src;
+      } else {
+        const gradeKey = JSON.stringify(grade);
+        let lut = this.colorLuts.get(gradeKey);
+        if (!lut) {
+          lut = createColorGradeLut(grade);
+          this.colorLuts.set(gradeKey, lut);
+          if (this.colorLuts.size > 64) this.colorLuts.delete(this.colorLuts.keys().next().value!);
+        }
+        this.colorBuffer ??= document.createElement('canvas');
+        const buffer = this.colorBuffer;
+        const bufferWidth = Math.max(1, Math.round(w * k));
+        const bufferHeight = Math.max(1, Math.round(h * k));
+        if (buffer.width !== bufferWidth) buffer.width = bufferWidth;
+        if (buffer.height !== bufferHeight) buffer.height = bufferHeight;
+        const bufferContext = buffer.getContext('2d');
+        if (bufferContext) {
+          bufferContext.drawImage(src, sx, sy, cw, ch, 0, 0, bufferWidth, bufferHeight);
+          if (this.colorGradeGpu === undefined) {
+            this.colorGradeGpu = ColorGradeGpu.create();
+            if (!this.colorGradeGpu) console.warn('WebGL2 indisponível para o color grade; usando processamento GPU 2D.');
+          }
+          const gpuOutput = this.colorGradeGpu?.apply(buffer, gradeKey, lut);
+          if (gpuOutput) {
+            drawable = gpuOutput;
+            sx = 0;
+            sy = 0;
+            cw = bufferWidth;
+            ch = bufferHeight;
+          } else {
+            if (grade.brightness || grade.exposure) filters.push(`brightness(${Math.max(0, 1 + grade.brightness + grade.exposure)})`);
+            if (grade.contrast !== 1) filters.push(`contrast(${Math.max(0, grade.contrast)})`);
+            if (grade.saturation !== 1) filters.push(`saturate(${Math.max(0, grade.saturation)})`);
+            if (grade.hue) filters.push(`hue-rotate(${grade.hue}deg)`);
+            drawable = src;
+          }
+        }
       }
     }
     ctx.save();

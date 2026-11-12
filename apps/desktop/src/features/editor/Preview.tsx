@@ -88,7 +88,7 @@ export function Preview({ session, project }: { session: ProjectSession; project
   useEffect(() => {
     player.setProject(project);
     if (!player.isPlaying) player.seek(playheadUs);
-  }, [player, project, playheadUs]);
+  }, [player, project]);
 
   useEffect(() => {
     const updateFullscreen = () => setFullscreen(document.fullscreenElement === previewRef.current);
@@ -98,7 +98,11 @@ export function Preview({ session, project }: { session: ProjectSession; project
 
   // playhead mudou por fora (scrub, teclas): reposiciona o player
   useEffect(() => {
-    if (!player.isPlaying || Math.abs(player.timeUs - playheadUs) > 250_000) player.seek(playheadUs);
+    if (!player.isPlaying) {
+      player.seek(playheadUs);
+    } else if (Math.abs(player.timeUs - playheadUs) > 250_000) {
+      player.seek(playheadUs);
+    }
   }, [player, playheadUs]);
 
   useEffect(() => {
