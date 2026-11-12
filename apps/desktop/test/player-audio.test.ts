@@ -111,4 +111,13 @@ describe('preview audio gain', () => {
     expect(shouldHardSeekMedia('video', 0.7, { ...state, sinceLastSeekMs: 100 })).toBe(false);
     expect(shouldHardSeekMedia('video', 0.7, { ...state, seeking: true })).toBe(false);
   });
+
+  it('does not re-seek in an infinite loop when paused for sub-frame drift', () => {
+    const pausedState = { playing: false, seeking: false, readyState: 4, needsSeek: false, sinceLastSeekMs: 50 };
+    // Small frame-boundary drift (e.g. 24fps frame step ~0.042s) must not trigger seek
+    expect(shouldHardSeekMedia('video', 0.03, pausedState)).toBe(false);
+    expect(shouldHardSeekMedia('video', 0.03, { ...pausedState, sinceLastSeekMs: 500 })).toBe(false);
+    // Explicit seek request (scrub, clip change) must seek
+    expect(shouldHardSeekMedia('video', 0.03, { ...pausedState, needsSeek: true })).toBe(true);
+  });
 });

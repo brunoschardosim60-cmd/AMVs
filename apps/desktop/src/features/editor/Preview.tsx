@@ -85,7 +85,10 @@ export function Preview({ session, project }: { session: ProjectSession; project
     };
   }, [player]);
 
-  useEffect(() => player.setProject(project), [player, project]);
+  useEffect(() => {
+    player.setProject(project);
+    if (!player.isPlaying) player.seek(playheadUs);
+  }, [player, project, playheadUs]);
 
   useEffect(() => {
     const updateFullscreen = () => setFullscreen(document.fullscreenElement === previewRef.current);

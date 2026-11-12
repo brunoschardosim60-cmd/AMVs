@@ -34,9 +34,10 @@ interface Slot {
 const PRELOAD_US = 2_000_000;
 /** Corrige desvios visuais grandes sem seeks frequentes durante a reprodução. */
 const DRIFT_PLAYING_S = 0.6;
-/** Pausado: busca o quadro exato se estiver a mais de meio quadro. */
-const DRIFT_PAUSED_S = 0.02;
+/** Pausado: limite de desvio para re-seek. */
+const DRIFT_PAUSED_S = 0.08;
 const PLAYING_SEEK_COOLDOWN_MS = 750;
+const PAUSED_SEEK_COOLDOWN_MS = 250;
 const PLAYHEAD_UPDATE_MS = 50;
 
 export function shouldHardSeekMedia(
@@ -46,16 +47,17 @@ export function shouldHardSeekMedia(
 ): boolean {
   if (state.seeking || state.readyState < 1) return false;
   if (state.needsSeek) return true;
-  if (!state.playing) return Math.abs(driftS) > DRIFT_PAUSED_S;
+  if (!state.playing) {
+    return Math.abs(driftS) > DRIFT_PAUSED_S && state.sinceLastSeekMs >= PAUSED_SEEK_COOLDOWN_MS;
+  }
   return kind === 'video'
     && Math.abs(driftS) > DRIFT_PLAYING_S
     && state.sinceLastSeekMs >= PLAYING_SEEK_COOLDOWN_MS;
 }
 /**
- * Poucos elementos de mídia vivos: cada um mantém uma conexão aberta com o proxy, e o
- * WebView2 só abre ~6 por endereço. Com 24 vivos, os novos ficavam esperando e o preview preto.
+ * Elementos de mídia vivos: mantém uma conexão por clipe ativo/próximo.
  */
-const MAX_SLOTS = 6;
+const MAX_SLOTS = 10;
 /** Elemento fora do playhead há mais que isso é fechado (libera a conexão). */
 const IDLE_RELEASE_MS = 1500;
 
@@ -90,7 +92,7 @@ class ColorGradeGpu {
 
   static create(): ColorGradeGpu | null {
     const canvas = document.createElement('canvas');
-    const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, premultipliedAlpha: false });
+    const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, premultipliedAlpha: false, preserveDrawingBuffer: true });
     if (!gl) return null;
     const compile = (type: number, source: string) => {
       const shader = gl.createShader(type);
@@ -290,6 +292,11 @@ export class Player {
         this.slots.delete(id);
       }
     }
+    this.colorLuts.clear();
+    for (const slot of this.slots.values()) {
+      if (slot.kind !== 'image') slot.needsSeek = true;
+    }
+    this.lastRenderAtMs = 0;
   }
 
   onTime(l: (us: number) => void): () => void {
@@ -496,8 +503,11 @@ export class Player {
 
   private evict(): void {
     if (this.slots.size <= MAX_SLOTS) return;
-    const sorted = [...this.slots.values()].sort((a, b) => a.lastUsed - b.lastUsed);
-    for (const s of sorted.slice(0, this.slots.size - MAX_SLOTS)) {
+    const candidates = [...this.slots.values()]
+      .filter((s) => !this.frameUsed.has(s.slotKey))
+      .sort((a, b) => a.lastUsed - b.lastUsed);
+    const toRemove = this.slots.size - MAX_SLOTS;
+    for (const s of candidates.slice(0, toRemove)) {
       this.release(s);
       this.slots.delete(s.slotKey);
     }
@@ -605,9 +615,12 @@ export class Player {
     // áudio: todas as trilhas de áudio
     for (const track of p.tracks) {
       if (track.kind !== 'audio') continue;
-      for (const c of p.clips) {
-        if (c.trackId !== track.id || !c.assetId) continue;
-        const near = t >= c.timelineStartUs - PRELOAD_US && t < clipEndUs(c);
+      const trackClips = p.clips.filter((c) => c.trackId === track.id && c.assetId);
+      const nextAudio = trackClips
+        .filter((c) => c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t)
+        .sort((a, b) => a.timelineStartUs - b.timelineStartUs)[0];
+      for (const c of trackClips) {
+        const near = (t >= c.timelineStartUs && t < clipEndUs(c)) || c === nextAudio;
         if (!near) continue;
         const slot = this.slotFor(c, 'audio');
         if (!slot) continue;
@@ -629,20 +642,17 @@ export class Player {
         const audioTrack: Track = { ...track, kind: 'audio', role: 'voice' };
         for (const c of p.clips) {
           if (c.trackId !== track.id || !c.assetId) continue;
+          // Só processa áudio embutido para clipe ativo com volume audível
+          if (t < c.timelineStartUs || t >= clipEndUs(c)) continue;
+          const vol = clipVolume(c, audioTrack, t, anySolo, this.project);
+          if (vol <= 0.003) continue;
           const asset = p.assets.find((item) => item.id === c.assetId);
           if (!asset?.probe?.audio.length) continue;
-          const near = t >= c.timelineStartUs - PRELOAD_US && t < clipEndUs(c);
-          if (!near) continue;
           const slot = this.slotFor(c, 'audio', `embedded-audio:${c.id}`);
           if (!slot) continue;
           used.add(slot.slotKey);
           const media = slot.el as HTMLMediaElement;
-          if (t >= c.timelineStartUs) this.syncMedia(media, c, t, clipVolume(c, audioTrack, t, anySolo, this.project), slot, 'audio');
-          else {
-            if (!media.paused) media.pause();
-            const first = sourceTimeS(c, c.timelineStartUs);
-            if (Math.abs(media.currentTime - first) > 0.05 && media.readyState >= 1 && !media.seeking) media.currentTime = first;
-          }
+          this.syncMedia(media, c, t, vol, slot, 'audio');
         }
       }
     }
@@ -733,6 +743,8 @@ export class Player {
         this.drawMedia(ctx, v, v.videoWidth, v.videoHeight, c, k, look, localS);
       } else if (active && slot.lastFrame?.width && slot.lastFrame.height) {
         this.drawMedia(ctx, slot.lastFrame, slot.lastFrame.width, slot.lastFrame.height, c, k, look, localS);
+      } else if (active && v.readyState >= 2 && v.videoWidth && v.videoHeight) {
+        this.drawMedia(ctx, v, v.videoWidth, v.videoHeight, c, k, look, localS);
       } else if (active) {
         this.drawPlaceholder(ctx, 'Carregando quadro…');
       }
@@ -773,6 +785,7 @@ export class Player {
     }
     let drawable: CanvasImageSource = src;
     const grade = aggregateColorGrade(c.effects);
+    const filters: string[] = [];
     if (!isColorGradeNeutral(grade)) {
       const gradeKey = JSON.stringify(grade);
       let lut = this.colorLuts.get(gradeKey);
@@ -792,31 +805,26 @@ export class Player {
       bufferContext.drawImage(src, sx, sy, cw, ch, 0, 0, bufferWidth, bufferHeight);
       if (this.colorGradeGpu === undefined) {
         this.colorGradeGpu = ColorGradeGpu.create();
-        if (!this.colorGradeGpu) console.warn('WebGL2 indisponível para o color grade; usando processamento CPU.');
+        if (!this.colorGradeGpu) console.warn('WebGL2 indisponível para o color grade; usando processamento GPU 2D.');
       }
       const gpuOutput = this.colorGradeGpu?.apply(buffer, gradeKey, lut);
       if (gpuOutput) {
         drawable = gpuOutput;
+        sx = 0;
+        sy = 0;
+        cw = bufferWidth;
+        ch = bufferHeight;
       } else {
-        const image = bufferContext.getImageData(0, 0, bufferWidth, bufferHeight);
-        for (let i = 0; i < image.data.length; i += 4) {
-          const [r, g, b] = sampleColorGradeLut([image.data[i]! / 255, image.data[i + 1]! / 255, image.data[i + 2]! / 255], lut);
-          image.data[i] = Math.round(r * 255);
-          image.data[i + 1] = Math.round(g * 255);
-          image.data[i + 2] = Math.round(b * 255);
-        }
-        bufferContext.putImageData(image, 0, 0);
-        drawable = buffer;
+        if (grade.brightness || grade.exposure) filters.push(`brightness(${Math.max(0, 1 + grade.brightness + grade.exposure)})`);
+        if (grade.contrast !== 1) filters.push(`contrast(${Math.max(0, grade.contrast)})`);
+        if (grade.saturation !== 1) filters.push(`saturate(${Math.max(0, grade.saturation)})`);
+        if (grade.hue) filters.push(`hue-rotate(${grade.hue}deg)`);
+        drawable = src;
       }
-      sx = 0;
-      sy = 0;
-      cw = bufferWidth;
-      ch = bufferHeight;
     }
     ctx.save();
     ctx.globalAlpha = look.alpha * Math.max(0, Math.min(1, opacity));
     ctx.globalCompositeOperation = canvasBlendMode(c.blendMode);
-    const filters: string[] = [];
     if (look.blur > 0) filters.push(`blur(${look.blur * k}px)`);
     if (filters.length) ctx.filter = filters.join(' ');
     ctx.translate((P.width / 2 + x + look.dx) * k, (P.height / 2 + y + look.dy) * k);

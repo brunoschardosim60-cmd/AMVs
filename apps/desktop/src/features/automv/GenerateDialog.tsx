@@ -13,6 +13,8 @@ import { applyCommand, clipEndUs, newId, sourceTimeAt, type Clip, type Project }
 import { Button, Dialog } from '../../ui/controls';
 import { MusicalMap } from './MusicalMap';
 import { RegenerationCompare } from './RegenerationCompare';
+import { useEditor } from '../editor/editorStore';
+import { getPlayer } from '../editor/Preview';
 
 const ICONS: Record<StyleId, typeof Flame> = { hype: Flame, rapido: Zap, superacao: Sparkles, letra: Type, discurso: Mic, emocional: Heart };
 const INTENSITY = ['Suave', 'Moderada', 'Intensa', 'Extrema'] as const;
@@ -613,6 +615,11 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       const directionLabel = editorialDirection === 'cinematic' ? 'Cinematográfico' : editorialDirection === 'hype' ? 'Hype' : 'Balanceado';
       const label = `${directionLabel} · ${styleMode === 'auto' ? 'Aberto · ' : ''}${STYLES.find((s) => s.id === selectedStyle)!.label}`;
       session.history.transaction(`Gerar meu AMV — ${label}`, r.commands);
+      useEditor.getState().setPlayhead(0);
+      useEditor.getState().setPlaying(false);
+      try {
+        getPlayer(session).seek(0);
+      } catch {}
       setSeed(nextSeed);
       const s = r.summary;
       setResult({
@@ -792,7 +799,13 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             <Button icon={<Wand2 size={15} />} disabled={busy} onClick={() => generate(seed + 1)}>
               Gerar outra versão
             </Button>
-            <Button variant="primary" onClick={onClose}>
+            <Button variant="primary" onClick={() => {
+              useEditor.getState().setPlayhead(0);
+              try {
+                getPlayer(session).seek(0);
+              } catch {}
+              onClose();
+            }}>
               Editar na timeline
             </Button>
           </>
