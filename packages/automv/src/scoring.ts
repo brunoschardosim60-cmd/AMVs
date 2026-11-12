@@ -25,6 +25,10 @@ export interface SceneScoringInput {
   transitionCue?: string | null;
   sourceJumpS?: number | null;
   creativeEmphasis?: CreativeEmphasis;
+  /** IDs de cenas usadas nos últimos N cortes; para reforçar a anti-repetição. */
+  recentSceneIds?: string[];
+  /** Enquadramento dos últimos cortes; para variedade de enquadramento. */
+  recentFramings?: string[];
 }
 
 export interface SceneScoreBreakdown {
@@ -209,9 +213,47 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
   if (emotion > 0 && trusted(vision) && vision.emotion) reasons.push(`emoção visual identificada (${vision.emotion})`);
   else if (emotion > 0 && shot.tags.includes('calma')) reasons.push('tag local de cena calma (heurística, não emoção identificada)');
 
+  // ---- progressão de enquadramento (wide → medium → close-up e vice-versa)
+  let framingProgression = 0;
+  const FRAMING_ORDER: Record<string, number> = { 'extreme-wide': 0, wide: 1, medium: 2, 'close-up': 3, 'extreme-close-up': 4 };
+  const currentFraming = trustedFraming ? vision!.framing : undefined;
+  const previousFraming = previous?.vision && trusted(previous.vision) && (previous.vision.framingConfidence ?? previous.vision.confidence) >= TRUSTED_VISION_CONFIDENCE
+    ? previous.vision.framing : undefined;
+  if (currentFraming && previousFraming && currentFraming in FRAMING_ORDER && previousFraming in FRAMING_ORDER) {
+    const jump = Math.abs(FRAMING_ORDER[currentFraming]! - FRAMING_ORDER[previousFraming]!);
+    if (jump === 1) {
+      framingProgression += 0.08;
+      reasons.push('progressão de enquadramento suave (1 nível)');
+    } else if (jump === 2) {
+      framingProgression += 0.04;
+    } else if (jump >= 3) {
+      framingProgression -= 0.06;
+      reasons.push('salto de enquadramento abrupto (≥3 níveis)');
+    }
+  }
+  // penalizar repetição de enquadramento excessiva nos últimos cortes
+  if (input.recentFramings?.length && currentFraming) {
+    const sameCount = input.recentFramings.filter((f) => f === currentFraming).length;
+    if (sameCount >= 3) {
+      framingProgression -= 0.12;
+      reasons.push('mesmo enquadramento por 3+ cortes consecutivos');
+    } else if (sameCount >= 2) {
+      framingProgression -= 0.05;
+    }
+  }
+
   let transition = 0;
   let diversity = 0;
   let visual = 0;
+  // anti-repetição reforçada: penalizar cenas usadas recentemente
+  if (input.recentSceneIds?.length) {
+    const recentIndex = input.recentSceneIds.indexOf(current.assetId + '@' + current.sourceStartS);
+    if (recentIndex >= 0) {
+      const recency = 1 - recentIndex / input.recentSceneIds.length;
+      diversity -= 0.35 * recency;
+      reasons.push('cena usada recentemente na mesma geração');
+    }
+  }
   if (previous) {
     if (previous.assetId === current.assetId) {
       diversity -= 0.12;
@@ -298,7 +340,7 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
     diversity,
     lyric,
     visual,
-    total: music + action * actionWeight + emotion * emotionWeight + narrative + transition + diversity + lyric + visual,
+    total: music + action * actionWeight + emotion * emotionWeight + narrative + transition + diversity + lyric + visual + framingProgression,
     reasons,
   };
 }

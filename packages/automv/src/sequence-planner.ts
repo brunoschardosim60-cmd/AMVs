@@ -80,7 +80,13 @@ export function planSequence<TCandidate extends SequencePlanCandidate, TSlot>(
   if (!slots.length) return { choices: [], repeatedSlots: [], totalScore: 0 };
   if (!candidates.length) return { choices: slots.map(() => null), repeatedSlots: [], totalScore: 0 };
 
-  const beamWidth = Math.max(1, options.beamWidth ?? 32);
+  // Beam width adaptativo: mais candidatos → mais possibilidades → beam maior
+  const baseBeamWidth = Math.max(1, options.beamWidth ?? 32);
+  const beamWidth = candidates.length > 100
+    ? Math.min(baseBeamWidth * 2, 64)
+    : candidates.length > 50
+      ? Math.min(Math.round(baseBeamWidth * 1.5), 48)
+      : baseBeamWidth;
   const branchLimit = Math.max(1, options.branchLimit ?? 16);
   let beam: BeamState<TCandidate, TSlot>[] = [{
     choices: [],

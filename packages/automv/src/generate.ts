@@ -201,6 +201,13 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
   const speedUp = [1.6, 1.25, 1, 0.75][intensity]!;
   const slots: Slot[] = [];
   const impacts = musicMap.events.filter((event) => event.type === 'impact');
+  // downbeats para agrupamento por frase musical (tipicamente 4 compassos)
+  const downbeatsInRange = m.downbeats.map((d) => d + beatOffsetS).filter((d) => d >= a && d <= b);
+  const phraseLength = downbeatsInRange.length >= 8 ? 4 : downbeatsInRange.length >= 4 ? 2 : 0;
+  const phraseStarts = new Set<number>();
+  if (phraseLength > 0) {
+    for (let i = 0; i < downbeatsInRange.length; i += phraseLength) phraseStarts.add(i);
+  }
   let i = 0;
   let slotNumber = 0;
   let cur = a;
@@ -394,7 +401,13 @@ export function chooseSequences(eps: EpisodeInput[], neededS: number, o: { seque
     const want = new Set(o.sequenceIds);
     return all.filter((e) => want.has(key(e))).sort((a, b) => a.ep.assetId.localeCompare(b.ep.assetId) || a.seq.startS - b.seq.startS);
   }
-  const score = (e: PoolEntry) => 0.6 * e.seq.intensity + 0.25 * e.seq.peak + 0.15 * Math.min(1, e.usableS / (neededS * POOL_ROOM)) + (o.jitter ? (o.jitter() - 0.5) * 0.16 : 0);
+  const score = (e: PoolEntry) => {
+    // Balancear intensidade com cobertura: evitar que lutas com poucas cenas muito fortes
+    // dominem o pool, deixando pouco material para a timeline inteira.
+    // A intensidade continua dominante, cobertura é tiebreaker.
+    const coverageBonus = Math.min(0.08, (e.shotCount / Math.max(1, (o.neededShots ?? 10))) * 0.12);
+    return 0.55 * e.seq.intensity + 0.25 * e.seq.peak + 0.12 * Math.min(1, e.usableS / (neededS * POOL_ROOM)) + coverageBonus + (o.jitter ? (o.jitter() - 0.5) * 0.16 : 0);
+  };
   const fights = all
     .filter((e) => e.seq.kind === 'luta')
     .map((e) => ({ e, sc: score(e) }))
@@ -998,6 +1011,12 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   };
   for (const sl of visualSlots) splitFit(sl);
 
+  /** IDs das últimas cenas usadas, para anti-repetição reforçada no scoring. */
+  const recentSceneIds: string[] = [];
+  /** Enquadramentos dos últimos cortes, para variedade de enquadramento no scoring. */
+  const recentFramings: string[] = [];
+  const RECENT_WINDOW = 6;
+
   const scoreCandidate = (sl: Slot, c: Candidate, previous: Candidate | null, previousSlot: Slot | null) => {
     const len = sl.endS - sl.startS;
     if (c.shot.endS - c.shot.startS + 1e-6 < len * 0.6) return null;
@@ -1037,6 +1056,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       transitionCue,
       sourceJumpS: previous?.ep.assetId === c.ep.assetId ? c.shot.startS - previous.shot.endS : null,
       creativeEmphasis: opts.creativeEmphasis,
+      recentSceneIds: [...recentSceneIds],
+      recentFramings: [...recentFramings],
     });
     const dropSequenceBonus = sl.isDrop && opts.focus === 'mix' && previous?.ep.assetId === c.ep.assetId && c.sequenceOrder > previous.sequenceOrder
       ? MIX_SEQUENCE_DROP_BONUS
@@ -1113,7 +1134,30 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       c,
       score: scored.score,
       breakdown: scored.breakdown,
-      srcIn: c.shot.startS + Math.min(0.12, Math.max(0, c.shot.endS - c.shot.startS - len)) + Math.max(0, c.shot.endS - c.shot.startS - len) * 0.25 * rand(),
+      srcIn: (() => {
+        // Seleção inteligente de srcIn: escolher a parte mais interessante da cena
+        const margin = Math.max(0, c.shot.endS - c.shot.startS - len);
+        if (margin < 0.08) return c.shot.startS; // cena quase do mesmo tamanho: começa no início
+        const jitter = margin * 0.15 * (rand() - 0.5); // variação por seed
+        const visual = visionOf(c.ep, c.shot);
+        const local = visual?.local;
+        // Se tem motion events, centralizar no evento de maior velocidade/confiança
+        const motionEvent = local?.motionEvents
+          ?.filter((ev) => ev.startS >= c.shot.startS && ev.endS <= c.shot.endS && ev.confidence >= 0.55)
+          .sort((a, b) => b.speed * b.confidence - a.speed * a.confidence)[0];
+        if (motionEvent) {
+          const eventCenter = (motionEvent.startS + motionEvent.endS) / 2;
+          const preferred = eventCenter - len * 0.4 + jitter;
+          return Math.max(c.shot.startS, Math.min(c.shot.endS - len, preferred));
+        }
+        // Se tem peakS confiável, enquadrar o pico no primeiro terço
+        if (Number.isFinite(c.shot.peakS) && c.shot.peakS >= c.shot.startS && c.shot.peakS <= c.shot.endS) {
+          const preferred = c.shot.peakS - len * 0.3 + jitter;
+          return Math.max(c.shot.startS, Math.min(c.shot.endS - len, preferred));
+        }
+        // Fallback: pequeno offset variável sem ser totalmente aleatório
+        return c.shot.startS + Math.min(0.12, margin) + margin * 0.25 * rand();
+      })(),
     };
     const lyricMatch = sl.lyricCueKey ? opts.lyricSceneMatches?.[c.id]?.[sl.lyricCueKey] : undefined;
     const sceneIntensity = effectiveShotIntensity(c.ep, c.shot);
@@ -1332,6 +1376,14 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra', sl.isDrop, 0, timing, 'lyrics-cinematic') });
     }
     used.add(c.id);
+    // rastrear cenas e enquadramentos recentes para anti-repetição
+    recentSceneIds.unshift(c.ep.assetId + '@' + c.shot.startS);
+    if (recentSceneIds.length > RECENT_WINDOW) recentSceneIds.pop();
+    const candidateFraming = visionOf(c.ep, c.shot)?.framing;
+    if (candidateFraming) {
+      recentFramings.unshift(candidateFraming);
+      if (recentFramings.length > RECENT_WINDOW) recentFramings.pop();
+    }
     const impactAtUs = hit ? timelineLocalAtSource(clip, us(c.shot.peakS)) : null;
     cutsLog.push({ startS: sl.startS, len, energy: sl.energy, intensity: c.shot.intensity, isDrop: sl.isDrop, hitAtS: impactAtUs === null ? null : sl.startS + impactAtUs / S, ...(sl.lyricCueKey ? { lyricCueKey: sl.lyricCueKey } : {}), ...(lyricMatch ? { lyricMatchScore: lyricMatch.score, lyricMatchReason: lyricMatch.reason } : {}) });
     prev = c;

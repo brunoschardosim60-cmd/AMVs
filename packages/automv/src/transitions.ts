@@ -180,5 +180,20 @@ export function chooseSceneTransition(input: TransitionChoiceInput): TransitionC
   if (isDrop && energy >= 0.85 && durationS < 0.4) {
     return { transition: null, reason: 'corte seco: preserva a precisão rítmica do drop' };
   }
+
+  // zoom rápido para impactos não-drop com alta energia
+  if (!isDrop && energy >= 0.6 && durationS >= 0.3 && durationS <= 1.2
+    && direction !== 'cinematic'
+    && (incoming.shot.tags.includes('impacto') || incoming.shot.intensity >= 0.7)
+    && inMotion && inMotion.speed >= 0.03) {
+    return {
+      transition: createTransition('zoom', Math.min(0.18, durationS / 4), {
+        intensity: Math.min(0.6, 0.3 + energy * 0.2),
+        direction: inMotion.cameraMotion === 'zoom-out' ? -1 : 1,
+      }),
+      reason: 'zoom rápido: impacto visual fora do drop com movimento de câmera detectado',
+    };
+  }
+
   return { transition: null, reason: 'corte seco: não há continuidade visual suficiente para justificar um efeito' };
 }
