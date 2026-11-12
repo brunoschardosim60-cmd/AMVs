@@ -1,5 +1,13 @@
 # Novidades
 
+## 0.6.13
+
+**Corrige o carregamento do vídeo recortado e elimina travamento/tela preta no player**
+- Sincroniza o primeiro corte gerado pelo Auto AMV diretamente no preview e reposiciona o playhead ao aplicar.
+- Corrige o loop infinito de seek no preview eliminando o congelamento e a tela preta ao reproduzir.
+- Aumenta os slots de mídia ativos, protege elementos em reprodução contra descarte no mesmo quadro e evita conexões concorrentes desnecessárias para áudios inaudíveis.
+- Otimiza o processamento de cor com fallback acelerado por GPU 2D e adiciona buffer preservado no WebGL2.
+
 ## 0.6.12
 
 **Estabiliza o preview e respeita a faixa de áudio selecionada**
