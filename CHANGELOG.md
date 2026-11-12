@@ -1,5 +1,13 @@
 # Novidades
 
+## 0.6.16
+
+**Elimina congelamento/lentidão no player e acelera renderização de vídeo**
+- **Elimina seeks repetitivos a cada 50 ms**: Corrige a dependência de re-render no componente `Preview`, que disparava `setProject` e `needsSeek` continuamente a cada avanço do playhead, causando travamento do decodificador de vídeo.
+- **Renderização direta de vídeo sem cópias intermediárias**: O frame de vídeo agora é desenhado diretamente no canvas principal da GPU sem clonagem desnecessária para buffers de 2D em cada frame.
+- **Aceleração direta de cor por GPU**: Gradações de cor simples (brilho, contraste, saturação e exposição) agora utilizam filtros compostos diretamente pelo hardware sem roundtrips caros de textura WebGL2/CPU.
+- **Limite otimizado de decodificadores**: Ajusta os slots de mídia ativos para respeitar os limites de sessões de hardware D3D11/Media Foundation no Windows.
+
 ## 0.6.15
 
 **Aceleração de cortes pré-drop, micro-pulsos de batida e transições dinâmicas**
