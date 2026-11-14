@@ -271,23 +271,18 @@ async function validateVideoOutput(
     detail: 'Decodificando áudio e vídeo para conferir integridade',
   }), onLog);
 
-  onProgress({ fraction: 0.992, stage: 'verify', detail: 'Procurando trechos totalmente pretos' });
-  const blackResult = await env.runner.run('ffmpeg', [
+  onProgress({ fraction: 0.992, stage: 'verify', detail: 'Procurando quadros pretos e congelados' });
+  // Both detectors share one decode pass to avoid scanning the complete export twice.
+  const visualCheck = await env.runner.run('ffmpeg', [
     '-hide_banner', '-nostdin', '-v', 'info', '-i', path,
-    '-vf', 'blackdetect=d=0.1:pix_th=0.02', '-an', '-f', 'null', '-',
+    '-vf', 'blackdetect=d=0.1:pix_th=0.02,freezedetect=n=-50dB:d=2.5', '-an', '-f', 'null', '-',
   ], { signal });
   if (signal?.aborted) throw new CancelledError();
-  if (blackResult.code !== 0) throw new RenderError(`Não foi possível verificar frames pretos: ${blackResult.stderr.trim()}`);
-  const intervals = blackIntervals(blackResult.stderr);
+  if (visualCheck.code !== 0) throw new RenderError(`Não foi possível verificar quadros pretos/congelados: ${visualCheck.stderr.trim()}`);
+  const intervals = blackIntervals(visualCheck.stderr);
+  const freezes = parseFreezeIntervals(visualCheck.stderr);
   const expected = expectedBlackIntervals(windows);
   const unexpected = intervals.filter((interval) => !isExpectedBlack(interval, expected, 1e6 * expectedFps.den / expectedFps.num));
-  const freezeResult = await env.runner.run('ffmpeg', [
-    '-hide_banner', '-nostdin', '-v', 'info', '-i', path,
-    '-vf', 'freezedetect=n=-50dB:d=2.5', '-an', '-f', 'null', '-',
-  ], { signal });
-  if (signal?.aborted) throw new CancelledError();
-  if (freezeResult.code !== 0) throw new RenderError(`Não foi possível verificar quadros congelados: ${freezeResult.stderr.trim()}`);
-  const freezes = parseFreezeIntervals(freezeResult.stderr);
   const warnings = [
     ...(unexpected.length
       ? [`Foram detectados ${unexpected.length} trechos totalmente pretos fora de gaps/fades intencionais; revise os timestamps: ${unexpected.map((item) => `${(item.startUs / 1e6).toFixed(2)}–${(item.endUs / 1e6).toFixed(2)} s`).join(', ')}.`]
