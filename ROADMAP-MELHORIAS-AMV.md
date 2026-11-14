@@ -113,7 +113,7 @@
 
 **Prioridade: média**
 
-**Implementação incremental (2026-11-14):** o validador já sinaliza intervalos de quadros pretos e agora também possíveis congelamentos ≥2,5 s com FFmpeg `freezedetect`. Os dois detectores compartilham uma única passagem de decodificação; os eventos são avisos revisáveis, não falhas automáticas. Parser e integração com o filtro real têm testes adicionados. Relatório persistido, navegação pelo timestamp e comparação A/B completa continuam pendentes; a revisão humana permanece obrigatória.
+**Implementação incremental (2026-11-14):** o validador sinaliza quadros pretos inesperados e possíveis congelamentos ≥2,5 s com FFmpeg `freezedetect`. Os dois detectores compartilham uma única passagem de decodificação; os eventos são avisos revisáveis, não falhas automáticas. Intervalos pretos inesperados e congelamentos ficam disponíveis separadamente, e a exportação oferece **Revisar no editor** para saltar ao primeiro timestamp suspeito. Parser e integração com o filtro real têm testes adicionados. Relatório persistido e comparação A/B completa continuam pendentes; a revisão humana permanece obrigatória.
 
 ### Entregas
 - Gerar relatório pós-render com integridade de streams, duração, FPS, resolução, áudio, trechos pretos suspeitos, congelamentos e possíveis gaps.
