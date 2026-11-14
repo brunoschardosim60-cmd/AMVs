@@ -1,5 +1,14 @@
 # Status
 
+## Incremento de continuidade de personagens — 2026-11-14
+
+- A biblioteca de personagens agora só canonicaliza aliases de perfis explicitamente confirmados pelo usuário.
+- Rótulos equivalentes (diferenças de caixa, acento e espaços) são deduplicados por cena antes de alimentar a continuidade da montagem.
+- O Laboratório de Cenas lista e usa aliases de perfis confirmados; sugestões ainda não confirmadas continuam disponíveis como rótulos brutos das análises, sem serem promovidas a identidade.
+- Testes adicionados para alias confirmado, sugestão não confirmada, deduplicação e preservação do cache original.
+- Commits: `7d551552`, `fa99deae`, `ffa76f52`.
+- **Verificação:** alterações enviadas para `main`; typecheck/testes e validação visual ainda precisam ser confirmados pelo CI e no Windows/WebView2. Não declarar continuidade semântica resolvida: a identificação continua dependente da qualidade/confiança da visão.
+
 Estado geral: Fase 1 concluída; Fase 2 ainda em andamento; Fases 3 a 5 implementadas com limitações documentadas; Fases 6 a 8 têm primeira versão, ainda incompleta. A Release v0.6.10 passou no CI Windows (typecheck, suíte completa e empacotamento assinado). No teste manual desta validação, o app instalado foi atualizado de v0.6.9 para v0.6.10 e a tela inicial abriu; timeline/preview com mídia, importação/exportação, viewport 1920×1080 e viewport menor continuam sem validação manual completa.
 
 ## Fase 1 — Fundação
