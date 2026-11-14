@@ -27,6 +27,8 @@
 
 **Prioridade: máxima | Bloqueia a aprovação das fases seguintes**
 
+**Plano operacional:** [docs/AMV_REAL_MEDIA_VALIDATION.md](docs/AMV_REAL_MEDIA_VALIDATION.md). Em 14/11/2026, o protocolo e a ficha de execução foram preparados; os três renders reais ainda estão pendentes. Esta fase permanece aberta.
+
 ### Entregas
 - Criar um conjunto de 2–3 projetos de teste com mídia real autorizada, músicas diferentes e estilos distintos (por exemplo: Hype/luta, Cinemático e Emocional).
 - Registrar para cada execução: versão do app, arquivos de entrada, duração, FPS, resolução, perfil, configurações, avisos, tempo de análise e tempo de render.
