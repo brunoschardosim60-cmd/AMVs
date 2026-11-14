@@ -4,6 +4,7 @@
 
 - A biblioteca de personagens agora só canonicaliza aliases de perfis explicitamente confirmados pelo usuário.
 - Rótulos equivalentes (diferenças de caixa, acento e espaços) são deduplicados por cena antes de alimentar a continuidade da montagem.
+- Aliases compartilhados por mais de um perfil confirmado ficam sem resolução automática; o filtro do Laboratório de Cenas também evita escolher arbitrariamente um desses perfis.
 - O Laboratório de Cenas lista e usa aliases de perfis confirmados; sugestões ainda não confirmadas continuam disponíveis como rótulos brutos das análises, sem serem promovidas a identidade.
 - Testes adicionados para alias confirmado, sugestão não confirmada, deduplicação e preservação do cache original.
 - Commits: `7d551552`, `fa99deae`, `ffa76f52`.
