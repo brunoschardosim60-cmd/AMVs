@@ -15,6 +15,7 @@
 - Possíveis congelamentos entram em `validation.warnings` como avisos revisáveis, sem bloquear a exportação; pausas, quadros estáticos e freezes intencionais podem gerar falsos positivos.
 - A exportação somente de áudio inicializa a nova coleção como vazia.
 - Adicionado teste unitário do parser para múltiplos eventos, evento final sem `freeze_end` e entradas inválidas.
+- Os detectores de preto e congelamento compartilham a mesma passagem de decodificação; teste de integração usa o filtro real do FFmpeg em um clipe sintético estático.
 - Commits: `a697bbc4`, `4a649d38`, `68ead59d`, `5d4460ef`.
 - **Verificação:** código e teste enviados para `main`; execução local não disponível nesta sessão. A aprovação depende do CI com FFmpeg e revisão de um render real.
 
