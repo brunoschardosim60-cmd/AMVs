@@ -12,14 +12,21 @@ export function canonicalizeEpisodeVision(
 ): EpisodeVision | undefined {
   if (!vision) return undefined;
 
-  const canonicalByLabel = new Map<string, string>();
+  const candidatesByLabel = new Map<string, Set<string>>();
   for (const character of library) {
     if (!character.confirmed) continue;
     for (const alias of [character.name, ...character.aliases]) {
       const key = normLabel(alias);
-      if (key && !canonicalByLabel.has(key)) canonicalByLabel.set(key, character.name);
+      if (!key) continue;
+      const candidates = candidatesByLabel.get(key) ?? new Set<string>();
+      candidates.add(character.name);
+      candidatesByLabel.set(key, candidates);
     }
   }
+  // An alias shared by multiple confirmed profiles is ambiguous; never pick the first one.
+  const canonicalByLabel = new Map(
+    [...candidatesByLabel].flatMap(([key, names]) => names.size === 1 ? [[key, [...names][0]!] as const] : []),
+  );
 
   return {
     ...vision,
