@@ -9,6 +9,15 @@
 - Commits: `7d551552`, `fa99deae`, `ffa76f52`.
 - **Verificação:** alterações enviadas para `main`; typecheck/testes e validação visual ainda precisam ser confirmados pelo CI e no Windows/WebView2. Não declarar continuidade semântica resolvida: a identificação continua dependente da qualidade/confiança da visão.
 
+## Incremento de validação pós-render — 2026-11-14
+
+- O validador de exportação agora executa `freezedetect` com limiar de 2,5 s e registra intervalos suspeitos em `validation.freezeIntervals`.
+- Possíveis congelamentos entram em `validation.warnings` como avisos revisáveis, sem bloquear a exportação; pausas, quadros estáticos e freezes intencionais podem gerar falsos positivos.
+- A exportação somente de áudio inicializa a nova coleção como vazia.
+- Adicionado teste unitário do parser para múltiplos eventos, evento final sem `freeze_end` e entradas inválidas.
+- Commits: `a697bbc4`, `4a649d38`, `68ead59d`, `5d4460ef`.
+- **Verificação:** código e teste enviados para `main`; execução local não disponível nesta sessão. A aprovação depende do CI com FFmpeg e revisão de um render real.
+
 Estado geral: Fase 1 concluída; Fase 2 ainda em andamento; Fases 3 a 5 implementadas com limitações documentadas; Fases 6 a 8 têm primeira versão, ainda incompleta. A Release v0.6.10 passou no CI Windows (typecheck, suíte completa e empacotamento assinado). No teste manual desta validação, o app instalado foi atualizado de v0.6.9 para v0.6.10 e a tela inicial abriu; timeline/preview com mídia, importação/exportação, viewport 1920×1080 e viewport menor continuam sem validação manual completa.
 
 ## Fase 1 — Fundação
