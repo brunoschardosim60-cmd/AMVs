@@ -23,6 +23,8 @@
 
 ---
 
+**Incremento técnico 14/11/2026:** o analisador musical foi atualizado para m5; a grade de batidas agora pode ser completada antes da primeira batida detectada em faixas com silêncio inicial. Teste sintético adicionado. Pesquisa e critérios de adoção: [AMV_ALGORITHM_RESEARCH.md](docs/AMV_ALGORITHM_RESEARCH.md).
+
 ## Fase 0 — Baseline e validação real
 
 **Prioridade: máxima | Bloqueia a aprovação das fases seguintes**
