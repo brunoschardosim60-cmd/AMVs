@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { NodeRunner } from '@amv/media/src/node';
 import { parseFreezeIntervals } from '../src/render.js';
 
 describe('detecção de quadros congelados', () => {
@@ -32,4 +33,16 @@ describe('detecção de quadros congelados', () => {
     expect(parseFreezeIntervals('sem evento de congelamento')).toEqual([]);
     expect(parseFreezeIntervals('freeze_start: NaN\nfreeze_end: 8.000000')).toEqual([]);
   });
+  it('detecta um congelamento prolongado usando o filtro real do FFmpeg', async () => {
+    const runner = new NodeRunner();
+    const result = await runner.run('ffmpeg', [
+      '-hide_banner', '-nostdin', '-v', 'info',
+      '-f', 'lavfi', '-i', 'color=c=gray:s=64x64:r=24:d=4',
+      '-vf', 'freezedetect=n=-50dB:d=2.5', '-an', '-f', 'null', '-',
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(parseFreezeIntervals(result.stderr).length).toBeGreaterThan(0);
+  });
+
 });
