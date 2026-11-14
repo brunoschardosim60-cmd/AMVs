@@ -1,13 +1,15 @@
 import { etaSeconds } from '@amv/media';
 import { formatDuration, projectDurationUs } from '@amv/project';
 import { availableHardwareEncoders, missingForRender, type HardwareEncoder, type RenderProgress, type RenderResult } from '@amv/render';
-import { CheckCircle2, FolderOpen, Play } from 'lucide-react';
+import { CheckCircle2, FolderOpen, Play, ScanSearch } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { estimateOutputSize, isCancel, OUTPUT_FRAME_RATES, outputSize, RESOLUTION_PRESETS, startExport, type ExportJob } from '../../core/exporter';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
 import { Button, Dialog, Field, Progress } from '../../ui/controls';
 import { rasterizeText } from './rasterizeText';
+import { getPlayer } from '../editor/Preview';
+import { useEditor } from '../editor/editorStore';
 
 type Codec = 'h264' | 'h265' | 'prores';
 type Container = 'mp4' | 'mkv' | 'mov';
@@ -52,6 +54,16 @@ export function ExportDialog({ session, onClose }: { session: ProjectSession; on
   const selectedFps = OUTPUT_FRAME_RATES.find((rate) => rate.id === fpsId)?.value ?? project.settings.fps;
   const missing = missingForRender(project);
   const busy = state.kind === 'running';
+  const reviewAtUs = state.kind === 'done'
+    ? [...state.result.validation.unexpectedBlackIntervals, ...state.result.validation.freezeIntervals]
+      .sort((a, b) => a.startUs - b.startUs)[0]?.startUs
+    : undefined;
+  const reviewFirstWarning = () => {
+    if (reviewAtUs === undefined) return;
+    useEditor.getState().setPlayhead(reviewAtUs);
+    getPlayer(session).seek(reviewAtUs);
+    onClose();
+  };
   const estimate = estimateOutputSize(dur, size.width, size.height, codec, audioBitrateK, rateControl, bitrateK, crf);
 
   useEffect(() => {
@@ -120,6 +132,11 @@ export function ExportDialog({ session, onClose }: { session: ProjectSession; on
           </Button>
         ) : state.kind === 'done' ? (
           <>
+            {reviewAtUs !== undefined && (
+              <Button icon={<ScanSearch size={15} />} onClick={reviewFirstWarning}>
+                Revisar no editor
+              </Button>
+            )}
             <Button icon={<FolderOpen size={15} />} onClick={() => void platform!.reveal(state.logPath)}>
               Abrir log
             </Button>
