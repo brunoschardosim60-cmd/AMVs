@@ -16,6 +16,7 @@
 - A exportação somente de áudio inicializa a nova coleção como vazia.
 - Adicionado teste unitário do parser para múltiplos eventos, evento final sem `freeze_end` e entradas inválidas.
 - Os detectores de preto e congelamento compartilham a mesma passagem de decodificação; teste de integração usa o filtro real do FFmpeg em um clipe sintético estático.
+- Os intervalos pretos inesperados são expostos separadamente dos intervalos previstos; após a exportação, o botão **Revisar no editor** leva o playhead ao primeiro intervalo suspeito (preto inesperado ou congelamento).
 - Commits: `a697bbc4`, `4a649d38`, `68ead59d`, `5d4460ef`.
 - **Verificação:** código e teste enviados para `main`; execução local não disponível nesta sessão. A aprovação depende do CI com FFmpeg e revisão de um render real.
 
