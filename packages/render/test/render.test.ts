@@ -277,6 +277,8 @@ describe('exportação', () => {
       width: 320, height: 180, enc: { codec: 'h264', quality: 0 }, audioBitrateK: 128,
     }, env(p, 'unexpected-black'), () => undefined);
     expect(result.validation.blackIntervals.length).toBeGreaterThan(0);
+    expect(result.validation.unexpectedBlackIntervals.length).toBeGreaterThan(0);
+    expect(result.validation.freezeIntervals).toEqual([]);
     expect(result.validation.warnings.join(' ')).toContain('fora de gaps/fades intencionais');
   });
 
