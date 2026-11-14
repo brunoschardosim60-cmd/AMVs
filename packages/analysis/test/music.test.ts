@@ -51,6 +51,19 @@ describe('análise de música', () => {
     });
   }
 
+  it('completa a grade antes da primeira batida quando a música começa com silêncio', () => {
+    const source = synth(120, 30, 1000, 0.25);
+    const padded = new Float32Array(source.length + 2 * SR);
+    padded.set(source, 2 * SR);
+    const analysis = analyzeMusic(padded, SR);
+
+    expect(analysis.beats[0]).toBeGreaterThanOrEqual(0);
+    expect(analysis.beats[0]).toBeLessThan(0.5);
+    expect(analysis.beats.some((beat) => Math.abs(beat - 2.25) < 0.03)).toBe(true);
+    const intervals = analysis.beats.slice(1, 8).map((beat, index) => beat - analysis.beats[index]!);
+    expect(intervals.every((interval) => Math.abs(interval - 0.5) < 0.04)).toBe(true);
+  });
+
   it('batidas no lugar certo e compassos de 4', () => {
     const bpm = 120;
     const a = analyzeMusic(synth(bpm, 30, 1000, 0.25), SR);
