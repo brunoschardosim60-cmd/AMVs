@@ -9,6 +9,7 @@ O que já faz:
 - **Músicas**: biblioteca com análise, filtros, playlists, comparação, player persistente e recomendação por tema.
 - **Legendas**: importar SRT/ASS/VTT/LRC, encaixar as falas do episódio, editar, sincronizar e exportar.
 
+- Pesquisa técnica de algoritmos: [`docs/AMV_ALGORITHM_RESEARCH.md`](docs/AMV_ALGORITHM_RESEARCH.md)
 - Validação real do Auto AMV: [`docs/AMV_REAL_MEDIA_VALIDATION.md`](docs/AMV_REAL_MEDIA_VALIDATION.md)
 - Roadmap de melhorias: [`ROADMAP-MELHORIAS-AMV.md`](ROADMAP-MELHORIAS-AMV.md)
 - Especificação, arquitetura e regras: [`AGENTS.md`](AGENTS.md)
