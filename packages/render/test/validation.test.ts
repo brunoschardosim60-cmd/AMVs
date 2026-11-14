@@ -38,7 +38,7 @@ describe('detecção de quadros congelados', () => {
     const result = await runner.run('ffmpeg', [
       '-hide_banner', '-nostdin', '-v', 'info',
       '-f', 'lavfi', '-i', 'color=c=gray:s=64x64:r=24:d=4',
-      '-vf', 'freezedetect=n=-50dB:d=2.5', '-an', '-f', 'null', '-',
+      '-vf', 'blackdetect=d=0.1:pix_th=0.02,freezedetect=n=-50dB:d=2.5', '-an', '-f', 'null', '-',
     ]);
 
     expect(result.code).toBe(0);
