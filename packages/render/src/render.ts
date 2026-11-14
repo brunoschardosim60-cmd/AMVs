@@ -54,6 +54,8 @@ export interface ExportValidation {
   audioStreams: number;
   audioSyncDifferenceUs: number;
   blackIntervals: { startUs: number; endUs: number }[];
+  /** Quadros repetidos por tempo prolongado; são avisos, não falhas automáticas. */
+  freezeIntervals: { startUs: number; endUs: number }[];
   warnings: string[];
 }
 
@@ -125,6 +127,41 @@ function blackIntervals(stderr: string): ExportValidation['blackIntervals'] {
   const expression = /black_start:([\d.]+)\s+black_end:([\d.]+)\s+black_duration:([\d.]+)/g;
   for (const match of stderr.matchAll(expression)) {
     intervals.push({ startUs: Math.round(Number(match[1]) * 1e6), endUs: Math.round(Number(match[2]) * 1e6) });
+  }
+  return intervals;
+}
+
+/** Parses FFmpeg freezedetect metadata. Incomplete trailing events are ignored. */
+export function parseFreezeIntervals(stderr: string): ExportValidation['freezeIntervals'] {
+  const intervals: ExportValidation['freezeIntervals'] = [];
+  let pendingStart: number | null = null;
+  let pendingDuration: number | null = null;
+
+  for (const line of stderr.split(/\r?\n/)) {
+    const startMatch = line.match(/freeze_start:\s*([\d.]+)/);
+    const durationMatch = line.match(/freeze_duration:\s*([\d.]+)/);
+    const endMatch = line.match(/freeze_end:\s*([\d.]+)/);
+
+    if (startMatch) {
+      pendingStart = Number(startMatch[1]);
+      pendingDuration = null;
+    }
+    if (durationMatch) pendingDuration = Number(durationMatch[1]);
+    if (endMatch && pendingStart !== null) {
+      const end = Number(endMatch[1]);
+      if (Number.isFinite(pendingStart) && Number.isFinite(end) && end > pendingStart) {
+        intervals.push({ startUs: Math.round(pendingStart * 1e6), endUs: Math.round(end * 1e6) });
+      }
+      pendingStart = null;
+      pendingDuration = null;
+    }
+  }
+
+  if (pendingStart !== null && pendingDuration !== null) {
+    const end = pendingStart + pendingDuration;
+    if (Number.isFinite(pendingStart) && Number.isFinite(end) && end > pendingStart) {
+      intervals.push({ startUs: Math.round(pendingStart * 1e6), endUs: Math.round(end * 1e6) });
+    }
   }
   return intervals;
 }
@@ -244,9 +281,21 @@ async function validateVideoOutput(
   const intervals = blackIntervals(blackResult.stderr);
   const expected = expectedBlackIntervals(windows);
   const unexpected = intervals.filter((interval) => !isExpectedBlack(interval, expected, 1e6 * expectedFps.den / expectedFps.num));
-  const warnings = unexpected.length
-    ? [`Foram detectados ${unexpected.length} trechos totalmente pretos fora de gaps/fades intencionais; revise os timestamps: ${unexpected.map((item) => `${(item.startUs / 1e6).toFixed(2)}–${(item.endUs / 1e6).toFixed(2)} s`).join(', ')}.`]
-    : [];
+  const freezeResult = await env.runner.run('ffmpeg', [
+    '-hide_banner', '-nostdin', '-v', 'info', '-i', path,
+    '-vf', 'freezedetect=n=-50dB:d=2.5', '-an', '-f', 'null', '-',
+  ], { signal });
+  if (signal?.aborted) throw new CancelledError();
+  if (freezeResult.code !== 0) throw new RenderError(`Não foi possível verificar quadros congelados: ${freezeResult.stderr.trim()}`);
+  const freezes = parseFreezeIntervals(freezeResult.stderr);
+  const warnings = [
+    ...(unexpected.length
+      ? [`Foram detectados ${unexpected.length} trechos totalmente pretos fora de gaps/fades intencionais; revise os timestamps: ${unexpected.map((item) => `${(item.startUs / 1e6).toFixed(2)}–${(item.endUs / 1e6).toFixed(2)} s`).join(', ')}.`]
+      : []),
+    ...(freezes.length
+      ? [`Foram detectados ${freezes.length} possíveis congelamentos de imagem (≥2,5 s); podem ser pausas intencionais, então revise: ${freezes.map((item) => `${(item.startUs / 1e6).toFixed(2)}–${(item.endUs / 1e6).toFixed(2)} s`).join(', ')}.`]
+      : []),
+  ];
   onLog(`\nValidação concluída: ${frameCount} frames, ${settings.width}x${settings.height}, ${outputFps.num}/${outputFps.den} fps, áudio sincronizado (${audioSyncDifferenceUs} us).`);
   return {
     durationUs,
@@ -258,6 +307,7 @@ async function validateVideoOutput(
     audioStreams: audio.length,
     audioSyncDifferenceUs,
     blackIntervals: intervals,
+    freezeIntervals: freezes,
     warnings,
   };
 }
