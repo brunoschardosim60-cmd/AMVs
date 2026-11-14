@@ -185,7 +185,7 @@ export function SceneLaboratory({ session }: { session: ProjectSession }) {
 
   const characters = useMemo(() => [...new Set([
     ...entries.flatMap((entry) => entry.vision?.characters ?? []),
-    ...session.project.characterLibrary.filter((profile) => profile.evidence.length).map((profile) => profile.name),
+    ...session.project.characterLibrary.filter((profile) => profile.confirmed && profile.evidence.length).map((profile) => profile.name),
   ])].sort((a, b) => a.localeCompare(b)), [entries, session.project.characterLibrary]);
   const filters = {
     action: action || semantic.action || '',
@@ -212,7 +212,8 @@ export function SceneLaboratory({ session }: { session: ProjectSession }) {
       if (filters.sceneType && (sceneTypeConfidence < Math.max(0.45, minimumConfidence) || actualSceneType !== filters.sceneType)) return false;
       if (filters.character) {
         const characterProfile = session.project.characterLibrary.find((profile) =>
-          [profile.name, ...profile.aliases].some((name) => normLabel(name) === normLabel(filters.character)),
+          profile.confirmed
+          && [profile.name, ...profile.aliases].some((name) => normLabel(name) === normLabel(filters.character)),
         );
         const labels = entry.vision?.characters ?? [];
         const matched = confidence >= Math.max(0.45, minimumConfidence)
