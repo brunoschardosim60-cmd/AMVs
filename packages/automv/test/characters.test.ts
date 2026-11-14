@@ -56,4 +56,21 @@ describe('biblioteca de personagens do projeto', () => {
 
     expect(canonicalizeEpisodeVision(vision, [])?.shots.t300?.characters).toEqual(['José']);
   });
+  it('não resolve um alias compartilhado por dois perfis confirmados', () => {
+    const vision = {
+      version: 'v2' as const,
+      model: 'local',
+      shots: {
+        t400: { characters: ['garoto de cabelo branco', 'Asta'], fight: true, note: '' },
+      },
+    };
+    const library = [
+      { id: 'asta', name: 'Asta', aliases: ['garoto de cabelo branco'], evidence: [], confidence: 0.9, confirmed: true },
+      { id: 'yuno', name: 'Yuno', aliases: ['garoto de cabelo branco'], evidence: [], confidence: 0.9, confirmed: true },
+    ];
+
+    expect(canonicalizeEpisodeVision(vision, library)?.shots.t400?.characters)
+      .toEqual(['garoto de cabelo branco', 'Asta']);
+  });
+
 });
