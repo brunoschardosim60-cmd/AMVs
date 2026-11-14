@@ -54,6 +54,8 @@ export interface ExportValidation {
   audioStreams: number;
   audioSyncDifferenceUs: number;
   blackIntervals: { startUs: number; endUs: number }[];
+  /** Quadros pretos fora dos gaps/fades intencionais previstos no plano. */
+  unexpectedBlackIntervals: { startUs: number; endUs: number }[];
   /** Quadros repetidos por tempo prolongado; são avisos, não falhas automáticas. */
   freezeIntervals: { startUs: number; endUs: number }[];
   warnings: string[];
@@ -302,6 +304,7 @@ async function validateVideoOutput(
     audioStreams: audio.length,
     audioSyncDifferenceUs,
     blackIntervals: intervals,
+    unexpectedBlackIntervals: unexpected,
     freezeIntervals: freezes,
     warnings,
   };
@@ -390,7 +393,7 @@ export async function renderProject(
       await env.fs.rename(audioPath, tmpOut);
       const validation: ExportValidation = {
         durationUs, width: null, height: null, fps: null, videoCodec: null, frames: 0,
-        audioStreams: 1, audioSyncDifferenceUs: 0, blackIntervals: [], freezeIntervals: [], warnings: [],
+        audioStreams: 1, audioSyncDifferenceUs: 0, blackIntervals: [], unexpectedBlackIntervals: [], freezeIntervals: [], warnings: [],
       };
       log(`Validation passed: audio-only WAV, duration ${durationUs} us`);
       await logFile();
