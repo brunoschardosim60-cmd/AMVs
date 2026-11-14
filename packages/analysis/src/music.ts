@@ -5,7 +5,7 @@
  */
 import { mean, movingAverage, normalize, percentile, rmsFrames, stft, toDb } from './dsp.js';
 
-export const MUSIC_ANALYSIS_VERSION = 'm4';
+export const MUSIC_ANALYSIS_VERSION = 'm5';
 
 export type SectionLabel = 'intro' | 'verso' | 'pré-refrão' | 'refrão' | 'drop' | 'ponte' | 'final';
 export type MusicEventType = 'onset' | 'impact' | 'growth' | 'pause' | 'drop' | 'section-change' | 'rhythm-change';
@@ -245,7 +245,26 @@ export function trackBeats(o: OnsetEnvelope, bpm: number, tightness = 100): numb
     if (back[i] === -1) break;
   }
   beats.reverse();
-  // completa para trás até o início com o período, se a música começa com pausa
+  // Se a faixa começa com uma pausa, preserva a fase da grade inferida pelo primeiro
+  // ataque e completa os tempos anteriores. A montagem pode então alinhar intro,
+  // títulos e primeiros cortes sem deslocar a pulsação quando a música entra.
+  if (beats.length >= 2) {
+    const intervals = beats.slice(1, Math.min(beats.length, 17))
+      .map((beat, index) => beat - beats[index]!)
+      .filter((interval) => Number.isFinite(interval) && interval > 0);
+    const sorted = [...intervals].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    const periodS = sorted.length
+      ? sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2
+      : 60 / bpm;
+    const expectedPeriodS = 60 / bpm;
+    const stablePeriodS = periodS >= expectedPeriodS * 0.75 && periodS <= expectedPeriodS * 1.25
+      ? periodS
+      : expectedPeriodS;
+    while (beats[0]! - stablePeriodS >= 0) {
+      beats.unshift(beats[0]! - stablePeriodS);
+    }
+  }
   return beats;
 }
 
