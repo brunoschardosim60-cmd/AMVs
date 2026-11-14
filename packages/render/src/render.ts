@@ -131,7 +131,7 @@ function blackIntervals(stderr: string): ExportValidation['blackIntervals'] {
   return intervals;
 }
 
-/** Parses FFmpeg freezedetect metadata. Incomplete trailing events are ignored. */
+/** Parses FFmpeg freezedetect metadata, including a final event without freeze_end. */
 export function parseFreezeIntervals(stderr: string): ExportValidation['freezeIntervals'] {
   const intervals: ExportValidation['freezeIntervals'] = [];
   let pendingStart: number | null = null;
@@ -395,7 +395,7 @@ export async function renderProject(
       await env.fs.rename(audioPath, tmpOut);
       const validation: ExportValidation = {
         durationUs, width: null, height: null, fps: null, videoCodec: null, frames: 0,
-        audioStreams: 1, audioSyncDifferenceUs: 0, blackIntervals: [], warnings: [],
+        audioStreams: 1, audioSyncDifferenceUs: 0, blackIntervals: [], freezeIntervals: [], warnings: [],
       };
       log(`Validation passed: audio-only WAV, duration ${durationUs} us`);
       await logFile();
