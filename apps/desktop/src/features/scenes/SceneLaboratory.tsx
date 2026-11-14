@@ -211,10 +211,11 @@ export function SceneLaboratory({ session }: { session: ProjectSession }) {
       const actualSceneType = entry.vision?.sceneType ?? entry.vision?.local?.sceneType;
       if (filters.sceneType && (sceneTypeConfidence < Math.max(0.45, minimumConfidence) || actualSceneType !== filters.sceneType)) return false;
       if (filters.character) {
-        const characterProfile = session.project.characterLibrary.find((profile) =>
+        const matchingProfiles = session.project.characterLibrary.filter((profile) =>
           profile.confirmed
           && [profile.name, ...profile.aliases].some((name) => normLabel(name) === normLabel(filters.character)),
         );
+        const characterProfile = matchingProfiles.length === 1 ? matchingProfiles[0] : undefined;
         const labels = entry.vision?.characters ?? [];
         const matched = confidence >= Math.max(0.45, minimumConfidence)
           && labels.some((name) => normLabel(name) === normLabel(filters.character)
