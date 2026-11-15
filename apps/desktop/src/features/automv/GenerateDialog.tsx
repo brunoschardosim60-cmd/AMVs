@@ -1,5 +1,5 @@
 import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type CameraMotionType, type Cue, type SceneEmotion } from '@amv/analysis';
-import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
+import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, planNarrative, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
 import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { loadCreativeProfiles, saveCreativeProfiles } from '../../core/creativeProfiles';
@@ -748,9 +748,42 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
 
       const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches: effectiveLyricSceneMatches, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
       const m = musics.find((a) => a.id === musicId)!;
+      const annotationExclusions = session.project.sceneAnnotations
+        .filter((annotation) => annotation.excludedFromAuto)
+        .map((annotation) => annotation.assetId + '@' + annotation.sceneKey);
+      const editorialFootagePlan = planFootage(directorInputs, {
+        style: selectedStyle,
+        intensity,
+        durationS: duration,
+        focus,
+        sequenceIds: seqIds,
+        exclude: [...excluded, ...annotationExclusions],
+        seed: nextSeed,
+        characters,
+        editorialDirection,
+      }, music);
+      const suggestedEditorialRange = chosenStart !== null
+        ? null
+        : editorialFootagePlan.mode === 'fight'
+          ? suggestMusicRanges(music, duration, editorialFootagePlan.fit, 1)[0] ?? null
+          : null;
+      const editorialMusicRange: [number, number] = chosenStart !== null
+        ? chooseMusicRange(music, duration, chosenStart)
+        : suggestedEditorialRange
+          ? [suggestedEditorialRange.startS, suggestedEditorialRange.endS]
+          : chooseMusicRange(music, duration, null);
+      const preflightDirection = planNarrative(music, editorialMusicRange, beatOffsetMs / 1000);
+      const preflightBrief = buildCreativeBrief({
+        style: selectedStyle,
+        episodes: directorInputs,
+        music: { assetId: m.id, name: m.name, analysis: music },
+        options: { durationS: duration, intensity, editorialDirection, organizationMode, focus, voiceMoments },
+        direction: preflightDirection,
+        hasTimedLyrics: !!lyrics?.cues.length,
+      });
 
-      setGenerationStep('Definindo o objetivo editorial e o arco musical...');
-      setGenerationProgress(32);
+      setGenerationStep('Aplicando objetivo editorial · ' + preflightBrief.title);
+      setGenerationProgress(38);
       await new Promise((resolve) => setTimeout(resolve, 0));
       const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, directorInputs, opts);
 
