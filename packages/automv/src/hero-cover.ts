@@ -28,10 +28,12 @@ export function findHeroCoverFrame(
     if (duration < 0.35 || shot.tags.includes('escura')) return;
 
     const vision = visionOf ? visionOf(ep, shot) : undefined;
+    const visionConfidence = vision?.confidence;
     const trustedVision = !!vision
-      && Number.isFinite(vision.confidence)
-      && vision.confidence >= 0.55
-      && vision.confidence <= 1;
+      && typeof visionConfidence === 'number'
+      && Number.isFinite(visionConfidence)
+      && visionConfidence >= 0.55
+      && visionConfidence <= 1;
     const local = vision?.local;
     const trustedLocal = !!local
       && local.samples >= 2
@@ -62,7 +64,7 @@ export function findHeroCoverFrame(
     if (shot.tags.includes('impacto')) actionScore += 0.25;
     if (trustedVision && vision!.action === 'combate') actionScore += 0.2;
     const trustedFraming = trustedVision
-      && (vision!.framingConfidence ?? vision!.confidence) >= 0.55;
+      && (vision!.framingConfidence ?? visionConfidence ?? 0) >= 0.55;
     if (trustedFraming && (vision!.framing === 'close-up' || vision!.framing === 'medium')) actionScore += 0.15;
 
     // Pontuação composta (pesos calibrados para apelo visual de capa)

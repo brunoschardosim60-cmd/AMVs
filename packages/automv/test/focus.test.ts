@@ -523,7 +523,8 @@ describe('faixa de áudio da fala (japonês × português)', () => {
     };
     const { out, on } = run([ep], { focus: 'fight', useSpeech: true, showText: true });
     expect(pickAudioStream(ep)).toBe(2);
-    expect(on('Vozes')[0]!.audio.streamIndex).toBe(2);
+    // legenda em inglês não combina com o áudio japonês escolhido: a fala não é usada (nem voz nem legenda)
+    expect(on('Vozes')).toHaveLength(0);
     const textTrack = out.tracks.find((track) => track.kind === 'text')!;
     expect(out.clips.some((clip) => clip.trackId === textTrack.id)).toBe(false);
     expect(on('V1').some((clip) => clip.reason?.includes('I will win!'))).toBe(false);

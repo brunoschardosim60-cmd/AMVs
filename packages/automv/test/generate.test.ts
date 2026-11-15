@@ -499,14 +499,24 @@ describe('outros estilos', () => {
     expect(on('Legendas').some((clip) => clip.reason?.includes('a força interior aparece'))).toBe(true);
   });
 
-  it('omite letra sobre o drop e realça a palavra que cai no impacto', () => {
-    const hype = run({
+  it('letra sobre o drop é deslocada para depois do impacto; só é omitida se não couber', () => {
+    // 39,5–40,5 s cruza o drop (24 s na timeline): começa depois da janela do golpe, não é apagada
+    const shifted = run({ style: 'hype', useSpeech: false, lyrics: [{ startS: 39.5, endS: 40.5, text: 'lyrics over drop' }] });
+    const line = shifted.on('Legendas').find((clip) => clip.reason === 'Letra da música');
+    expect(line).toBeDefined();
+    expect(line!.timelineStartUs).toBeGreaterThanOrEqual(24.2 * S - 1);
+
+    // linha curtíssima com a próxima logo em seguida: não há onde encaixar, então é omitida com aviso
+    const tight = run({
       style: 'hype',
       useSpeech: false,
-      lyrics: [{ startS: 39.5, endS: 40.5, text: 'lyrics over drop' }],
+      lyrics: [
+        { startS: 39.9, endS: 40.1, text: 'curta' },
+        { startS: 40.3, endS: 42, text: 'seguinte' },
+      ],
     });
-    expect(hype.r.warnings.some((warning) => warning.includes('omitido'))).toBe(true);
-    expect(hype.on('Legendas').some((clip) => clip.reason === 'Letra da música')).toBe(false);
+    expect(tight.r.warnings.some((warning) => warning.includes('omitidos'))).toBe(true);
+    expect(tight.on('Legendas').some((clip) => clip.text?.text === 'curta')).toBe(false);
 
     const lyrics = [{
       startS: 40,

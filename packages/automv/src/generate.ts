@@ -920,7 +920,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   if (wantVoice && totalVoice > 0 && style.speechBeforeDrop && dropT !== null) {
     const acceptSpeech = (ep: EpisodeInput, speech: SpeechSegment) =>
       hasRequestedSpeechAudio(ep, lang) && speechTextMatchesAudio(ep, speech, lang);
-    let pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) => nearPool(ep, speech) && acceptSpeech(ep));
+    let pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) => nearPool(ep, speech) && acceptSpeech(ep, speech));
     if (!pick && fight) pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) =>
       poolEps.has(ep.assetId) && acceptSpeech(ep, speech));
     if (pick) {
@@ -1205,7 +1205,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       }),
       recentCharacters: history.slice(-5, -1).flatMap((item) => {
         const recentVision = visionOf(item.ep, item.shot);
-        return recentVision && Number.isFinite(recentVision.confidence) && recentVision.confidence >= 0.55 && recentVision.confidence <= 1
+        const confidence = recentVision?.confidence;
+        return recentVision && typeof confidence === 'number'
+          && Number.isFinite(confidence) && confidence >= 0.55 && confidence <= 1
           ? [recentVision.characters]
           : [];
       }),

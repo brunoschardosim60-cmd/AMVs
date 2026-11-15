@@ -30,6 +30,9 @@ describe('detecção de quadros congelados', () => {
 
   it('ignora eventos incompletos ou inválidos', () => {
     expect(parseFreezeIntervals('freeze_start: 4.000000\n')).toEqual([]);
+    // congelamento aberto até o fim do vídeo (FFmpeg 6.x não emite freeze_end): fecha no fim do stream
+    expect(parseFreezeIntervals('freeze_start: 4.000000\n', 9_000_000)).toEqual([{ startUs: 4_000_000, endUs: 9_000_000 }]);
+    expect(parseFreezeIntervals('freeze_start: 4.000000\n', 3_000_000)).toEqual([]);
     expect(parseFreezeIntervals('sem evento de congelamento')).toEqual([]);
     expect(parseFreezeIntervals('freeze_start: NaN\nfreeze_end: 8.000000')).toEqual([]);
   });
@@ -42,7 +45,7 @@ describe('detecção de quadros congelados', () => {
     ]);
 
     expect(result.code).toBe(0);
-    expect(parseFreezeIntervals(result.stderr).length).toBeGreaterThan(0);
+    expect(parseFreezeIntervals(result.stderr, 4_000_000)).toEqual([{ startUs: 0, endUs: 4_000_000 }]);
   });
 
 });
