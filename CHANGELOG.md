@@ -9,6 +9,7 @@
 - **Seleção de cenas:** pontuação penaliza visibilidade muito baixa, superexposição e planos quase parados em trechos musicais agitados; cenas marcadas como quase pretas ficam em reserva.
 - **Cor com moderação:** exposição/sombras são levantadas em cenas escuras utilizáveis; contraste/saturação ou vinheta variam levemente com energia quando o estilo não fornece uma grade.
 - **Vozes mais consistentes:** a análise guarda estimativa RMS p90 por fala; o ganho compensa diferenças entre episódios com limite de ±4 dB. Não é medição LUFS nem substitui escuta/true-peak.
+  A versão de análise do episódio passa de e3 para e4 para recalcular o dado em caches antigos.
 - **Render mais nítido:** escalonamento final usa Lanczos. Proxy continua em 540p/CRF 26 para preservar fluidez e espaço; não aumentamos seu custo por padrão.
 
 ## 0.6.19
