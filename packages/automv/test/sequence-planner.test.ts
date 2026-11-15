@@ -55,6 +55,28 @@ describe('planejador global de sequência', () => {
     expect(selected[2]!.sourceStartS).toBeGreaterThanOrEqual(selected[1]!.sourceEndS - 0.05);
   });
 
+  it('entrega o histórico recente ao score para penalizar a mesma cena com IDs diferentes', () => {
+    const candidates = [
+      candidate('primeira', 0, [10, 0]),
+      candidate('mesma-cena-outro-id', 0, [0, 10]),
+      candidate('cena-nova', 1, [0, 9]),
+    ];
+    const result = planSequence([0, 1], candidates, {
+      mode: 'free',
+      seed: 7,
+      score: (slot, item, _previous, _previousSlot, history) => {
+        const alreadyUsedSource = history.some((used) =>
+          used.assetId === item.assetId && used.sourceStartS === item.sourceStartS,
+        );
+        return alreadyUsedSource ? -100 : item.slotScores[slot]!;
+      },
+      beamWidth: 8,
+      branchLimit: 8,
+    });
+
+    expect(result.choices.map((item) => item?.id)).toEqual(['primeira', 'cena-nova']);
+  });
+
   it('permite não linearidade no modo livre sem reutilizar cenas antes de esgotar', () => {
     const candidates = [
       candidate('origem', 0, [10, -10]),
