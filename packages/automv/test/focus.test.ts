@@ -129,15 +129,8 @@ describe('foco na luta', () => {
     expect(clips.some(fromFightA)).toBe(true);
     expect(clips.some(fromFightB)).toBe(true);
     expect(clips.every((c) => fromFightA(c) || fromFightB(c))).toBe(true);
-    const keys = clips.map((c) => `${c.assetId}@${c.sourceInUs}`);
-    const dups = keys.filter((k, i) => keys.indexOf(k) !== i);
-    console.log('[focus-fight-duplicates]', {
-      clips: clips.length,
-      uniqueSourceIn: new Set(keys).size,
-      duplicates: dups.slice(0, 20),
-      duplicateClips: clips.filter((c, i) => dups.includes(keys[i]!)).map((c) => ({ sourceInUs: c.sourceInUs, sourceOutUs: c.sourceOutUs, timelineStartUs: c.timelineStartUs, durationUs: c.durationUs, label: c.label })).slice(0, 20),
-    });
-    expect(new Set(on('V1').map((c) => `${c.assetId}@${c.sourceInUs}`)).size).toBe(on('V1').length);
+    expect(clips.length).toBeGreaterThanOrEqual(80);
+    expect(new Set(clips.map((c) => `${c.assetId}@${c.sourceInUs}`)).size).toBe(clips.length);
   });
 
   it('com cenas de sobra, fica numa luta só (não junta outra à toa)', () => {
