@@ -1289,7 +1289,19 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     mode: fight ? 'chronological' : organizationMode,
     seed: opts.seed,
     score: (slot, candidate, previous, previousSlot, history) => scoreCandidate(slot, candidate, previous, previousSlot, history)?.score ?? Number.NEGATIVE_INFINITY,
-    candidateWindow: organizationMode === 'narrative' && !fight && fitSlots.length > 3
+    candidateWindow: fight
+      ? (_slotIndex, musicSlot, forward) => {
+          // Em foco de luta, não pule cenas fortes que ainda podem ser usadas:
+          // consumir a próxima cena mantém a montagem contínua e evita esgotar
+          // o pool cedo e depender de cenas repetidas no fallback.
+          const next = [...forward].sort((a, b) =>
+            a.episodeOrder - b.episodeOrder || a.sourceStartS - b.sourceStartS,
+          )[0];
+          if (!next) return [];
+          const slotDuration = musicSlot.endS - musicSlot.startS;
+          return next.sourceEndS - next.sourceStartS + 1e-6 >= slotDuration * 0.6 ? [next] : [];
+        }
+      : organizationMode === 'narrative' && fitSlots.length > 3
       ? (slotIndex, musicSlot, forward, progress) => {
           const byAsset = new Map<string, Candidate[]>();
           for (const candidate of forward) {
@@ -1403,8 +1415,12 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   let darkRescuedSlots = 0;
   let unfilledSlots = 0;
   const rescueSlot = (slot: Slot): { candidate: Candidate; scored: NonNullable<ReturnType<typeof scoreCandidate>> } | null => {
+    // Em foco de luta, o plano já percorre as cenas em ordem cronológica.
+    // Se o próximo plano não couber, deixar o slot vazio é melhor que voltar
+    // para uma cena antiga e fingir que há material novo.
+    if (fight) return null;
     const tiers: ((candidate: Candidate) => boolean)[] = [
-      (candidate) => !selectedHistory.some((item) => item.id === candidate.id) && candidate.id !== prev?.id,
+      (candidate) => !used.has(candidate.id) && candidate.id !== prev?.id,
       (candidate) => candidate.id !== prev?.id,
       () => true,
     ];
