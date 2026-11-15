@@ -1,5 +1,16 @@
 # Novidades
 
+## Não lançado — refinamentos do Auto AMV (14/11/2026)
+
+- **Cobertura de timeline com segurança:** slots sem escolha tentam uma cena de reserva, mas respeitam o limite de fonte de 0,6×; se nenhuma cena couber, o gerador avisa em vez de ultrapassar a cena original.
+- **Letras preservadas:** letras que cruzam um impacto podem terminar antes dele ou começar depois; linhas curtas tentam permanecer por 0,9 s sem invadir a próxima linha.
+- **Movimento mais orgânico:** push-in/pull-out discreto em planos longos sem movimento de impacto; cortes curtos não recebem zoom automático.
+- **Cortes alinhados a frames:** fronteiras dos slots são quantizadas à taxa racional do projeto para evitar cortes entre quadros.
+- **Seleção de cenas:** pontuação penaliza visibilidade muito baixa, superexposição e planos quase parados em trechos musicais agitados; cenas marcadas como quase pretas ficam em reserva.
+- **Cor com moderação:** exposição/sombras são levantadas em cenas escuras utilizáveis; contraste/saturação ou vinheta variam levemente com energia quando o estilo não fornece uma grade.
+- **Vozes mais consistentes:** a análise guarda estimativa RMS p90 por fala; o ganho compensa diferenças entre episódios com limite de ±4 dB. Não é medição LUFS nem substitui escuta/true-peak.
+- **Render mais nítido:** escalonamento final usa Lanczos. Proxy continua em 540p/CRF 26 para preservar fluidez e espaço; não aumentamos seu custo por padrão.
+
 ## 0.6.19
 
 **Geração de vídeo garantida de primeira, fim de repetições em vídeos longos (45s+), transições suaves sem telas pretas e progresso da IA**
