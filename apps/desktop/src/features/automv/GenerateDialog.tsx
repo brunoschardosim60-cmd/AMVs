@@ -1649,7 +1649,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                   )}
                   {visionTodo > 0 ? (
                     <>
-                      <Button size="sm" className="mt-2" onClick={runVision} title="Complementa a análise local com rótulos semânticos de um modelo de visão.">
+                      <Button size="sm" className="mt-2" onClick={() => { void runVision(); }} title="Complementa a análise local com rótulos semânticos de um modelo de visão.">
                         {matchLyrics ? 'Analisar cenas e sentido da letra' : 'Analisar cenas com IA'}
                       </Button>
                       <p className="mt-1 text-2xs text-faint">
