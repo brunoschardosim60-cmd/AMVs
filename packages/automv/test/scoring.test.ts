@@ -292,3 +292,22 @@ describe('pontuação contextual de cenas', () => {
     expect(immediateCut.reasons).toContain('continuidade coreográfica de combate em sequência imediata');
   });
 });
+
+describe('qualidade técnica básica da cena', () => {
+  it('penaliza pouca visibilidade, superexposição e falta de movimento em trecho agitado', () => {
+    const normal = scoreSceneCandidate(base);
+    const dark = scoreSceneCandidate({ ...base, shot: { ...shot, brightness: 0.12 } });
+    const blown = scoreSceneCandidate({ ...base, shot: { ...shot, brightness: 0.98 } });
+    const still = scoreSceneCandidate({ ...base, shot: { ...shot, motion: 0.01 } });
+    expect(dark.total).toBeLessThan(normal.total);
+    expect(blown.total).toBeLessThan(normal.total);
+    expect(still.total).toBeLessThan(normal.total);
+    expect(dark.reasons.join(' ')).toMatch(/escura/);
+  });
+
+  it('não penaliza brilho e movimento dentro da faixa normal', () => {
+    const normal = scoreSceneCandidate(base);
+    const ordinary = scoreSceneCandidate({ ...base, shot: { ...shot, brightness: 0.48, motion: 0.7 } });
+    expect(ordinary.total).toBeCloseTo(normal.total, 5);
+  });
+});
