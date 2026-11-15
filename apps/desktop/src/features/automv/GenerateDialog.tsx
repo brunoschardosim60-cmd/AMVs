@@ -1,5 +1,5 @@
 import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type CameraMotionType, type Cue, type SceneEmotion } from '@amv/analysis';
-import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
+import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
 import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { loadCreativeProfiles, saveCreativeProfiles } from '../../core/creativeProfiles';
@@ -384,6 +384,9 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       const context = music
         ? {
             style: STYLES.find((item) => item.id === selectedStyle)!.label,
+            editorialObjective: STYLE_EDITORIAL_GOALS[selectedStyle].objective,
+            editorialPriorities: STYLE_EDITORIAL_GOALS[selectedStyle].priorities,
+            editorialGuardrails: STYLE_EDITORIAL_GOALS[selectedStyle].guardrails,
             targetIntensity: INTENSITY[intensity],
             music: {
               bpm: music.bpm,
