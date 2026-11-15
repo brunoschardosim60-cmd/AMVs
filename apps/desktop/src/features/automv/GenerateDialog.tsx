@@ -1206,9 +1206,11 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             />
           </div>
           <p className="mt-2 text-2xs text-muted">As etapas verificam apenas sinais disponíveis; o que não tem evidência aparece como pendente de avaliação.</p>
-          {generationStep.startsWith('Analisando cenas localmente') && (
+          {(generationStep.startsWith('Analisando cenas localmente')
+            || generationStep.startsWith('Análise semântica profunda')
+            || generationStep.startsWith('Preparando análise semântica')) && (
             <Button size="sm" variant="ghost" className="mt-3" onClick={() => visionAbort.current?.abort()}>
-              Cancelar análise local
+              Cancelar análise de cenas
             </Button>
           )}
         </div>
