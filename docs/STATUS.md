@@ -451,3 +451,5 @@ Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Video
 | Cache da análise de episódio | versionado e4 | Reanálise automática necessária para popular loudnessDb nas falas antigas. |
 
 | Segurança da equalização de voz por idioma | implementado e testado em regressão | A análise e4 registra o índice da faixa medida; só aplica correção quando bate com a faixa escolhida. Idioma/faixa diferente mantém ganho base. |
+
+| Continuidade de personagens em vários cortes | implementado com teste de regressão | Recompensa moderada para personagens confiáveis que reaparecem na janela recente; não é tracking de identidade e não penaliza rótulos incertos. |
