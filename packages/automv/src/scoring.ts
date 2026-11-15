@@ -130,6 +130,7 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
   } else if (input.narrativeRole === 'ending' && shot.motion < 0.45) {
     narrative += 0.1;
   }
+  let emotion = 0;
   let action = 0;
   if (trusted(vision)) {
     if (style.editorialIntent === 'combat') {
@@ -247,7 +248,6 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
   );
   else if (action < 0 && trusted(vision) && !vision.fight) reasons.push('análise visual confiável não identifica luta para este trecho intenso');
 
-  let emotion = 0;
   if (style.sceneBias === 'emotion') {
     if (shot.tags.includes('calma')) emotion += 0.24;
     if (trusted(vision) && (vision.emotion === 'tristeza' || vision.emotion === 'calma')) emotion += 0.32;
