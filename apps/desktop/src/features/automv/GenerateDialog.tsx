@@ -966,7 +966,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       <Dialog
         title="AMV gerado"
         onClose={onClose}
-        width="w-[560px]"
+        width="w-[720px]"
         footer={
           <>
             <Button variant="ghost" onClick={() => setResult(null)}>
@@ -1166,6 +1166,11 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             />
           </div>
           <p className="mt-2 text-2xs text-muted">As etapas verificam apenas sinais disponíveis; o que não tem evidência aparece como pendente de avaliação.</p>
+          {generationStep.startsWith('Analisando cenas localmente') && (
+            <Button size="sm" variant="ghost" className="mt-3" onClick={() => visionAbort.current?.abort()}>
+              Cancelar análise local
+            </Button>
+          )}
         </div>
       )}
       {localizedRange && (
@@ -1537,6 +1542,9 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                   </label>
                   <p className="mt-1 text-2xs text-faint">
                     Usa até 6 versos e reanalisa os quadros amostrados para sugerir combinações; pode consumir cota do modelo. Sem essa opção, a montagem continua local, pela batida, energia, ação e emoção.
+                  </p>
+                  <p className="mt-2 text-2xs text-faint">
+                    Ao clicar em Gerar, as cenas selecionadas que ainda não têm descritores visuais locais serão analisadas automaticamente, em detalhe e sem enviar quadros pela internet. A leitura semântica por IA (personagens, ações e emoções) continua opcional e exige o modelo configurado.
                   </p>
                   {localVisionTodo > 0 && (
                     <>
