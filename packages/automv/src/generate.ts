@@ -896,6 +896,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   if (opts.style === 'letra' && !opts.lyrics?.length) warnings.push('Sem a letra com tempo (LRC), o estilo "letra" corta na batida mas não escreve as palavras. Importe a letra em Legendas.');
   const lang = opts.voiceLang ?? 'original';
   const streamFor = (ep: EpisodeInput) => pickAudioStream(ep, lang);
+  const measuredVoiceLevel = (ep: EpisodeInput, speech: SpeechSegment) =>
+    ep.analysis.speechAudioStreamIndex === streamFor(ep) ? speech.loudnessDb : undefined;
   if (lang === 'pt' && episodes.some((ep) => !exclude.has(ep.assetId) && !hasRequestedSpeechAudio(ep, lang))) {
     warnings.push('Há episódio sem faixa em português identificada. As falas desses episódios foram omitidas; nenhuma faixa diferente foi usada como substituta.');
   }
@@ -1003,7 +1005,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const sourceText = speechTextMatchesAudio(ep, s, lang) ? s.text : null;
       const reason = `Fala ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}" ` : ''}de ${ep.name} ${fmt(s.startS)} (impacto ${s.impact.toFixed(2)})`;
       cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, t, len + 0.35, s.startS, reason, { effects: [...gradeFx(style.grade)] }) });
-      cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: voiceGainDb(2, s.loudnessDb), fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
+      cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: voiceGainDb(2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
       const subtitleTranslations = findSubtitleTranslations(ep, s.startS, s.endS);
       if (opts.showText && text && sourceText) addCaptionPhrases(cmds, text.id, t, len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations);
       used.add(`${ep.assetId}@${s.startS}`);
@@ -1743,7 +1745,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         crop: { left: 0, top: 0, right: 0, bottom: 0 },
       },
     }) });
-    cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: voiceGainDb(b.preDrop ? 3 : 2, s.loudnessDb), fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
+    cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: voiceGainDb(b.preDrop ? 3 : 2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
     if (opts.showText && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations);
     clipsMade++;
   }
