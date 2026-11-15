@@ -4,7 +4,7 @@ import { applyCommand, clipEndUs, sourceTimeAt, type Clip, type Command, type Pr
 import { evaluateAudiovisualQuality, type QualityIssue, type QualityReport } from './quality.js';
 import type { EpisodeInput, GenerateOptions, GenerateResult, MusicInput } from './generate.js';
 import { narrativeRoleLabel, type NarrativeBeat, type NarrativeRole } from './narrative.js';
-import type { StyleId } from './styles.js';
+import { STYLE_EDITORIAL_GOALS, type StyleId } from './styles.js';
 
 const SECOND = 1_000_000;
 const TRUSTED_VISION = 0.55;
@@ -87,45 +87,6 @@ export interface CreativeDirectorInput {
   music: MusicInput;
 }
 
-const STYLE_INTENT: Record<StyleId, { title: string; objective: string; priorities: string[]; guardrails: string[] }> = {
-  hype: {
-    title: 'Combate épico',
-    objective: 'Construir expectativa, deixar a ação crescer e entregar os impactos mais fortes nos momentos musicais de maior energia. Cada golpe deve parecer parte de um confronto, não apenas um corte aleatório na batida.',
-    priorities: ['preparação antes do impacto', 'ação e reação legíveis', 'escalada até o clímax', 'cortes ligados a ataques musicais confiáveis'],
-    guardrails: ['não transformar toda batida em corte', 'não repetir o mesmo plano apenas para preencher duração', 'não sacrificar a leitura da ação por efeitos'],
-  },
-  rapido: {
-    title: 'Impacto & Combo',
-    objective: 'Criar uma sequência de impactos precisa e energética, alternando planos curtos e respiros suficientes para que cada ação seja percebida.',
-    priorities: ['ações de alto impacto', 'cadência rápida sem cintilação excessiva', 'variação de planos', 'sincronia nos acentos mais fortes'],
-    guardrails: ['evitar sequências de cortes ilegíveis', 'não acelerar cenas além da duração real da fonte', 'preservar preparação e consequência quando disponíveis'],
-  },
-  superacao: {
-    title: 'Ascensão épica',
-    objective: 'Construir uma trajetória de tensão e virada: apresentar o desafio, aumentar a expectativa, reservar a maior energia para o clímax e encerrar com sensação de consequência.',
-    priorities: ['abertura com espaço para contexto', 'crescimento progressivo', 'virada próxima ao clímax musical', 'fala marcante quando houver evidência e opção habilitada'],
-    guardrails: ['não chamar qualquer cena intensa de vitória', 'não inventar uma relação causal entre cenas', 'não antecipar todo o impacto na abertura'],
-  },
-  letra: {
-    title: 'Lyrics sincronizada',
-    objective: 'Fazer a imagem dialogar com o conteúdo e o tempo da letra, mantendo leitura confortável e usando a batida como apoio, não como substituta do significado.',
-    priorities: ['sincronismo temporal confiável', 'correspondência semântica quando disponível', 'legibilidade das palavras', 'imagens coerentes com o verso'],
-    guardrails: ['não fingir correspondência semântica sem evidência', 'não usar timing incerto como karaoke exato', 'não sobrepor texto a falas ou impactos que precisam de espaço'],
-  },
-  discurso: {
-    title: 'Dark Speech',
-    objective: 'Deixar as falas conduzirem a ideia: estabelecer contexto visual, organizar pausas e criar escalada de mensagem com a música sustentando a emoção.',
-    priorities: ['falas inteligíveis e bem distribuídas', 'imagem que acompanhe o contexto da fala', 'ducking de música durante a voz', 'pausas e encerramento deliberados'],
-    guardrails: ['não gerar um vídeo sem falas e chamá-lo de discurso', 'não atribuir fala a personagem sem identidade confirmada', 'não mascarar a voz com música ou efeitos'],
-  },
-  emocional: {
-    title: 'Cinema emocional',
-    objective: 'Criar conexão e progressão por expressões, contexto, pausas e consequência; deixar que os momentos importantes respirem em vez de acelerar todos os planos.',
-    priorities: ['planos com duração para leitura emocional', 'continuidade de personagem quando identificável', 'variação entre silêncio e crescimento musical', 'transições discretas'],
-    guardrails: ['não presumir emoção quando a análise não a identificou', 'não aplicar dissolves automaticamente a todo corte', 'não confundir lentidão com progressão dramática'],
-  },
-};
-
 function roleIntention(role: NarrativeRole, style: StyleId): string {
   const styleSpecific: Partial<Record<StyleId, Partial<Record<NarrativeRole, string>>>> = {
     hype: { opening: 'Apresentar o confronto e reservar os golpes mais fortes', build: 'Aumentar a pressão e preparar a troca de ataques', climax: 'Concentrar os impactos de maior energia', release: 'Dar espaço para reação ou mudança de ritmo', ending: 'Fechar com consequência visual, não apenas com o último corte' },
@@ -161,7 +122,7 @@ export function buildCreativeBrief(input: {
   direction: NarrativeBeat[];
   hasTimedLyrics?: boolean;
 }): CreativeBrief {
-  const intent = STYLE_INTENT[input.style];
+  const intent = STYLE_EDITORIAL_GOALS[input.style];
   const scenes = input.episodes.flatMap((episode) => episode.analysis.shots.map((shot) => ({
     vision: episode.vision?.shots[shotKey(shot.startS)],
   })));
