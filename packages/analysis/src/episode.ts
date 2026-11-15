@@ -65,6 +65,8 @@ export interface SpeechSegment {
   language?: string | null;
   /** 0..1 — quão "marcante" (curta, exclamação, grito). */
   impact: number;
+  /** dB RMS aproximado (percentil 90 do trecho), usado para compensar diferenças entre episódios. */
+  loudnessDb?: number;
 }
 
 export interface EpisodeAnalysis {
@@ -140,7 +142,7 @@ export function detectSpeech(feat: { t: number[]; db: number[]; voiceRatio: numb
     const shoutLevel = percentile(louds, 88);
     subtitles.forEach((c, i) => {
       const shout = louds[i]! >= shoutLevel && louds[i]! > -25;
-      out.push({ startS: c.startS, endS: c.endS, kind: shout ? 'grito' : 'fala', confidence: 0.9, text: c.text, ...(c.language ? { language: c.language } : {}), impact: Math.min(1, impactScore(c.text) + (shout ? 0.25 : 0)) });
+      out.push({ startS: c.startS, endS: c.endS, kind: shout ? 'grito' : 'fala', confidence: 0.9, text: c.text, ...(c.language ? { language: c.language } : {}), impact: Math.min(1, impactScore(c.text) + (shout ? 0.25 : 0)), ...(louds[i]! > -90 ? { loudnessDb: Math.round(louds[i]! * 10) / 10 } : {}) });
     });
     return out;
   }
@@ -181,6 +183,7 @@ export function detectSpeech(feat: { t: number[]; db: number[]; voiceRatio: numb
   const peaks = out.map(peakOf);
   const lvl = percentile(peaks, 88);
   out.forEach((s, i) => {
+    if (peaks[i]! > -90 && Number.isFinite(peaks[i])) s.loudnessDb = Math.round(peaks[i]! * 10) / 10;
     const dur = s.endS - s.startS;
     if (peaks[i]! >= lvl && peaks[i]! > floor + 25) {
       s.kind = 'grito';
