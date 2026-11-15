@@ -1,8 +1,9 @@
 import type { EpisodeAnalysis, MusicAnalysis } from '@amv/analysis';
 
 /**
- * Estilos do "Gerar meu AMV", tirados das referências reais (ver docs/DECISIONS.md):
- * cada estilo é um conjunto de parâmetros, não um prompt.
+ * Estilos do "Gerar meu AMV": cada estilo tem uma intenção editorial compartilhada
+ * (objetivo/prioridades/limites) e parâmetros de ritmo, cena, transição e efeitos.
+ * A intenção é consumida pelo ranking de cenas, pelo contexto de visão e pelo brief.
  */
 export type StyleId = 'hype' | 'rapido' | 'superacao' | 'letra' | 'discurso' | 'emocional';
 export type EditorialDirection = 'cinematic' | 'balanced' | 'hype';
