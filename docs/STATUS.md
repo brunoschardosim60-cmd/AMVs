@@ -423,3 +423,12 @@ Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Video
 | Transporte do preview | implementado | Busca temporal por quadro e tela cheia usam o playhead e o monitor existentes. |
 | Build e testes do desktop | passou | Build/typecheck de produção passou; 42/42 testes passaram com `AMV_FFMPEG` e `AMV_FFPROBE` apontando para os sidecars locais. |
 | Inspeção visual 1920×1080 e viewport menor no Windows/WebView2 | pendente | Só foi observada a janela em 1386×788. A comparação nos viewports solicitados, a inspeção visual da timeline/preview e a paridade com render real ainda não foram feitas. |
+
+
+## 2026-11-14 · Correções adicionais no Auto AMV
+| Item | Estado | Evidência / pendência |
+|---|---|---|
+| Rejeição de planos curtos que excedem a fonte a 0,6× | código e teste de regressão adicionados | packages/automv/src/generate.ts; packages/automv/test/generate.test.ts |
+| Confiança mínima na escolha da capa | código e teste de regressão adicionados | packages/automv/src/hero-cover.ts; packages/automv/test/hero-cover.test.ts |
+| Compatibilidade de idioma da fala pré-drop | código e teste de regressão adicionados | packages/automv/src/generate.ts; packages/automv/test/generate.test.ts |
+| Execução das suítes e validação no Windows/WebView2 | pendente | O GitHub não retornou status de checks para os commits desta rodada; não declarar os testes aprovados até a execução efetiva. |
