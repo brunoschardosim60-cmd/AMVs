@@ -300,6 +300,26 @@ describe('pontuação contextual de cenas', () => {
     expect(breakdown.reasons).toContain('penalidade de transição por retrocesso ou troca de sequência');
   });
 
+  it('desencoraja troca de episódio sem quebra musical quando não há continuidade visual confiável', () => {
+    const withoutBoundary = scoreSceneCandidate({
+      ...base,
+      organizationMode: 'narrative',
+      current: { assetId: 'ep2', sequenceId: 'fight-2', sourceStartS: 0 },
+      previous: { assetId: 'ep1', sequenceId: 'fight-1', sourceEndS: 12 },
+    });
+    const withBoundary = scoreSceneCandidate({
+      ...base,
+      organizationMode: 'narrative',
+      transitionCue: 'mudança de seção musical',
+      current: { assetId: 'ep2', sequenceId: 'fight-2', sourceStartS: 0 },
+      previous: { assetId: 'ep1', sequenceId: 'fight-1', sourceEndS: 12 },
+    });
+
+    expect(withoutBoundary.transition).toBeCloseTo(-0.32);
+    expect(withoutBoundary.reasons).toContain('troca de episódio sem uma nova frase ou acento musical');
+    expect(withBoundary.transition).toBeCloseTo(-0.1);
+  });
+
   it('separa tag heurística de calma de uma emoção identificada por visão', () => {
     const calmShot = { ...shot, intensity: 0.2, tags: ['calma'] as Shot['tags'] };
     const heuristic = scoreSceneCandidate({ ...base, shot: calmShot, style: styleDef('emocional') });
