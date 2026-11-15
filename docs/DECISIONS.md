@@ -358,3 +358,5 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - **Vozes:** loudnessDb armazena percentil 90 de dB RMS aproximado por fala. O gerador aplica correção de ganho limitada a ±4 dB, preservando ganho base quando a análise antiga não tem a métrica. Isso não é LUFS nem garantia contra clipping; export e escuta continuam necessários.
 - **Render:** escalonamento final usa Lanczos. Proxy permanece 540p/CRF 26 para evitar aumento de CPU/armazenamento no fluxo de edição.
 - **Validação:** testes de regressão foram adicionados aos pacotes analysis/automv. A execução das suítes e a inspeção de render real/WebView2 continuam pendentes até haver resultado verificável do CI e validação com mídia autorizada.
+
+- **Cache de análise:** EPISODE_ANALYSIS_VERSION avançou de e3 para e4 porque a nova medição de fala precisa ser calculada; episódios antigos serão reanalisados automaticamente pelo fluxo de versão do cache.
