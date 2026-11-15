@@ -362,3 +362,9 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - **Cache de análise:** EPISODE_ANALYSIS_VERSION avançou de e3 para e4 porque a nova medição de fala precisa ser calculada; episódios antigos serão reanalisados automaticamente pelo fluxo de versão do cache.
 
 - **Correspondência da medição de voz:** o cache e4 registra o índice da faixa usada na análise. A correção de ganho só é aplicada quando a faixa selecionada para a geração é a mesma faixa medida; se o usuário trocar de japonês para português (ou vice-versa), mantém-se o ganho base em vez de usar uma medição de outro áudio.
+
+
+## 2026-11-14 · Continuidade de personagens em janela curta
+- A pontuação agora considera personagens com confiança visual >= 0,55 presentes em planos anteriores recentes, além do corte imediatamente anterior. Uma recorrência em um plano intermediário soma +0,05; recorrência em dois ou mais planos soma +0,12.
+- A janela exclui o corte imediatamente anterior para não duplicar o bônus já existente de continuidade direta. Não há penalidade quando a identidade não é confiável ou quando o elenco muda sem evidência suficiente.
+- A regra usa rótulos normalizados e não transforma sugestões não confirmadas em identidades canônicas. É um sinal de ranking, não rastreamento de identidade por embeddings.
