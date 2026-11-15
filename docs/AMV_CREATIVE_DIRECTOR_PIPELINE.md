@@ -279,3 +279,9 @@ A funcionalidade só deve ser considerada direção criativa completa quando:
 - Progresso, cancelamento, cache e tempos refletem trabalho real.
 
 **Princípio central:** o AMV Studio não deve apenas perguntar “qual cena tem maior pontuação para este corte?”. Deve primeiro decidir “o que esta montagem precisa comunicar?”, depois construir uma sequência que cumpra essa intenção e, por fim, verificar se o resultado realmente a cumpre.
+
+### Frases musicais e alternativas de cena
+
+A geração agora transforma inícios de frase identificados pelos downbeats em possíveis fronteiras de corte e os registra como cue editorial. O planejador narrativo usa essas fronteiras junto com drops e mudanças de seção para permitir uma troca de sequência justificada. Em cada slot, ele recebe uma janela limitada de planos futuros (4 em menor energia, 5 em energia alta, 7 na entrada do drop), prioriza evidência compatível e conserva fallback cronológico. Isso reduz a escolha forçada da primeira cena, sem fingir que a análise local prova intenção narrativa.
+
+A documentação de rastreamento de batidas distingue BPM global de andamento variável; este incremento não promete resolver variações de tempo complexas. O estudo de tempo variável está documentado em https://librosa.org/doc/latest/auto_tutorials/03-advanced/plot_dynamic_beat.html.
