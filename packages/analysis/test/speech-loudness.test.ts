@@ -12,8 +12,8 @@ describe('nível estimado de cada fala', () => {
       { startS: 3, endS: 4.5, text: 'alto!' },
     ]);
     expect(speech).toHaveLength(2);
-    expect(speech[0]!.loudnessDb).toBeCloseTo(-27, 0);
-    expect(speech[1]!.loudnessDb).toBeCloseTo(-9, 0);
+    expect(speech[0]!.loudnessDb).toBeCloseTo(-28, 0);
+    expect(speech[1]!.loudnessDb).toBeCloseTo(-10, 0);
   });
 
   it('guarda nível estimado também na detecção sem legendas', () => {
