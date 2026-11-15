@@ -780,12 +780,14 @@ describe('integração das melhorias do patch', () => {
     expect(ptClips.length).toBeGreaterThan(0);
     expect(ptClips.every((command) => command.type === 'clip.add' && command.clip.audio.gainDb === 2)).toBe(true);
 
-    const original = generateAmv(project(), music(), [ep], {
+    const pOriginal = project();
+    const originalVoiceTrackId = pOriginal.tracks.find((track) => track.name === 'Vozes')!.id;
+    const original = generateAmv(pOriginal, music(), [ep], {
       ...base, style: 'discurso', durationS: 20, musicStartS: 0,
       voiceLang: 'original', useSpeech: true, showText: false,
     });
     const originalClips = original.commands.filter((command) =>
-      command.type === 'clip.add' && command.clip.trackId === voiceTrackId,
+      command.type === 'clip.add' && command.clip.trackId === originalVoiceTrackId,
     );
     expect(originalClips.length).toBeGreaterThan(0);
     expect(originalClips.every((command) => command.type === 'clip.add' && command.clip.audio.gainDb === -2)).toBe(true);
