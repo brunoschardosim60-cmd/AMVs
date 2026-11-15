@@ -1823,23 +1823,24 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         .reduce((min, other) => Math.min(min, other.startS - range[0]), D);
       let lyricEnd = Math.min(b, nextCueStart, D);
       if (!lyricSceneMatch) {
-        // Tenta terminar antes do impacto; se já não houver espaço, começa depois dele.
-        for (let pass = 0; pass < impactWindows.length + 1; pass++) {
-          const overlap = impactWindows.find((window) => a < window.endS && lyricEnd > window.startS);
-          if (!overlap) break;
-          if (overlap.startS - a >= 0.6) lyricEnd = Math.min(lyricEnd, overlap.startS);
-          else a = Math.max(a, overlap.endS);
+        // Procura uma janela livre contínua; pode ser necessário passar por mais de um impacto.
+        const maxEnd = Math.min(nextCueStart, D);
+        const preferredDuration = Math.max(0.9, lyricEnd - a);
+        lyricEnd = Math.min(maxEnd, a + preferredDuration);
+        const orderedWindows = [...impactWindows].sort((left, right) => left.startS - right.startS);
+        for (const window of orderedWindows) {
+          if (window.endS <= a) continue;
+          if (window.startS >= lyricEnd) break;
+          if (window.startS - a >= 0.6) {
+            lyricEnd = Math.min(lyricEnd, window.startS);
+            break;
+          }
+          // Menos de 0,6 s antes do impacto: desloca a frase para depois dele.
+          a = Math.max(a, window.endS);
+          lyricEnd = Math.min(maxEnd, a + preferredDuration);
         }
       }
-      // Garante leitura mínima sem passar por cima da próxima linha ou de um impacto.
-      if (lyricEnd - a < 0.9 && nextCueStart >= a + 0.9 && D >= a + 0.9) {
-        const proposedEnd = a + 0.9;
-        const nextImpact = impactWindows
-          .filter((window) => window.startS >= a && window.startS < proposedEnd)
-          .reduce((min, window) => Math.min(min, window.startS), proposedEnd);
-        lyricEnd = Math.min(proposedEnd, nextImpact, nextCueStart, D);
-      }
-      if (lyricEnd - a < 0.6 || impactWindows.some((window) => a < window.endS && lyricEnd > window.startS)) {
+      if (lyricEnd - a < 0.6 || (!lyricSceneMatch && impactWindows.some((window) => a < window.endS && lyricEnd > window.startS))) {
         skippedLyrics++;
         continue;
       }
