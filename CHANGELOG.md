@@ -13,8 +13,6 @@
 
 ## 0.6.21
 
-## 0.6.21
-
 **Continuidade de personagens mais consistente entre cortes.**
 
 - O Auto AMV agora considera personagens confiavelmente identificados nos últimos planos, não apenas no corte imediatamente anterior.
