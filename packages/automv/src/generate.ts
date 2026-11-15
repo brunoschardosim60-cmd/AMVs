@@ -233,7 +233,7 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
   const phraseLength = downbeatsInRange.length >= 8 ? 4 : downbeatsInRange.length >= 4 ? 2 : 0;
   const phraseStarts = new Set<number>();
   if (phraseLength > 0) {
-    for (let i = 0; i < downbeatsInRange.length; i += phraseLength) phraseStarts.add(i);
+    for (let i = 0; i < downbeatsInRange.length; i += phraseLength) phraseStarts.add(downbeatsInRange[i]!);
   }
   let i = 0;
   let slotNumber = 0;
@@ -295,6 +295,9 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
       n += Math.max(1, Math.round(style.beatsPerCut[lvl]! * speedUp));
       next = grid[Math.min(grid.length - 1, i + n)] ?? b;
     }
+    // Início de frase musical é um ponto editorial de transição, mesmo quando não coincide com o corte previsto.
+    const phraseBoundary = [...phraseStarts].find((timeS) => timeS > cur + 0.05 && timeS < next - 0.05);
+    if (phraseBoundary !== undefined) next = phraseBoundary;
     if (next <= cur + 0.05 || i + n >= grid.length - 1) next = b;
     const sectionEdge = sectionEdges.find((edge) => edge > cur + 0.05 && edge < next - 0.05);
     if (sectionEdge !== undefined) next = sectionEdge;
@@ -304,11 +307,13 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
       .sort((left, right) => Math.min(right.endS, a + endS) - Math.max(right.startS, a + startS) - (Math.min(left.endS, a + endS) - Math.max(left.startS, a + startS)))[0];
     const impactAtCut = impacts.find((event) => Math.abs(event.timelineS - timelineS) <= 0.08 && event.confidence >= accentThreshold);
     const rhythmChangeAtCut = activeRhythmChange && Math.abs(activeRhythmChange.timelineS - timelineS) <= 0.08;
+    const isPhraseStart = [...phraseStarts].some((timeS) => Math.abs(timeS - cur) <= 0.08);
     const musicCue = activePause ? 'pausa musical'
       : activeGrowth ? 'crescimento musical'
         : rhythmChangeAtCut ? `mudança de ritmo (${activeRhythmChange.direction ?? 'não classificada'})`
         : impactAtCut ? `acento espectral (${impactAtCut.band ?? 'banda não classificada'})`
-          : undefined;
+          : isPhraseStart ? 'início de frase musical'
+            : undefined;
     slots.push({
       startS,
       endS,
@@ -1196,11 +1201,13 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const currentVision = visionOf(c.ep, c.shot);
     const transitionCue = sl.isDrop
       ? 'entrada do drop'
-      : previousSlot && previousSlot.section !== sl.section
-        ? 'mudança de seção musical'
-        : previousSlot && Math.abs(previousSlot.energy - sl.energy) >= 0.3
-          ? 'contraste de energia musical'
-          : null;
+      : sl.musicCue === 'início de frase musical'
+        ? 'início de frase musical'
+        : previousSlot && previousSlot.section !== sl.section
+          ? 'mudança de seção musical'
+          : previousSlot && Math.abs(previousSlot.energy - sl.energy) >= 0.3
+            ? 'contraste de energia musical'
+            : null;
     const lyricMatch = sl.lyricCueKey ? effectiveLyricMatches?.[c.id]?.[sl.lyricCueKey] : undefined;
     const breakdown = scoreSceneCandidate({
       shot: c.shot,
@@ -1261,7 +1268,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
 
           const window: Candidate[] = [];
           const sectionChanged = slotIndex > 0 && fitSlots[slotIndex - 1]!.section !== musicSlot.section;
-          const atEditorialBoundary = musicSlot.isDrop || sectionChanged;
+          const atEditorialBoundary = musicSlot.isDrop || musicSlot.musicCue === 'início de frase musical' || sectionChanged;
           const highEnergy = musicSlot.isDrop || musicSlot.energy >= 0.8;
 
           const isActionScene = (candidate: Candidate) => {
