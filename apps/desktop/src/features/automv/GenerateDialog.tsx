@@ -361,7 +361,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     }
   };
 
-  const runVision = async (scopeOverride: VisionScope = visionScope): Promise<{ labeled: number; failed: number; frameFailures: number } | null> => {
+  const runVision = async (scopeOverride: VisionScope = visionScope): Promise<{ labeled: number; failed: number; frameFailures: number; lyricMatches: NonNullable<GenerateOptions['lyricSceneMatches']> } | null> => {
     if (!platform || vision) return null;
     try {
       const settings = await loadAiSettings(platform);
@@ -409,6 +409,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       let failed = 0;
       let frameFailures = 0;
       let matchCount = 0;
+      const allLyricMatches: NonNullable<GenerateOptions['lyricSceneMatches']> = {};
       for (const e of ready) {
         const targets = session.visionTargets(e.id, scopeOverride, undefined, matchLyrics);
         if (!targets.length) continue;
@@ -430,7 +431,10 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             }
           },
         });
-        if (matchLyrics) setLyricSceneMatches((current) => ({ ...current, ...r.lyricMatches }));
+        if (matchLyrics) {
+          setLyricSceneMatches((current) => ({ ...current, ...r.lyricMatches }));
+          Object.assign(allLyricMatches, r.lyricMatches);
+        }
         matchCount += Object.values(r.lyricMatches).reduce((count, matches) => count + Object.keys(matches).length, 0);
         labeled += r.labeled;
         failed += r.failed;
@@ -441,7 +445,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       toast(failed || frameFailures
         ? { tone: 'warn', title: `${labeled} cenas analisadas`, body: `${failed} cenas sem resposta do modelo; ${frameFailures} quadros não puderam ser extraídos. Rode de novo para tentar as cenas incompletas.` }
         : { tone: 'ok', title: `${labeled} cenas analisadas`, body: matchLyrics ? `${matchCount} combinações de letra/cena retornadas; as demais cenas usam a seleção local.` : 'Escolha os personagens ao lado.' });
-      return { labeled, failed, frameFailures };
+      return { labeled, failed, frameFailures, lyricMatches: allLyricMatches };
     } catch (err) {
       if ((err as Error).name !== 'AbortError') toast({ tone: 'error', title: 'Não deu para analisar as cenas', body: (err as Error).message });
       return null;
@@ -702,7 +706,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         visionAbort.current = null;
       }
 
-      let semanticVisionResult: { labeled: number; failed: number; frameFailures: number } | null = null;
+      let semanticVisionResult: { labeled: number; failed: number; frameFailures: number; lyricMatches: NonNullable<GenerateOptions['lyricSceneMatches']> } | null = null;
+      let effectiveLyricSceneMatches = lyricSceneMatches;
       const semanticPending = ready.reduce((total, episode) => total + session.visionTargets(episode.id, 'all').length, 0);
       if (deepVisionBeforeGenerate && semanticPending > 0) {
         setGenerationStep('Preparando análise semântica de todas as cenas...');
@@ -712,6 +717,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         if (!semanticVisionResult) {
           throw new Error('A análise semântica profunda não foi concluída. Confira o modelo de visão, a autorização de envio externo e tente novamente.');
         }
+        effectiveLyricSceneMatches = { ...lyricSceneMatches, ...semanticVisionResult.lyricMatches };
       }
 
       const directorInputs: EpisodeInput[] = ready.map((episode) => {
@@ -740,7 +746,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         }
       }
 
-      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
+      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches: effectiveLyricSceneMatches, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
       const m = musics.find((a) => a.id === musicId)!;
 
       setGenerationStep('Definindo o objetivo editorial e o arco musical...');
