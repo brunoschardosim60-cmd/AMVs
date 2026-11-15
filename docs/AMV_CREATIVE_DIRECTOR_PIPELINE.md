@@ -2,6 +2,18 @@
 
 > Arquitetura e estado da primeira implementação funcional da Direção Criativa no Auto AMV.
 
+## Incremento editorial de 15/11
+
+A revisão dos dois renders reais mostrou falhas que a primeira camada de direção criativa não media: excesso de enquadramentos parecidos, seleção quase sempre cronológica e mudanças de fonte sem uma transição musical clara. O problema não se resolve adicionando flashes ou tremidas.
+
+Nesta atualização:
+- A janela de busca narrativa deixa de entregar somente a primeira cena disponível. Ela apresenta até 4 alternativas próximas em trechos de menor energia, 5 em trechos intensos e 7 na entrada do drop, respeitando a ordem de origem e limites de look-ahead.
+- A janela favorece preparação/reação/diálogo em trechos calmos e ação/combate em trechos intensos, sem transformar esses rótulos em fatos quando a evidência não existe.
+- Uma mudança para outra sequência/fonte recebe penalidade conservadora quando não há evidência confiável de personagens em comum e não existe quebra musical identificada. Drops e mudanças de seção continuam podendo justificar a troca.
+- O botão de análise semântica foi corrigido para não encaminhar o evento do clique como escopo de análise; esse era o erro TypeScript que bloqueava o CI Windows.
+
+Os testes cobrem a escolha entre alternativas na janela e a penalidade de continuidade sem fronteira musical. Isso comprova o comportamento determinístico do algoritmo, não a qualidade artística final. Ainda é necessária a validação de renders completos no Windows com os mesmos arquivos de entrada e uma revisão humana.
+
 ## Estado implementado nesta PR
 
 A primeira fatia funcional está conectada ao fluxo normal de **Gerar e revisar**:
