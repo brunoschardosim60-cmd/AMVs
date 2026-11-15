@@ -338,7 +338,33 @@ export interface Candidate extends SequencePlanCandidate {
   seq: string;
 }
 
-/** Fala marcante para antes do drop: curta, com impacto alto. */
+/**
+ * Pontua a qualidade editorial de uma fala sem confundir volume/grito com significado.
+ * É uma heurística linguística leve: não tenta inferir emoção nem traduzir o conteúdo.
+ */
+export function scoreSpeechCandidate(s: SpeechSegment): number {
+  const duration = Math.max(0, s.endS - s.startS);
+  const durationFit = Math.max(0, 1 - Math.abs(duration - 2.2) / 4.5);
+  const confidence = Math.max(0, Math.min(1, Number.isFinite(s.confidence) ? s.confidence : 0));
+  const impact = Math.max(0, Math.min(1, Number.isFinite(s.impact) ? s.impact : 0));
+  const rawText = s.text?.trim() ?? '';
+  const normalized = rawText.toLocaleLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/[¿¡]/g, '').replace(/[^\\p{L}\\p{N}' ]/gu, ' ').replace(/\\s+/g, ' ').trim();
+  const words = normalized ? normalized.split(' ') : [];
+  const filler = new Set(['ah', 'oh', 'ei', 'hey', 'vamos', 'sim', 'nao', 'yes', 'yeah', 'no', 'uh', 'ha', 'huh', 'argh', 'okay', 'ok']);
+  let textQuality = words.length === 0 ? 0.12
+    : words.length === 1 ? 0.05
+      : words.length === 2 ? 0.22
+        : words.length <= 9 ? 0.76
+          : words.length <= 14 ? 0.56 : 0.36;
+  if (words.length <= 2 && words.every((word) => filler.has(word))) textQuality = 0.02;
+  if (words.length >= 3 && /[.!?…]\\s*$/.test(rawText)) textQuality = Math.min(1, textQuality + 0.05);
+  if (/\\b(nao vou|nunca vou|eu juro|eu prometo|desist|proteger|salvar|vencer|fight|never|i will|i won't|no matter|impossible|protect|save)\\b/.test(normalized)) {
+    textQuality = Math.min(1, textQuality + 0.12);
+  }
+  return confidence * 0.2 + impact * 0.2 + durationFit * 0.2 + textQuality * 0.4 + (s.kind === 'grito' ? 0.02 : 0);
+}
+
+/** Escolhe uma fala marcante antes do drop, priorizando frase compreensível e completa. */
 export function pickSpeech(eps: EpisodeInput[], maxS: number, exclude: Set<string>, accept?: (ep: EpisodeInput, s: SpeechSegment) => boolean): { ep: EpisodeInput; s: SpeechSegment } | null {
   let best: { ep: EpisodeInput; s: SpeechSegment; score: number } | null = null;
   for (const ep of eps) {
@@ -347,8 +373,8 @@ export function pickSpeech(eps: EpisodeInput[], maxS: number, exclude: Set<strin
       const d = s.endS - s.startS;
       if (d < 0.6 || d > maxS) continue;
       if (accept && !accept(ep, s)) continue;
-      const score = s.impact + (s.kind === 'grito' ? 0.3 : 0) + (s.text ? 0.1 : 0) - Math.abs(d - 2) * 0.05;
-      if (!best || score > best.score) best = { ep, s, score };
+      const score = scoreSpeechCandidate(s);
+      if (!best || score > best.score || (score === best.score && s.startS < best.s.startS)) best = { ep, s, score };
     }
   }
   return best;
@@ -969,7 +995,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       .flatMap((ep) => ep.analysis.speech.filter((sp) => nearPool(ep, sp) || (fight && poolEps.has(ep.assetId))).map((sp) => ({ ep, sp })))
       .filter(({ sp }) => sp.endS - sp.startS >= 0.8 && sp.endS - sp.startS <= 4)
       .filter(({ ep, sp }) => !taken.has(`${ep.assetId}@${sp.startS}`))
-      .sort((a, b) => b.sp.impact - a.sp.impact || a.sp.startS - b.sp.startS);
+      .sort((a, b) => scoreSpeechCandidate(b.sp) - scoreSpeechCandidate(a.sp) || a.sp.startS - b.sp.startS);
     // onde cabe: começa num compasso, trecho calmo da música, afastado das outras falas e do drop
     const quiet = (a: number, b: number) => {
       let sum = 0;
@@ -1018,7 +1044,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       .filter((e) => e.hasAudio && !exclude.has(e.assetId) && hasRequestedSpeechAudio(e, lang))
       .flatMap((ep) => ep.analysis.speech.map((s) => ({ ep, s })))
       .filter((x) => x.s.endS - x.s.startS >= 0.8 && x.s.endS - x.s.startS <= 6)
-      .sort((x, y) => y.s.impact - x.s.impact + (rand() - 0.5) * 0.1);
+      .sort((x, y) => scoreSpeechCandidate(y.s) - scoreSpeechCandidate(x.s) || x.s.startS - y.s.startS);
     let t = 0;
     const chosen: typeof lines = [];
     for (const l of lines) {
