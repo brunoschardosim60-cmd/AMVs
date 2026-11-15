@@ -171,7 +171,12 @@ export function buildCreativeBrief(input: {
   const semanticCoverage = sceneCount ? semanticScenes / sceneCount : 0;
   const speechSegments = input.episodes.reduce((sum, episode) => sum + episode.analysis.speech.length, 0);
   const bpmConfidence = input.music.analysis.bpmConfidence;
-  const confidence = semanticCoverage >= 0.5 ? 'strong' : (semanticScenes > 0 || localVisualScenes > 0) ? 'partial' : 'limited';
+  const styleEvidenceMissing = (input.style === 'letra' && !input.hasTimedLyrics)
+    || (input.style === 'discurso' && speechSegments === 0);
+  const hasVisualEvidence = semanticScenes > 0 || localVisualScenes > 0;
+  const confidence = semanticCoverage >= 0.5 && bpmConfidence >= 0.5 && !styleEvidenceMissing
+    ? 'strong'
+    : hasVisualEvidence ? 'partial' : 'limited';
   const limitations: string[] = [];
   if (semanticCoverage < 0.5) limitations.push('A cobertura de rótulos semânticos confiáveis é parcial. Não afirmar continuidade de personagem, intenção ou consequência sem evidência.');
   if (localVisualScenes < sceneCount) limitations.push('Parte das cenas não tem descritores visuais locais; movimento e enquadramento podem não estar avaliados.');
@@ -322,10 +327,16 @@ function buildBriefAlignment(input: {
   const sortedDurations = videoClips.map((clip) => clip.durationUs / SECOND).sort((a, b) => a - b);
   const medianDuration = sortedDurations.length ? sortedDurations[Math.floor(sortedDurations.length / 2)]! : 0;
   const roles = new Set(brief.arc.map((beat) => beat.role));
+  const populatedBeats = brief.arc.filter((beat) =>
+    videoClips.some((clip) => clip.timelineStartUs < beat.endS * SECOND && clipEndUs(clip) > beat.startS * SECOND),
+  ).length;
+  const musicalCoverage = brief.arc.length ? populatedBeats / brief.arc.length : 0;
   checks.push({
-    criterion: 'Estrutura musical',
-    status: brief.arc.length > 0 && durationS > 0 ? 'met' : 'unknown',
-    evidence: brief.arc.length ? brief.arc.map((beat) => beat.label).join(' → ') + '; ' + brief.evidence.bpm + ' BPM com ' + brief.evidence.bpmConfidence + '% de confiança.' : 'A análise não forneceu uma estrutura musical utilizável.',
+    criterion: 'Cobertura da estrutura musical',
+    status: !brief.arc.length || !videoClips.length ? 'unknown' : musicalCoverage >= 0.8 ? 'met' : 'review',
+    evidence: brief.arc.length
+      ? populatedBeats + '/' + brief.arc.length + ' partes musicais têm planos de vídeo; ' + brief.evidence.bpm + ' BPM com ' + brief.evidence.bpmConfidence + '% de confiança.'
+      : 'A análise não forneceu seções musicais suficientes para conferir cobertura.',
   });
   checks.push({
     criterion: 'Cobertura semântica das cenas',
@@ -358,14 +369,14 @@ function buildBriefAlignment(input: {
   } else if (brief.style === 'superacao') {
     const hasArc = roles.has('opening') && (roles.has('build') || roles.has('development')) && roles.has('climax');
     checks.push({
-      criterion: 'Arco de preparação e virada',
-      status: hasArc ? 'met' : 'review',
-      evidence: 'Papéis musicais encontrados: ' + ([...roles].join(', ') || 'nenhum') + '. Isso verifica a estrutura da música, não prova uma história de superação nas imagens.',
+      criterion: 'Estrutura musical disponível para a virada',
+      status: hasArc ? 'review' : 'unknown',
+      evidence: 'Papéis musicais encontrados: ' + ([...roles].join(', ') || 'nenhum') + '. A estrutura cria espaço para um arco, mas a análise atual não comprova obstáculo, transformação ou vitória nas imagens.',
     });
   } else if (brief.style === 'letra') {
     const lyricClips = textClips.filter((clip) => /letra da música|palavra da letra/i.test(clip.reason ?? '')).length;
     checks.push({
-      criterion: 'Letra sincronizada',
+      criterion: 'Legendas da letra inseridas',
       status: brief.evidence.timedLyrics ? (lyricClips > 0 ? 'met' : 'review') : 'unknown',
       evidence: brief.evidence.timedLyrics ? lyricClips + ' clipes de letra foram inseridos.' : 'Nenhum arquivo de letra com tempo foi fornecido.',
     });
