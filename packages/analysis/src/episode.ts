@@ -133,9 +133,15 @@ export function detectSpeech(feat: { t: number[]; db: number[]; voiceRatio: numb
   const out: SpeechSegment[] = [];
   if (subtitles.length) {
     // legendas: tempo exato e texto
+    const voiceBandDb = (i: number) => {
+      const ratio = Math.max(0, Math.min(1, feat.voiceRatio[i] ?? 0));
+      return (feat.db[i] ?? -90) + 10 * Math.log10(Math.max(0.001, ratio));
+    };
     const loudAt = (a: number, b: number) => {
       const xs: number[] = [];
-      for (let i = 0; i < feat.t.length; i++) if (feat.t[i]! >= a && feat.t[i]! <= b) xs.push(feat.db[i]!);
+      for (let i = 0; i < feat.t.length; i++) {
+        if (feat.t[i]! >= a && feat.t[i]! <= b && (feat.voiceRatio[i] ?? 0) >= 0.25) xs.push(voiceBandDb(i));
+      }
       return xs.length ? percentile(xs, 90) : -90;
     };
     const louds = subtitles.map((c) => loudAt(c.startS, c.endS));
@@ -177,7 +183,12 @@ export function detectSpeech(feat: { t: number[]; db: number[]; voiceRatio: numb
   // gritos: os 12% mais altos entre os trechos de voz
   const peakOf = (s: SpeechSegment) => {
     const xs: number[] = [];
-    for (let i = 0; i < n; i++) if (feat.t[i]! >= s.startS && feat.t[i]! <= s.endS) xs.push(feat.db[i]!);
+    for (let i = 0; i < n; i++) {
+      if (feat.t[i]! >= s.startS && feat.t[i]! <= s.endS && (feat.voiceRatio[i] ?? 0) >= 0.55) {
+        const ratio = Math.max(0.001, Math.min(1, feat.voiceRatio[i] ?? 0));
+        xs.push((feat.db[i] ?? -90) + 10 * Math.log10(ratio));
+      }
+    }
     return xs.length ? percentile(xs, 90) : -90;
   };
   const peaks = out.map(peakOf);
