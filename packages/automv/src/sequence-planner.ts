@@ -162,7 +162,7 @@ export function planSequence<TCandidate extends SequencePlanCandidate, TSlot>(
         return [];
       };
       let ranked = rank(pool);
-      if (!repeated && !ranked.length && options.candidateWindow) {
+      if (!repeated && !ranked.length && options.candidateWindow && options.mode !== 'chronological') {
         const sameSequence = forward.filter((candidate) => preferredSequences.has(`${candidate.assetId}#${candidate.sequenceOrder}`));
         ranked = rankNearest(sameSequence);
         if (!ranked.length) ranked = rankNearest(forward);
