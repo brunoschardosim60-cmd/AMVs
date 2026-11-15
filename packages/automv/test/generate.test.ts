@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { shotKey, type EpisodeAnalysis, type MusicAnalysis, type Shot } from '@amv/analysis';
 import { applyCommand, ClipSchema, clipEndUs, createProject, evaluateKeyframes, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
-import { chooseMusicRange, generateAmv, lyricCueKey, makeSlots, recommendStyle, styleDef, type EpisodeInput, type GenerateOptions, type MusicInput, voiceGainDb } from '../src/index.js';
+import { chooseMusicRange, generateAmv, lyricCueKey, makeSlots, recommendStyle, styleDef, type EpisodeInput, type GenerateOptions, type MusicInput, voiceGainDb, scoreSpeechCandidate } from '../src/index.js';
 
 const S = 1_000_000;
 
@@ -245,6 +245,30 @@ describe('trecho da música', () => {
     expect(avg(emotional)).toBeGreaterThan(avg(hype));
     expect(hype.length).toBeLessThan(analysis.beats.filter((beat) => beat >= range[0] && beat <= range[1]).length);
 
+  });
+});
+
+describe('qualidade editorial das falas', () => {
+  const segment = (text: string, kind: 'fala' | 'grito', impact: number, duration = 2.2) => ({
+    startS: 0, endS: duration, kind, confidence: 0.9, text, impact,
+  });
+
+  it('prioriza uma frase completa sobre um grito curto e genérico, mesmo com impacto menor', () => {
+    const phrase = segment('Eu não vou desistir!', 'fala', 0.72);
+    const shout = segment('Vamos!', 'grito', 1);
+    expect(scoreSpeechCandidate(phrase)).toBeGreaterThan(scoreSpeechCandidate(shout));
+  });
+
+  it('não recompensa transcrição longa e pouco específica só pelo número de palavras', () => {
+    const meaningful = segment('Eu vou proteger todos vocês!', 'fala', 0.7);
+    const rambling = segment('Hoje o tempo está bom para passear no parque com meus amigos', 'fala', 0.95, 4);
+    expect(scoreSpeechCandidate(meaningful)).toBeGreaterThan(scoreSpeechCandidate(rambling));
+  });
+
+  it('mantém gritos fortes elegíveis quando não há uma frase melhor', () => {
+    const shout = segment('Eu não vou desistir!', 'grito', 0.95);
+    const neutral = segment('A porta está aberta agora', 'fala', 0.3, 3);
+    expect(scoreSpeechCandidate(shout)).toBeGreaterThan(scoreSpeechCandidate(neutral));
   });
 });
 
