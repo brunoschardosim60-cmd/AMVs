@@ -1280,7 +1280,10 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   };
 
   const sequencePlan = planSequence(fitSlots, candidates, {
-    mode: organizationMode,
+    // No foco em lutas, percorre as sequências escolhidas em ordem de origem.
+    // O modo narrativo podia começar pela luta mais forte e, ao esgotá-la,
+    // considerar a luta anterior inacessível, repetindo cenas da primeira.
+    mode: fight ? 'chronological' : organizationMode,
     seed: opts.seed,
     score: (slot, candidate, previous, previousSlot, history) => scoreCandidate(slot, candidate, previous, previousSlot, history)?.score ?? Number.NEGATIVE_INFINITY,
     candidateWindow: organizationMode === 'narrative' && !fight && fitSlots.length > 3
