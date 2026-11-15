@@ -288,8 +288,8 @@ describe('gerar AMV — hype', () => {
       focus: 'mix', useSpeech: true,
     });
     const voiceTrackId = p.tracks.find((track) => track.name === 'Vozes')!.id;
-    const voiceClips = result.commands.filter((command) =>
-      command.type === 'clip.add' && command.clip.trackId === voiceTrackId,
+    const voiceClips = result.commands.flatMap((command) =>
+      command.type === 'clip.add' && command.clip.trackId === voiceTrackId ? [command.clip] : [],
     );
 
     // A legenda em português não combina com o áudio japonês, mas não deve suprimir a fala.
