@@ -332,8 +332,9 @@ describe('pontuação contextual de cenas', () => {
       style: styleDef('emocional'),
       vision: vision({ emotion: 'tristeza', confidence: 0.9 }),
     });
-    expect(identified.emotion).toBe(0.68);
+    expect(identified.emotion).toBeCloseTo(0.8);
     expect(identified.reasons).toContain('emoção visual identificada (tristeza)');
+    expect(identified.reasons).toContain('brief emocional: expressão/emoção confiável reservada para o auge');
   });
 
   it('ignora confiança visual inválida ou acima do intervalo documentado', () => {
