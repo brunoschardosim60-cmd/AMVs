@@ -996,6 +996,9 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           <section className="rounded-md border border-line-soft p-3">
             <h3 className="text-xs font-semibold text-ink">Objetivo editorial · {result.brief.title}</h3>
             <p className="mt-1 text-xs text-ink-soft">{result.brief.objective}</p>
+            <p className="mt-1 text-2xs text-muted">
+              {result.brief.preferences.durationS}s · intensidade {INTENSITY[result.brief.preferences.intensity].toLowerCase()} · direção {result.brief.preferences.editorialDirection === 'cinematic' ? 'cinematográfica' : result.brief.preferences.editorialDirection === 'hype' ? 'hype' : 'balanceada'} · organização {result.brief.preferences.organizationMode === 'chronological' ? 'cronológica' : result.brief.preferences.organizationMode === 'free' ? 'livre' : 'narrativa'} · {result.brief.preferences.focus === 'fight' ? 'foco em luta' : 'mistura de cenas'}.
+            </p>
             <div className="mt-2 flex flex-wrap gap-1.5 text-2xs text-muted">
               <span className="rounded bg-raised px-2 py-1">{result.brief.evidence.scenes} cenas base</span>
               <span className="rounded bg-raised px-2 py-1">{result.brief.evidence.semanticCoverage}% com semântica confiável</span>
