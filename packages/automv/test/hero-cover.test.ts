@@ -167,6 +167,24 @@ describe('findHeroCoverFrame', () => {
     expect(cover?.score).toBeGreaterThan(0.7);
   });
 
+  it('ignora identidade e ação de visão com confiança baixa ao escolher a capa', () => {
+    const shot: Shot = {
+      startS: 22, endS: 25, motion: 0.7, loud: 0.6, intensity: 0.75,
+      brightness: 0.52, tags: ['ação'], line: null, peakS: 23.5,
+    };
+    const ep = createEpisode('ep1', [shot]);
+    const uncertain: ShotVision = {
+      characters: ['Goku'], fight: true, action: 'combate',
+      confidence: 0.4, note: '',
+    };
+
+    const cover = findHeroCoverFrame([ep], undefined, () => uncertain);
+
+    expect(cover).toBeDefined();
+    expect(cover?.reason).not.toContain('Goku');
+    expect(cover?.reason).not.toContain('personagem em destaque');
+  });
+
   it('retorna null se não houver planos válidos', () => {
     const ep = createEpisode('ep1', []);
     const cover = findHeroCoverFrame([ep]);
