@@ -348,3 +348,13 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 
 - **Anti-repetição durante a busca global:** o beam search agora passa os últimos seis planos escolhidos ao score de cada candidato. Antes, o histórico só era preenchido durante a criação dos clipes, depois que a sequência já estava decidida; assim, a penalidade de repetição não influenciava a escolha real. O mesmo histórico é usado na justificativa final.
 - **Validação:** teste do planejador cria dois IDs para o mesmo trecho e verifica que o histórico faz a busca escolher uma cena-fonte diferente.
+
+
+## 2026-11-14 · Integração segura do patch de melhorias
+- **Reserva de cenas:** quando o beam search cronológico não consegue continuar, o gerador tenta uma alternativa global. A seleção continua sujeita ao requisito duração do plano >= 0,6 × duração do slot; não existe bypass para forçar um clipe a invadir a cena seguinte. A reserva pode repetir ou saltar na narrativa e gera aviso. Se nenhuma fonte válida existir, o slot permanece vazio e o motivo é informado.
+- **Cenas quase pretas:** planos com tag escura ficam em reserva e só entram quando não há planos normais elegíveis. Planos apenas escuros recebem levantamento moderado de exposição/sombras quando efeitos estão ligados.
+- **Cortes e letras:** fronteiras dos slots são quantizadas pela taxa racional do projeto. Letras que cruzam janelas de impacto são posicionadas antes/depois quando há espaço; linhas curtas tentam atingir 0,9 s sem sobrepor a próxima linha ou um impacto. Não se inventa timing de palavras.
+- **Movimento e cor:** push-in/pull-out suave é reservado a planos longos sem keyframes de impacto existentes. A cor recebe ajustes discretos por energia apenas quando não há grade do estilo/perfil; não se altera o proxy padrão.
+- **Vozes:** loudnessDb armazena percentil 90 de dB RMS aproximado por fala. O gerador aplica correção de ganho limitada a ±4 dB, preservando ganho base quando a análise antiga não tem a métrica. Isso não é LUFS nem garantia contra clipping; export e escuta continuam necessários.
+- **Render:** escalonamento final usa Lanczos. Proxy permanece 540p/CRF 26 para evitar aumento de CPU/armazenamento no fluxo de edição.
+- **Validação:** testes de regressão foram adicionados aos pacotes analysis/automv. A execução das suítes e a inspeção de render real/WebView2 continuam pendentes até haver resultado verificável do CI e validação com mídia autorizada.
