@@ -10,6 +10,7 @@ import type { ProjectSession } from '../../core/session';
 import { useApp, useLibraryVersion, useSessionVersion } from '../../store';
 import { displayTitle, recommend, STYLE_THEME } from '@amv/music';
 import { applyCommand, clipEndUs, newId, sourceTimeAt, type Clip, type Project } from '@amv/project';
+import { evaluateAudiovisualQuality } from '@amv/automv';
 import { Button, Dialog } from '../../ui/controls';
 import { MusicalMap } from './MusicalMap';
 import { RegenerationCompare } from './RegenerationCompare';
@@ -653,9 +654,37 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
 
       const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
 
-      setGenerationStep('Sincronizando golpes com a batida e aplicando efeitos...');
-      setGenerationProgress(90);
+      setGenerationStep('Auditando repetição, continuidade, ritmo e sincronização...');
+      setGenerationProgress(86);
       await new Promise((resolve) => setTimeout(resolve, 120));
+
+      // Avalia apenas os clipes desta geração, sem misturar problemas de outras partes do projeto.
+      const generatedClipIds = new Set(r.commands.flatMap((command) =>
+        command.type === 'clip.add' ? [command.clip.id] : [],
+      ));
+      const previewProject = applyCommand(session.project, {
+        type: 'batch',
+        label: 'Avaliar qualidade do AMV gerado',
+        commands: r.commands,
+      }).project;
+      const generatedProject: Project = {
+        ...previewProject,
+        clips: previewProject.clips.filter((clip) => generatedClipIds.has(clip.id)),
+      };
+      const quality = evaluateAudiovisualQuality({
+        project: generatedProject,
+        episodes: new Map(inputs.map((episode) => [episode.assetId, episode.analysis])),
+        visions: new Map(inputs.flatMap((episode) => episode.vision ? [[episode.assetId, episode.vision] as const] : [])),
+        music: new Map([[m.id, music]]),
+      });
+      const reviewIssues = quality.issues.filter((item) => item.severity === 'high' || item.severity === 'medium');
+      const qualityWarnings = reviewIssues.slice(0, 6).map((item) =>
+        `Revisar ${mmss(item.startUs / S)} — ${item.type}: ${item.suggestion}`,
+      );
+      if (reviewIssues.length > 6) {
+        qualityWarnings.push(`Há mais ${reviewIssues.length - 6} pontos de qualidade para revisar no relatório audiovisual.`);
+      }
+      r.warnings.push(...qualityWarnings);
       if (sfxError) r.warnings.push(`Não consegui preparar os efeitos sonoros (${sfxError}): o vídeo saiu sem eles.`);
       // guarda o que estava antes: nada se perde
       await session.saveVersion(`Antes de gerar (${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})`);
@@ -671,7 +700,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       const s = r.summary;
       setResult({
         warnings: r.warnings,
-        text: `${s.clips} cenas, ${s.cuts} cortes${s.drop !== null ? `, drop em ${s.drop.toFixed(1)} s` : ''}${s.voices ? `, ${s.voices} fala(s)${s.speech ? ` (começando por "${s.speech}")` : ''}` : ''}. Trecho da música: ${mmss(s.musicRange[0])}–${mmss(s.musicRange[1])}. Direção: ${[...new Set(s.direction.map((beat) => beat.role))].map((role) => role === 'opening' ? 'Abertura' : role === 'build' ? 'Crescimento' : role === 'climax' ? 'Clímax' : role === 'release' ? 'Respiro' : role === 'ending' ? 'Encerramento' : 'Desenvolvimento').join(' → ')}.${s.focus === 'fight' && s.fights.length ? ` Luta usada: ${s.fights.join(' + ')}.` : s.focus === 'mix' ? ' Cenas de vários pontos (modo misturar).' : ''}${s.hitsSynced ? ` ${s.hitsSynced} golpes encaixados na batida.` : ''}${s.speedRamps ? ` ${s.speedRamps} rampas de velocidade aplicadas.` : ''}${s.sfx ? ` ${s.sfx} efeitos sonoros.` : ''}`,
+        text: `${s.clips} cenas, ${s.cuts} cortes. Avaliação automática: ${quality.issues.length ? `${quality.issues.length} ponto(s) para revisar` : 'nenhum problema objetivo encontrado' }${s.drop !== null ? `, drop em ${s.drop.toFixed(1)} s` : ''}${s.voices ? `, ${s.voices} fala(s)${s.speech ? ` (começando por "${s.speech}")` : ''}` : ''}. Trecho da música: ${mmss(s.musicRange[0])}–${mmss(s.musicRange[1])}. Direção: ${[...new Set(s.direction.map((beat) => beat.role))].map((role) => role === 'opening' ? 'Abertura' : role === 'build' ? 'Crescimento' : role === 'climax' ? 'Clímax' : role === 'release' ? 'Respiro' : role === 'ending' ? 'Encerramento' : 'Desenvolvimento').join(' → ')}.${s.focus === 'fight' && s.fights.length ? ` Luta usada: ${s.fights.join(' + ')}.` : s.focus === 'mix' ? ' Cenas de vários pontos (modo misturar).' : ''}${s.hitsSynced ? ` ${s.hitsSynced} golpes encaixados na batida.` : ''}${s.speedRamps ? ` ${s.speedRamps} rampas de velocidade aplicadas.` : ''}${s.sfx ? ` ${s.sfx} efeitos sonoros.` : ''}`,
       });
     } catch (e) {
       toast({ tone: 'error', title: 'Não deu para gerar', body: (e as Error).message });
