@@ -123,9 +123,12 @@ describe('foco na luta', () => {
     expect(pool.length).toBe(2); // só a luta curta não dá 40 cortes
     const { r, on } = run([ep], { focus: 'fight' });
     expect(r.warnings.some((w) => w.includes('repetem'))).toBe(false);
-    expect(on('V1').some(inA)).toBe(true);
-    expect(on('V1').some(inB)).toBe(true);
-    expect(on('V1').every((c) => inA(c) || inB(c))).toBe(true);
+    const clips = on('V1');
+    const fromFightA = (c: Clip) => srcS(c) >= 0 && srcS(c) < 18;
+    const fromFightB = (c: Clip) => srcS(c) >= 70 && srcS(c) < 190;
+    expect(clips.some(fromFightA)).toBe(true);
+    expect(clips.some(fromFightB)).toBe(true);
+    expect(clips.every((c) => fromFightA(c) || fromFightB(c))).toBe(true);
     expect(new Set(on('V1').map((c) => `${c.assetId}@${c.sourceInUs}`)).size).toBe(on('V1').length);
   });
 
