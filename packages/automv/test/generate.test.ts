@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { shotKey, type EpisodeAnalysis, type MusicAnalysis, type Shot } from '@amv/analysis';
 import { applyCommand, ClipSchema, clipEndUs, createProject, evaluateKeyframes, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
-import { chooseMusicRange, generateAmv, lyricCueKey, makeSlots, recommendStyle, styleDef, type EpisodeInput, type GenerateOptions, type MusicInput } from '../src/index.js';
+import { chooseMusicRange, generateAmv, lyricCueKey, makeSlots, recommendStyle, styleDef, type EpisodeInput, type GenerateOptions, type MusicInput, voiceGainDb } from '../src/index.js';
 
 const S = 1_000_000;
 
@@ -714,5 +714,112 @@ describe('melhorias avançadas de AMV', () => {
     expect(dropClip).toBeDefined();
     const hasRgbSplit = dropClip?.effects.some((fx) => fx.effect === 'rgb_split');
     expect(hasRgbSplit).toBe(true);
+  });
+});
+
+
+describe('integração das melhorias do patch', () => {
+  it('preenche slots sem cena planejada apenas com planos que respeitam o limite 0,6×', () => {
+    const p = project();
+    const ep = episode('ep1', 6, 3);
+    const r = generateAmv(p, music(), [ep], {
+      ...base, durationS: 60, musicStartS: 16, useSpeech: false,
+      organizationMode: 'chronological', focus: 'mix',
+    });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const trackId = out.tracks.find((track) => track.name === 'V1')!.id;
+    const clips = out.clips.filter((clip) => clip.trackId === trackId)
+      .sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+    expect(clips.length).toBeGreaterThan(6);
+    expect(clips[0]!.timelineStartUs).toBeLessThanOrEqual(S / 30);
+    for (let i = 1; i < clips.length; i++) {
+      expect(Math.abs(clips[i]!.timelineStartUs - clipEndUs(clips[i - 1]!))).toBeLessThanOrEqual(S / 30);
+    }
+    expect(clipEndUs(clips[clips.length - 1]!)).toBeGreaterThanOrEqual(59 * S);
+    expect(r.warnings.join(' ')).toMatch(/cenas de reserva|trecho\(s\) continuaram sem cena/);
+    for (const clip of clips) expect(clip.sourceOutUs).toBeLessThanOrEqual(24 * S);
+  });
+
+  it('desloca letra que cruza o drop para depois do impacto, em vez de apagar', () => {
+    const r = run({ style: 'hype', useSpeech: false, lyrics: [{ startS: 39.8, endS: 43, text: 'a letra continua depois do drop' }] });
+    const line = r.on('Legendas').find((clip) => clip.reason === 'Letra da música');
+    expect(line).toBeDefined();
+    expect(line!.timelineStartUs).toBeGreaterThan(24.19 * S);
+  });
+
+  it('mantém uma linha curta por pelo menos 0,9 s sem alcançar a próxima', () => {
+    const lyrics = [
+      { startS: 20, endS: 20.3, text: 'oi' },
+      { startS: 21.5, endS: 23, text: 'segunda linha' },
+    ];
+    const lines = run({ style: 'hype', useSpeech: false, lyrics }).on('Legendas')
+      .filter((clip) => clip.reason === 'Letra da música');
+    const first = lines.find((clip) => clip.text?.text === 'oi');
+    expect(first).toBeDefined();
+    expect(first!.durationUs).toBeGreaterThanOrEqual(0.85 * S);
+    const second = lines.find((clip) => clip.text?.text === 'segunda linha');
+    if (second) expect(clipEndUs(first!)).toBeLessThanOrEqual(second.timelineStartUs + 1);
+  });
+
+  it('voiceGainDb limita a correção e mantém o ganho antigo quando não há medição', () => {
+    expect(voiceGainDb(2, undefined)).toBe(2);
+    expect(voiceGainDb(2, -18)).toBe(2);
+    expect(voiceGainDb(2, -10)).toBeLessThan(2);
+    expect(voiceGainDb(2, -30)).toBe(6);
+    expect(voiceGainDb(3, -2)).toBe(-1);
+  });
+
+  it('aplica movimento discreto em planos longos e respeita useEffects=false', () => {
+    const animated = run({ useEffects: true, durationS: 40, useSpeech: false }).on('V1');
+    expect(animated.some((clip) => (clip.keyframes['transform.scale']?.length ?? 0) >= 2)).toBe(true);
+    const noEffects = run({ useEffects: false, durationS: 40, useSpeech: false }).on('V1');
+    expect(noEffects.some((clip) => (clip.keyframes['transform.scale']?.length ?? 0) >= 2)).toBe(false);
+  });
+
+  it('snap dos slots mantém todos os cortes na grade de frames mesmo com BPM 138', () => {
+    const m = music();
+    const step = 60 / 138;
+    const beats = Array.from({ length: 200 }, (_, i) => i * step);
+    m.analysis = { ...m.analysis, bpm: 138, beats, downbeats: beats.filter((_, i) => i % 4 === 0) };
+    const p = project();
+    const r = generateAmv(p, m, [episode('ep1', 150, 3), episode('ep2', 150, 51)], {
+      ...base, durationS: 30, musicStartS: 0, useSpeech: false,
+    });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const trackId = out.tracks.find((track) => track.name === 'V1')!.id;
+    const clips = out.clips.filter((clip) => clip.trackId === trackId);
+    const frameUs = S / 30;
+    expect(clips.length).toBeGreaterThan(10);
+    for (const clip of clips) {
+      expect(Math.abs(clip.timelineStartUs / frameUs - Math.round(clip.timelineStartUs / frameUs))).toBeLessThan(0.02);
+    }
+  });
+
+  it('reserva cenas quase pretas e só as usa quando não há alternativa', () => {
+    const ep = episode('ep1', 150, 3);
+    ep.analysis.shots.forEach((shot, i) => {
+      if (i % 2 === 0) { shot.brightness = 0.04; shot.tags = [...shot.tags, 'escura']; }
+    });
+    const p = project();
+    const r = generateAmv(p, music(), [ep], { ...base, durationS: 30, musicStartS: 0, useSpeech: false, focus: 'mix' });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const trackId = out.tracks.find((track) => track.name === 'V1')!.id;
+    const clips = out.clips.filter((clip) => clip.trackId === trackId);
+    expect(clips.length).toBeGreaterThan(5);
+    for (const clip of clips) expect(Math.floor(clip.sourceInUs / S / 4) % 2).toBe(1);
+  });
+
+  it('levanta discretamente exposição de cenas escuras utilizáveis', () => {
+    const ep = episode('ep1', 150, 3);
+    for (const shot of ep.analysis.shots) shot.brightness = 0.15;
+    const p = project();
+    const r = generateAmv(p, music(), [ep], { ...base, durationS: 20, musicStartS: 0, useSpeech: false, focus: 'mix' });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const trackId = out.tracks.find((track) => track.name === 'V1')!.id;
+    const clips = out.clips.filter((clip) => clip.trackId === trackId);
+    expect(clips.length).toBeGreaterThan(3);
+    expect(clips.every((clip) => clip.effects.some((effect) =>
+      effect.effect === 'color' && Number(effect.params.exposure ?? 0) > 0,
+    ))).toBe(true);
   });
 });
