@@ -57,5 +57,7 @@ describe('LUT de color grading', () => {
     const filter = job.args[job.args.indexOf('-filter_complex') + 1]!;
     expect(filter).toContain("lut3d=file='C\\:/Temp/grade.cube':interp=trilinear");
     expect(filter).not.toContain('cuda');
+    expect(filter).toContain('flags=lanczos');
+    expect(filter).not.toContain('flags=bicubic');
   });
 });
