@@ -7,9 +7,9 @@
 3. **Movimento suave:** planos longos sem keyframes de impacto recebem push-in/pull-out discreto alternado. Planos curtos, drops e keyframes já existentes não recebem movimento redundante.
 4. **Alinhamento de frames:** fronteiras dos slots são quantizadas pela taxa racional do projeto; fronteiras compartilhadas usam o mesmo arredondamento.
 5. **Qualidade da cena:** o score penaliza brilho muito baixo, superexposição e quase ausência de movimento em trechos musicais intensos.
-6. **Cenas escuras:** a tag escura separa cenas para uma reserva. Elas só são usadas se não houver material normal elegível. Cenas utilizáveis mas escuras recebem uma correção moderada de exposição/sombras com efeitos ligados.
+6. **Cenas escuras:** a tag escura separa cenas para uma reserva. Elas só entram em um slot quando nenhum plano normal consegue cobri-lo respeitando 0,6×. Cenas utilizáveis mas escuras recebem uma correção moderada de exposição/sombras com efeitos ligados.
 7. **Cor por energia:** contraste/saturação ou vinheta sutis são aplicados somente quando o estilo/perfil não oferece grade de cor.
-8. **Volume das falas:** a análise registra dB RMS aproximado (percentil 90) por fala. A geração corrige o ganho em até ±4 dB. É uma primeira compensação relativa, não normalização LUFS e não garantia contra clipping.
+8. **Volume das falas:** a análise registra dB RMS aproximado na banda vocal (percentil 90) e a faixa usada na medição. A geração corrige o ganho em até ±4 dB somente quando a faixa escolhida é a mesma faixa medida; análises antigas são refeitas pela versão e4. É uma primeira compensação relativa, não normalização LUFS e não garantia contra clipping.
 9. **Render:** filtros de escala final usam Lanczos. O proxy segue em 540p/CRF 26 para não aumentar o custo de CPU e armazenamento durante a edição.
 
 ## Testes adicionados
