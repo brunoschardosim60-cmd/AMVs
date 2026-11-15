@@ -760,6 +760,37 @@ describe('integração das melhorias do patch', () => {
     if (second) expect(clipEndUs(first!)).toBeLessThanOrEqual(second.timelineStartUs + 1);
   });
 
+  it('não usa loudness da faixa japonesa para corrigir uma fala renderizada da faixa portuguesa', () => {
+    const ep = episode('ep1', 30, 3);
+    ep.audioStreams = [
+      { index: 1, language: 'jpn', title: 'Japanese' },
+      { index: 2, language: 'por', title: 'Português' },
+    ];
+    ep.analysis.speechAudioStreamIndex = 1;
+    for (const speech of ep.analysis.speech) speech.loudnessDb = -8;
+    const p = project();
+    const portuguese = generateAmv(p, music(), [ep], {
+      ...base, style: 'discurso', durationS: 20, musicStartS: 0,
+      voiceLang: 'pt', useSpeech: true, showText: false,
+    });
+    const voiceTrackId = p.tracks.find((track) => track.name === 'Vozes')!.id;
+    const ptClips = portuguese.commands.filter((command) =>
+      command.type === 'clip.add' && command.clip.trackId === voiceTrackId,
+    );
+    expect(ptClips.length).toBeGreaterThan(0);
+    expect(ptClips.every((command) => command.type === 'clip.add' && command.clip.audio.gainDb === 2)).toBe(true);
+
+    const original = generateAmv(project(), music(), [ep], {
+      ...base, style: 'discurso', durationS: 20, musicStartS: 0,
+      voiceLang: 'original', useSpeech: true, showText: false,
+    });
+    const originalClips = original.commands.filter((command) =>
+      command.type === 'clip.add' && command.clip.trackId === voiceTrackId,
+    );
+    expect(originalClips.length).toBeGreaterThan(0);
+    expect(originalClips.every((command) => command.type === 'clip.add' && command.clip.audio.gainDb === -2)).toBe(true);
+  });
+
   it('voiceGainDb limita a correção e mantém o ganho antigo quando não há medição', () => {
     expect(voiceGainDb(2, undefined)).toBe(2);
     expect(voiceGainDb(2, -18)).toBe(2);
