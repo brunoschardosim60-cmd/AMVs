@@ -1119,13 +1119,15 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     ? matchLyricsSemantics(opts.lyrics, candidates, (c) => visionOf(c.ep, c.shot))
     : undefined);
 
-  /** IDs das últimas cenas usadas, para anti-repetição reforçada no scoring. */
-  const recentSceneIds: string[] = [];
-  /** Enquadramentos dos últimos cortes, para variedade de enquadramento no scoring. */
-  const recentFramings: string[] = [];
   const RECENT_WINDOW = 6;
 
-  const scoreCandidate = (sl: Slot, c: Candidate, previous: Candidate | null, previousSlot: Slot | null) => {
+  const scoreCandidate = (
+    sl: Slot,
+    c: Candidate,
+    previous: Candidate | null,
+    previousSlot: Slot | null,
+    history: readonly Candidate[] = [],
+  ) => {
     const len = sl.endS - sl.startS;
     const shotLen = c.shot.endS - c.shot.startS;
     // O retiming mínimo é 0,6x: abaixo disso o source range ultrapassa o plano e invade a cena seguinte.
@@ -1166,8 +1168,11 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       transitionCue,
       sourceJumpS: previous?.ep.assetId === c.ep.assetId ? c.shot.startS - previous.shot.endS : null,
       creativeEmphasis: opts.creativeEmphasis,
-      recentSceneIds: [...recentSceneIds],
-      recentFramings: [...recentFramings],
+      recentSceneIds: history.slice(-RECENT_WINDOW).reverse().map((item) => item.ep.assetId + '@' + item.shot.startS),
+      recentFramings: history.slice(-RECENT_WINDOW).reverse().flatMap((item) => {
+        const framing = visionOf(item.ep, item.shot)?.framing;
+        return framing ? [framing] : [];
+      }),
     });
     const dropSequenceBonus = sl.isDrop && opts.focus === 'mix' && previous?.ep.assetId === c.ep.assetId && c.sequenceOrder > previous.sequenceOrder
       ? MIX_SEQUENCE_DROP_BONUS
@@ -1178,7 +1183,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const sequencePlan = planSequence(fitSlots, candidates, {
     mode: organizationMode,
     seed: opts.seed,
-    score: (slot, candidate, previous, previousSlot) => scoreCandidate(slot, candidate, previous, previousSlot)?.score ?? Number.NEGATIVE_INFINITY,
+    score: (slot, candidate, previous, previousSlot, history) => scoreCandidate(slot, candidate, previous, previousSlot, history)?.score ?? Number.NEGATIVE_INFINITY,
     candidateWindow: organizationMode === 'narrative' && fitSlots.length > 3
       ? (slot, musicSlot, forward, progress) => {
           const byAsset = new Map<string, Candidate[]>();
@@ -1232,11 +1237,12 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   /** Para os efeitos sonoros: onde cada corte/golpe aconteceu na timeline. */
   const cutsLog: { startS: number; len: number; energy: number; intensity: number; isDrop: boolean; hitAtS: number | null; lyricCueKey?: string; lyricMatchScore?: number; lyricMatchReason?: string }[] = [];
 
+  const selectedHistory: Candidate[] = [];
   for (const [slotIndex, sl] of fitSlots.entries()) {
     const len = sl.endS - sl.startS;
     const c = sequencePlan.choices[slotIndex];
     if (!c) continue;
-    const scored = scoreCandidate(sl, c, prev, prevSlot);
+    const scored = scoreCandidate(sl, c, prev, prevSlot, selectedHistory);
     if (!scored) continue;
     const narrativeBeat = narrativeAt(direction, (sl.startS + sl.endS) / 2);
     const target = Math.min(1, Math.max(0, lowI + (highI - lowI) * sl.energy + boost + (sl.isDrop ? 0.15 : 0)));
@@ -1532,14 +1538,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra', sl.isDrop, 0, timing, 'lyrics-cinematic') });
     }
     used.add(c.id);
-    // rastrear cenas e enquadramentos recentes para anti-repetição
-    recentSceneIds.unshift(c.ep.assetId + '@' + c.shot.startS);
-    if (recentSceneIds.length > RECENT_WINDOW) recentSceneIds.pop();
-    const candidateFraming = visionOf(c.ep, c.shot)?.framing;
-    if (candidateFraming) {
-      recentFramings.unshift(candidateFraming);
-      if (recentFramings.length > RECENT_WINDOW) recentFramings.pop();
-    }
+    // Mantém o mesmo histórico usado pelo planejador para justificar a escolha.
+    selectedHistory.push(c);
+    if (selectedHistory.length > RECENT_WINDOW) selectedHistory.shift();
     const impactAtUs = hit ? timelineLocalAtSource(clip, us(c.shot.peakS)) : null;
     cutsLog.push({ startS: sl.startS, len, energy: sl.energy, intensity: c.shot.intensity, isDrop: sl.isDrop, hitAtS: impactAtUs === null ? null : sl.startS + impactAtUs / S, ...(sl.lyricCueKey ? { lyricCueKey: sl.lyricCueKey } : {}), ...(lyricMatch ? { lyricMatchScore: lyricMatch.score, lyricMatchReason: lyricMatch.reason } : {}) });
     prev = c;
