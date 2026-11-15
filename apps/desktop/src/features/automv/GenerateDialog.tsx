@@ -1016,7 +1016,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             </div>
 
             <p className="mb-2 text-xs font-medium text-ink-soft">Estilo</p>
-            <div className="mb-2 flex gap-1 rounded-control bg-base p-1">
+            <div className="mb-2 flex gap-1 rounded-xl bg-base p-1">
               <button type="button" aria-pressed={styleMode === 'auto'} onClick={() => setStyleMode('auto')} className={`flex-1 rounded-[4px] px-2 py-1.5 text-xs ${styleMode === 'auto' ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
                 Aberto · o app escolhe
               </button>
@@ -1025,7 +1025,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               </button>
             </div>
             {styleMode === 'auto' ? (
-              <div className="rounded-md border border-violet/40 bg-violet/10 p-3">
+              <div className="rounded-2xl border border-violet/40 bg-violet/10 p-4 shadow-sm">
                 <div className="flex items-center gap-2">
                   {(() => {
                     const Icon = ICONS[selectedStyle];
@@ -1058,7 +1058,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                 <p className="mt-1 text-2xs text-muted">A escolha usa BPM, energia, cenas, falas e letra carregada. É automática e local; você ainda pode mudar para um estilo manual.</p>
               </div>
             ) : (
-            <div className="grid grid-cols-1 gap-1.5">
+            <div className="grid grid-cols-1 gap-2">
               {STYLES.map((s) => {
                 const Icon = ICONS[s.id];
                 const on = style === s.id;
@@ -1067,12 +1067,18 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                     key={s.id}
                     type="button"
                     onClick={() => setStyle(s.id)}
-                    className={`flex gap-3 rounded-md border px-3 py-2 text-left ${on ? 'border-violet bg-violet/10' : 'border-line hover:bg-raised'}`}
+                    aria-pressed={on}
+                    className={`group flex w-full items-start gap-3 rounded-2xl border p-3 text-left transition-all duration-150 ${on ? 'border-violet bg-violet/10 shadow-sm ring-1 ring-violet/20' : 'border-line bg-panel hover:border-violet/40 hover:bg-raised'}`}
                   >
-                    <Icon size={18} className={`mt-0.5 shrink-0 ${on ? 'text-violet-strong' : 'text-muted'}`} />
-                    <span>
-                      <span className="block text-sm font-semibold">{s.label}</span>
-                      <span className="block text-xs text-muted">{s.description}</span>
+                    <span className={`grid size-10 shrink-0 place-items-center rounded-xl transition-colors ${on ? 'bg-violet/15 text-violet-strong' : 'bg-base text-muted group-hover:text-violet-strong'}`}>
+                      <Icon size={19} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2 text-sm font-semibold text-ink">
+                        {s.label}
+                        {on && <span className="rounded-full bg-violet/15 px-2 py-0.5 text-[10px] font-semibold text-violet-strong">Selecionado</span>}
+                      </span>
+                      <span className="mt-1 block text-xs leading-relaxed text-muted">{s.description}</span>
                     </span>
                   </button>
                 );
