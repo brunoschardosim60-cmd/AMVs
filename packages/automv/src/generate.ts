@@ -485,7 +485,10 @@ export function chooseSequences(eps: EpisodeInput[], neededS: number, o: { seque
   // complementa com as sequências mais dinâmicas restantes para evitar repetições desnecessárias.
   if (have < neededS * POOL_ROOM && fights.length > 0) {
     const remaining = all
-      .filter((e) => !pool.some((p) => p.ep.assetId === e.ep.assetId && p.seq.id === e.seq.id))
+      // No foco em luta, complementar só com outras lutas. Incluir sequências
+      // calmas aqui contaminava o pool e quebrava a promessa de foco editorial.
+      .filter((e) => e.seq.kind === 'luta'
+        && !pool.some((p) => p.ep.assetId === e.ep.assetId && p.seq.id === e.seq.id))
       .map((e) => ({ e, sc: score(e) }))
       .sort((a, b) => b.sc - a.sc);
     for (const { e } of remaining) {
