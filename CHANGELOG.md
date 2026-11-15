@@ -1,5 +1,17 @@
 # Novidades
 
+## 0.6.20
+
+**Melhorias na montagem automática, continuidade visual e estabilidade do render.**
+
+- Seleção de cenas com melhor cobertura da timeline, reserva segura e alertas quando não há material adequado.
+- Melhor posicionamento de letras em impactos, com preservação dos tempos de palavras.
+- Movimento de câmera discreto em planos longos e cortes alinhados aos frames.
+- Pontuação visual mais criteriosa para brilho, exposição e movimento.
+- Medição de fala associada à faixa de áudio correta, evitando compensação cruzada entre idiomas.
+- Escalonamento final Lanczos e correções de render.
+- Atualização automática preparada para esta versão.
+
 ## Não lançado — refinamentos do Auto AMV (14/11/2026)
 
 - **Cobertura de timeline com segurança:** slots sem escolha tentam uma cena de reserva, mas respeitam o limite de fonte de 0,6×; se nenhuma cena couber, o gerador avisa em vez de ultrapassar a cena original.
