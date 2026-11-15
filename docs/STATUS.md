@@ -447,3 +447,5 @@ Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Video
 | Cor e equalização de falas | primeira versão implementada | Correção de voz ±4 dB baseada em dB RMS p90, não LUFS; precisa de escuta e verificação de true peak. |
 | Escalonamento final Lanczos | implementado | Proxy permanece 540p/CRF 26 por desempenho. |
 | Testes de regressão | adicionados | Execução local/CI ainda não confirmada nesta rodada. Render real, Windows/WebView2 e comparação preview/export pendentes. |
+
+| Cache da análise de episódio | versionado e4 | Reanálise automática necessária para popular loudnessDb nas falas antigas. |
