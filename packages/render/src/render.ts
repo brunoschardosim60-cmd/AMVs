@@ -134,7 +134,11 @@ function blackIntervals(stderr: string): ExportValidation['blackIntervals'] {
 }
 
 /** Parses FFmpeg freezedetect metadata, including a final event without freeze_end. */
-export function parseFreezeIntervals(stderr: string): ExportValidation['freezeIntervals'] {
+/**
+ * `streamEndUs` fecha um congelamento que dura até o fim do vídeo: o FFmpeg 6.x emite só `freeze_start`
+ * (sem `freeze_end`) nesse caso, e sem esse limite o último trecho travado passaria despercebido.
+ */
+export function parseFreezeIntervals(stderr: string, streamEndUs?: number): ExportValidation['freezeIntervals'] {
   const intervals: ExportValidation['freezeIntervals'] = [];
   let pendingStart: number | null = null;
   let pendingDuration: number | null = null;
@@ -164,6 +168,8 @@ export function parseFreezeIntervals(stderr: string): ExportValidation['freezeIn
     if (Number.isFinite(pendingStart) && Number.isFinite(end) && end > pendingStart) {
       intervals.push({ startUs: Math.round(pendingStart * 1e6), endUs: Math.round(end * 1e6) });
     }
+  } else if (pendingStart !== null && streamEndUs !== undefined && Number.isFinite(pendingStart) && Number.isFinite(streamEndUs) && streamEndUs > pendingStart * 1e6) {
+    intervals.push({ startUs: Math.round(pendingStart * 1e6), endUs: Math.round(streamEndUs) });
   }
   return intervals;
 }
@@ -282,7 +288,7 @@ async function validateVideoOutput(
   if (signal?.aborted) throw new CancelledError();
   if (visualCheck.code !== 0) throw new RenderError(`Não foi possível verificar quadros pretos/congelados: ${visualCheck.stderr.trim()}`);
   const intervals = blackIntervals(visualCheck.stderr);
-  const freezes = parseFreezeIntervals(visualCheck.stderr);
+  const freezes = parseFreezeIntervals(visualCheck.stderr, expectedDurationUs);
   const expected = expectedBlackIntervals(windows);
   const unexpected = intervals.filter((interval) => !isExpectedBlack(interval, expected, 1e6 * expectedFps.den / expectedFps.num));
   const warnings = [
