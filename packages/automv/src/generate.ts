@@ -348,7 +348,7 @@ export function scoreSpeechCandidate(s: SpeechSegment): number {
   const confidence = Math.max(0, Math.min(1, Number.isFinite(s.confidence) ? s.confidence : 0));
   const impact = Math.max(0, Math.min(1, Number.isFinite(s.impact) ? s.impact : 0));
   const rawText = s.text?.trim() ?? '';
-  const normalized = rawText.toLocaleLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/[¿¡]/g, '').replace(/[^\\p{L}\\p{N}' ]/gu, ' ').replace(/\\s+/g, ' ').trim();
+  const normalized = rawText.toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[¿¡]/g, '').replace(/[^\p{L}\p{N}' ]/gu, ' ').replace(/\s+/g, ' ').trim();
   const words = normalized ? normalized.split(' ') : [];
   const filler = new Set(['ah', 'oh', 'ei', 'hey', 'vamos', 'sim', 'nao', 'yes', 'yeah', 'no', 'uh', 'ha', 'huh', 'argh', 'okay', 'ok']);
   let textQuality = words.length === 0 ? 0.12
@@ -357,8 +357,8 @@ export function scoreSpeechCandidate(s: SpeechSegment): number {
         : words.length <= 9 ? 0.76
           : words.length <= 14 ? 0.56 : 0.36;
   if (words.length <= 2 && words.every((word) => filler.has(word))) textQuality = 0.02;
-  if (words.length >= 3 && /[.!?…]\\s*$/.test(rawText)) textQuality = Math.min(1, textQuality + 0.05);
-  if (/\\b(nao vou|nunca vou|eu juro|eu prometo|desist|proteger|salvar|vencer|fight|never|i will|i won't|no matter|impossible|protect|save)\\b/.test(normalized)) {
+  if (words.length >= 3 && /[.!?…]\s*$/.test(rawText)) textQuality = Math.min(1, textQuality + 0.05);
+  if (/\b(nao vou|nunca vou|eu juro|eu prometo|desist|proteger|salvar|vencer|fight|never|i will|i won't|no matter|impossible|protect|save)\b/.test(normalized)) {
     textQuality = Math.min(1, textQuality + 0.12);
   }
   return confidence * 0.2 + impact * 0.2 + durationFit * 0.2 + textQuality * 0.4 + (s.kind === 'grito' ? 0.02 : 0);
