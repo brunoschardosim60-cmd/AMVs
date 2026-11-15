@@ -432,3 +432,5 @@ Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Video
 | Confiança mínima na escolha da capa | código e teste de regressão adicionados | packages/automv/src/hero-cover.ts; packages/automv/test/hero-cover.test.ts |
 | Compatibilidade de idioma da fala pré-drop | código e teste de regressão adicionados | packages/automv/src/generate.ts; packages/automv/test/generate.test.ts |
 | Execução das suítes e validação no Windows/WebView2 | pendente | O GitHub não retornou status de checks para os commits desta rodada; não declarar os testes aprovados até a execução efetiva. |
+
+| Anti-repetição na busca global | código e teste adicionados | O beam search recebe os últimos seis planos escolhidos; a penalidade agora participa da escolha, não apenas da justificativa pós-geração. |
