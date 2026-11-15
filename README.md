@@ -11,6 +11,7 @@ O que já faz:
 
 - Pesquisa técnica de algoritmos: [`docs/AMV_ALGORITHM_RESEARCH.md`](docs/AMV_ALGORITHM_RESEARCH.md)
 - Validação real do Auto AMV: [`docs/AMV_REAL_MEDIA_VALIDATION.md`](docs/AMV_REAL_MEDIA_VALIDATION.md)
+- Integração do patch e validações pendentes: [`docs/MELHORIAS-AMV.md`](docs/MELHORIAS-AMV.md)
 - Roadmap de melhorias: [`ROADMAP-MELHORIAS-AMV.md`](ROADMAP-MELHORIAS-AMV.md)
 - Especificação, arquitetura e regras: [`AGENTS.md`](AGENTS.md)
 - Andamento: [`docs/STATUS.md`](docs/STATUS.md) · decisões: [`docs/DECISIONS.md`](docs/DECISIONS.md) · limitações: [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md)
