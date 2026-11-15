@@ -1,5 +1,13 @@
 # Novidades
 
+## 0.6.21
+
+**Continuidade de personagens mais consistente entre cortes.**
+
+- O Auto AMV agora considera personagens confiavelmente identificados nos últimos planos, não apenas no corte imediatamente anterior.
+- Reaparições do mesmo personagem em múltiplos planos recentes recebem um bônus moderado de continuidade; cenas sem evidência confiável não são penalizadas.
+- Mantida a distinção entre evidência visual confirmada e rótulos incertos: a heurística não inventa identidade nem força continuidade.
+
 ## 0.6.20
 
 **Melhorias na montagem automática, continuidade visual e estabilidade do render.**
