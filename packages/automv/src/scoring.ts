@@ -14,7 +14,7 @@ export interface SceneScoringInput {
   musicEnergy: number;
   isDrop: boolean;
   narrativeRole?: NarrativeRole;
-  style: Pick<StyleDef, 'id' | 'narrative' | 'sceneBias'>;
+  style: Pick<StyleDef, 'id' | 'narrative' | 'sceneBias' | 'editorialIntent'>;
   current: { assetId: string; sequenceId: string; sourceStartS: number };
   previous?: { assetId: string; sequenceId: string; sourceEndS: number; vision?: VisualEvidence; local?: LocalVisualFeatures };
   vision?: VisualEvidence;
@@ -130,10 +130,54 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
   } else if (input.narrativeRole === 'ending' && shot.motion < 0.45) {
     narrative += 0.1;
   }
+  let action = 0;
+  if (trusted(vision)) {
+    if (style.editorialIntent === 'combat') {
+      if (input.narrativeRole === 'build' && vision.action === 'preparação') {
+        narrative += 0.14;
+        reasons.push('brief de combate: preparação confiável favorecida durante o crescimento');
+      }
+      if (input.narrativeRole === 'climax' && vision.action === 'combate') {
+        action += 0.18;
+        reasons.push('brief de combate: ação confirmada priorizada no clímax');
+      }
+      if (input.narrativeRole === 'release' && vision.action === 'reação') {
+        narrative += 0.12;
+        reasons.push('brief de combate: reação confiável favorecida no respiro');
+      }
+    } else if (style.editorialIntent === 'overcoming') {
+      if (input.narrativeRole === 'opening' && (vision.action === 'preparação' || vision.sceneType === 'tension')) {
+        narrative += 0.1;
+        reasons.push('brief de ascensão: tensão/preparação ajuda a estabelecer o desafio');
+      }
+      if (input.narrativeRole === 'build' && (vision.action === 'preparação' || vision.sceneType === 'tension')) {
+        narrative += 0.18;
+        reasons.push('brief de ascensão: preparação/tensão favorecida antes da virada');
+      }
+      if (input.narrativeRole === 'climax' && (vision.action === 'combate' || vision.emotion === 'determinação')) {
+        action += 0.14;
+        if (vision.emotion === 'determinação') emotion += 0.1;
+        reasons.push('brief de ascensão: ação/determinação confiável favorecida no clímax');
+      }
+      if ((input.narrativeRole === 'release' || input.narrativeRole === 'ending') && vision.action === 'reação') {
+        narrative += 0.12;
+        reasons.push('brief de ascensão: reação confiável favorecida como consequência');
+      }
+    } else if (style.editorialIntent === 'speech' && (vision.action === 'diálogo' || vision.sceneType === 'dialogue')) {
+      narrative += 0.16;
+      reasons.push('brief de discurso: cena de diálogo confiável favorecida para conduzir a mensagem');
+    } else if (style.editorialIntent === 'emotion' && input.narrativeRole === 'climax'
+      && (vision.emotion === 'tristeza' || vision.emotion === 'calma' || vision.emotion === 'determinação')) {
+      emotion += 0.12;
+      reasons.push('brief emocional: expressão/emoção confiável reservada para o auge');
+    }
+  }
+  if (style.editorialIntent === 'speech' && shot.tags.includes('fala')) {
+    narrative += 0.08;
+    reasons.push('brief de discurso: fala detectada favorecida na sequência');
+  }
   if (narrative > 0) reasons.push('compatível com a direção narrativa da seção');
   else if (narrative < 0) reasons.push('menos compatível com a direção narrativa da seção');
-
-  let action = 0;
   if (style.sceneBias === 'impact') {
     if (shot.tags.includes('impacto')) action += 0.32;
     if (shot.tags.includes('ação')) action += 0.12;
@@ -370,10 +414,13 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
     reasons.push('cena quase parada penalizada em trecho musical agitado');
   }
 
-  const lyric = input.lyricMatchScore === undefined
+  const lyricBase = input.lyricMatchScore === undefined
     ? 0
     : (Math.max(0, Math.min(1, input.lyricMatchScore)) - 0.5) * 2;
-  if (lyric > 0) reasons.push('correspondência opcional entre letra e cena');
+  const lyric = lyricBase * (style.editorialIntent === 'lyrics' ? 1.3 : 1);
+  if (lyric > 0) reasons.push(style.editorialIntent === 'lyrics'
+    ? 'correspondência semântica reforçada pelo objetivo de sincronizar a letra'
+    : 'correspondência opcional entre letra e cena');
   else if (lyric < 0) reasons.push('correspondência opcional letra/cena abaixo do ponto neutro');
 
   const actionEmphasis = input.creativeEmphasis?.action ?? 50;
