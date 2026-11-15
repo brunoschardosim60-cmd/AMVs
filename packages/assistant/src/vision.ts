@@ -27,6 +27,10 @@ export interface LabelOptions {
 
 export interface SceneAnalysisContext {
   style: string;
+  /** Editorial intent guides later selection; it must never change labels for what is visibly present. */
+  editorialObjective?: string;
+  editorialPriorities?: string[];
+  editorialGuardrails?: string[];
   targetIntensity: string;
   music: {
     bpm: number;
@@ -103,6 +107,12 @@ function batchContext(context: SceneAnalysisContext | undefined, batch: SceneFra
   const dialogue = context.sceneDialogue?.filter((scene) => starts.has(Math.round(scene.startS * 100) / 100)) ?? [];
   return `\nContexto local para encaixe (não envie/infira áudio): ${JSON.stringify({
     style: context.style,
+    editorialGoal: context.editorialObjective ? {
+      objective: context.editorialObjective,
+      priorities: context.editorialPriorities?.slice(0, 6) ?? [],
+      guardrails: context.editorialGuardrails?.slice(0, 6) ?? [],
+      instruction: 'Esta intenção orienta a seleção posterior, não é evidência visual. Classifique apenas o que aparece no quadro; não altere rótulos para combinar com o estilo.',
+    } : undefined,
     targetIntensity: context.targetIntensity,
     music: context.music,
     lyrics: context.lyrics?.slice(0, 24) ?? [],
