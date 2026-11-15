@@ -1263,6 +1263,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
 
   const selectedHistory: Candidate[] = [];
   let rescuedSlots = 0;
+  let darkRescuedSlots = 0;
   let unfilledSlots = 0;
   const rescueSlot = (slot: Slot): { candidate: Candidate; scored: NonNullable<ReturnType<typeof scoreCandidate>> } | null => {
     const tiers: ((candidate: Candidate) => boolean)[] = [
@@ -1280,6 +1281,18 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         if (!best || scored.score > best.scored.score) best = { candidate, scored };
       }
       if (best) return best;
+    }
+    // Cenas quase pretas só entram como último recurso quando nenhum plano normal
+    // consegue preencher este slot sem ultrapassar sua fonte.
+    let darkBest: { candidate: Candidate; scored: NonNullable<ReturnType<typeof scoreCandidate>> } | null = null;
+    for (const candidate of darkReserve) {
+      const scored = scoreCandidate(slot, candidate, prev, prevSlot, selectedHistory);
+      if (!scored) continue;
+      if (!darkBest || scored.score > darkBest.scored.score) darkBest = { candidate, scored };
+    }
+    if (darkBest) {
+      darkRescuedSlots++;
+      return darkBest;
     }
     return null;
   };
@@ -1634,6 +1647,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     clipsMade++;
   }
   if (rescuedSlots > 0) warnings.push(`${rescuedSlots} trecho(s) foram preenchidos com cenas de reserva; pode haver repetição ou salto narrativo. Revise esses cortes.`);
+  if (darkRescuedSlots > 0) warnings.push(`${darkRescuedSlots} trecho(s) precisaram usar cenas muito escuras porque nenhum plano normal tinha duração suficiente.`);
   if (unfilledSlots > 0) warnings.push(`${unfilledSlots} trecho(s) continuaram sem cena: não havia plano com duração suficiente para preencher sem ultrapassar a fonte. Importe mais episódios ou reduza a duração.`);
   if (opts.hitSync !== false && hitSlots > 0 && syncedHits < hitSlots * 0.5) warnings.push(`Só ${syncedHits} de ${hitSlots} cortes fortes tiveram o golpe encaixado na batida (as cenas escolhidas têm o golpe longe do começo).`);
 
