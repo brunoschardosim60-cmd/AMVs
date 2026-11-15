@@ -117,6 +117,12 @@ describe('matchLyricsSemantics', () => {
     expect(match?.reason).toContain('fala reconhecida');
   });
 
+  it('não confunde o drop musical com uma queda física ou cena de movimento', () => {
+    const candidate = createCandidate('musical-drop', { motion: 0.95, tags: ['calma'] });
+    const cue: Cue = { startS: 20, endS: 23, text: 'Wait for the drop tonight' };
+    expect(matchLyricsSemantics([cue], [candidate])['musical-drop']).toBeUndefined();
+  });
+
   it('não faz correspondência por substring dentro de outra palavra', () => {
     const candidate = createCandidate('false-positive', { tags: ['ação', 'impacto'] });
     const cue: Cue = { startS: 2, endS: 4, text: 'This shit moves forward' };
