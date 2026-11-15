@@ -64,3 +64,14 @@ Não importar um pipeline inteiro ou um modelo de deep learning só porque exist
 ## Critério de adoção
 
 Uma técnica externa só entra no caminho padrão se demonstrar melhoria mensurável em testes, estabilidade em Windows, custo aceitável e compatibilidade de licença. Até lá, fica como experimento opcional e o caminho determinístico atual continua disponível.
+
+## Implementação incremental de 15/11/2026 — frase musical e look-ahead narrativo
+
+A documentação atual do librosa descreve uma limitação relevante do BPM único: ele funciona melhor com andamento aproximadamente constante; para variações acentuadas, a biblioteca permite fornecer estimativas de BPM variáveis por frame ao rastreador dinâmico. A estimativa local pode ser irregular e aproximada. Por isso, esta atualização não introduz uma dependência nova nem finge resolver tempo variável: usa os tempos reais de batida já presentes na análise e acrescenta fronteiras de frase a partir dos downbeats.
+
+Na montagem:
+- fronteiras de frase detectadas pelos downbeats passam a poder abrir um corte mesmo quando o agrupamento de batidas passaria por cima delas;
+- o início da frase vira uma evidência editorial para a transição e pode liberar um número pequeno de cenas da sequência seguinte;
+- a busca narrativa compara uma janela limitada de planos futuros, com preferência contextual por ação ou preparação/reação, em vez de obrigar sempre o primeiro plano disponível.
+
+A validação automatizada cobre as fronteiras de frase e a janela limitada de candidatos. O rastreamento de andamento variável continua listado como pesquisa/experimento futuro e exige benchmark de áudio real antes de entrar no runtime.

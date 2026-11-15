@@ -1,5 +1,5 @@
 import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type CameraMotionType, type Cue, type SceneEmotion } from '@amv/analysis';
-import { canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, prepareLocalizedRegeneration, recommendEpisodePreset, recommendStyle, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
+import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, planNarrative, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
 import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { loadCreativeProfiles, saveCreativeProfiles } from '../../core/creativeProfiles';
@@ -92,6 +92,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [characters, setCharacters] = useState<string[]>([]);
   const [characterDrafts, setCharacterDrafts] = useState<Record<string, string>>({});
   const [visionScope, setVisionScope] = useState<VisionScope>('fights');
+  const [deepVisionBeforeGenerate, setDeepVisionBeforeGenerate] = useState(false);
   const [vision, setVision] = useState<{ done: number; total: number; ep: string } | null>(null);
   const visionAbort = useRef<AbortController | null>(null);
   const [musicStart, setMusicStart] = useState<number | null>(null);
@@ -101,7 +102,23 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [matchLyrics, setMatchLyrics] = useState(false);
   const [lyricSceneMatches, setLyricSceneMatches] = useState<NonNullable<GenerateOptions['lyricSceneMatches']>>({});
   const [seed, setSeed] = useState(1);
-  const [result, setResult] = useState<{ warnings: string[]; text: string } | null>(null);
+  const [result, setResult] = useState<{
+    warnings: string[];
+    text: string;
+    brief: ReturnType<typeof buildCreativeBrief>;
+    storyboard: ReturnType<typeof reviewGeneratedAssembly>['storyboard'];
+    alignment: ReturnType<typeof reviewGeneratedAssembly>['alignment'];
+    review: {
+      high: number;
+      medium: number;
+      low: number;
+      checked: number;
+      partial: number;
+      unavailable: number;
+      repairsApplied: string[];
+      issues: Array<{ startUs: number; severity: string; type: string; suggestion: string }>;
+    };
+  } | null>(null);
   const [localizedCandidates, setLocalizedCandidates] = useState<LocalizedCandidate[]>([]);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const [candidateMode, setCandidateMode] = useState(false);
@@ -344,17 +361,17 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     }
   };
 
-  const runVision = async () => {
-    if (!platform || vision) return;
+  const runVision = async (scopeOverride: VisionScope = visionScope): Promise<{ labeled: number; failed: number; frameFailures: number; lyricMatches: NonNullable<GenerateOptions['lyricSceneMatches']> } | null> => {
+    if (!platform || vision) return null;
     try {
       const settings = await loadAiSettings(platform);
       if (!settings.enabled) {
         toast({ tone: 'warn', title: 'Ligue um modelo de IA com visão', body: 'Abra o Assistente e clique na engrenagem. Gemini, Claude, GPT-4o e modelos de visão no Ollama são compatíveis.' });
-        return;
+        return null;
       }
       if (!isLocal(settings) && !settings.allowExternal) {
         toast({ tone: 'warn', title: 'Envio para a internet desligado', body: 'A análise manda quadros dos episódios ao serviço de IA. Autorize na engrenagem do Assistente ou use um modelo local (Ollama).' });
-        return;
+        return null;
       }
       const key = settings.provider.needsKey ? await platform.secrets.get(secretName(settings.presetId)) : null;
       const musicRange = music ? chooseMusicRange(music, duration, chosenStart) : null;
@@ -367,6 +384,9 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       const context = music
         ? {
             style: STYLES.find((item) => item.id === selectedStyle)!.label,
+            editorialObjective: STYLE_EDITORIAL_GOALS[selectedStyle].objective,
+            editorialPriorities: STYLE_EDITORIAL_GOALS[selectedStyle].priorities,
+            editorialGuardrails: STYLE_EDITORIAL_GOALS[selectedStyle].guardrails,
             targetIntensity: INTENSITY[intensity],
             music: {
               bpm: music.bpm,
@@ -381,7 +401,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         : undefined;
       if (matchLyrics && !lyricCues?.length) {
         toast({ tone: 'warn', title: 'Carregue uma letra sincronizada', body: 'O encaixe semântico precisa de versos com tempo (.LRC ou .SRT).' });
-        return;
+        return null;
       }
       if (matchLyrics) setLyricSceneMatches({});
       visionAbort.current = new AbortController();
@@ -389,21 +409,46 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       let failed = 0;
       let frameFailures = 0;
       let matchCount = 0;
+      const allLyricMatches: NonNullable<GenerateOptions['lyricSceneMatches']> = {};
       for (const e of ready) {
-        const targets = session.visionTargets(e.id, visionScope, undefined, matchLyrics);
+        const targets = session.visionTargets(e.id, scopeOverride, undefined, matchLyrics);
         if (!targets.length) continue;
         setVision({ done: 0, total: targets.length, ep: e.name });
-        const r = await session.runVision(e.id, { provider: settings.provider, key, fetch: platform.http, scope: visionScope, context, matchLyrics, signal: visionAbort.current.signal, onProgress: (done, total) => setVision({ done, total, ep: e.name }) });
-        if (matchLyrics) setLyricSceneMatches((current) => ({ ...current, ...r.lyricMatches }));
+        const r = await session.runVision(e.id, {
+          provider: settings.provider,
+          key,
+          fetch: platform.http,
+          scope: scopeOverride,
+          context,
+          matchLyrics,
+          signal: visionAbort.current.signal,
+          onProgress: (done, total) => {
+            setVision({ done, total, ep: e.name });
+            if (deepVisionBeforeGenerate) {
+              const fraction = done / Math.max(1, total);
+              setGenerationProgress(26 + fraction * 12);
+              setGenerationStep('Análise semântica profunda · ' + e.name + ' (' + done + '/' + total + ')');
+            }
+          },
+        });
+        if (matchLyrics) {
+          setLyricSceneMatches((current) => ({ ...current, ...r.lyricMatches }));
+          Object.assign(allLyricMatches, r.lyricMatches);
+        }
         matchCount += Object.values(r.lyricMatches).reduce((count, matches) => count + Object.keys(matches).length, 0);
         labeled += r.labeled;
         failed += r.failed;
         frameFailures += r.frameFailures;
         if (visionAbort.current.signal.aborted) break;
       }
-      toast(failed || frameFailures ? { tone: 'warn', title: `${labeled} cenas analisadas`, body: `${failed} cenas sem resposta do modelo; ${frameFailures} quadros não puderam ser extraídos. Rode de novo para tentar as cenas incompletas.` } : { tone: 'ok', title: `${labeled} cenas analisadas`, body: matchLyrics ? `${matchCount} combinações de letra/cena retornadas; as demais cenas usam a seleção local.` : 'Escolha os personagens ao lado.' });
+      if (visionAbort.current?.signal.aborted) return null;
+      toast(failed || frameFailures
+        ? { tone: 'warn', title: `${labeled} cenas analisadas`, body: `${failed} cenas sem resposta do modelo; ${frameFailures} quadros não puderam ser extraídos. Rode de novo para tentar as cenas incompletas.` }
+        : { tone: 'ok', title: `${labeled} cenas analisadas`, body: matchLyrics ? `${matchCount} combinações de letra/cena retornadas; as demais cenas usam a seleção local.` : 'Escolha os personagens ao lado.' });
+      return { labeled, failed, frameFailures, lyricMatches: allLyricMatches };
     } catch (err) {
       if ((err as Error).name !== 'AbortError') toast({ tone: 'error', title: 'Não deu para analisar as cenas', body: (err as Error).message });
+      return null;
     } finally {
       visionAbort.current = null;
       setVision(null);
@@ -628,9 +673,70 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       let sfxAssets: GenerateOptions['sfxAssets'];
       let sfxError: string | null = null;
       setBusy(true);
-      setGenerationStep('Mapeando compassos, batidas e energia da música...');
-      setGenerationProgress(20);
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      setGenerationStep('Completando a análise visual local das cenas...');
+      setGenerationProgress(8);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const localVisionPending = ready.reduce((total, episode) => total + session.localVisionTargets(episode.id, 'all').length, 0);
+      let localVisionAnalyzed = 0;
+      let localVisionFailed = 0;
+      let localFrameFailures = 0;
+      if (localVisionPending > 0) {
+        const controller = new AbortController();
+        visionAbort.current = controller;
+        let completedBeforeEpisode = 0;
+        for (const episode of ready) {
+          const targets = session.localVisionTargets(episode.id, 'all');
+          if (!targets.length) continue;
+          setGenerationStep('Analisando cenas localmente · ' + episode.name);
+          const outcome = await session.runLocalVision(episode.id, {
+            scope: 'all',
+            signal: controller.signal,
+            onProgress: (done, total) => {
+              const fraction = (completedBeforeEpisode + done) / Math.max(1, localVisionPending);
+              setGenerationProgress(8 + fraction * 18);
+              setGenerationStep('Analisando cenas localmente · ' + episode.name + ' (' + done + '/' + total + ')');
+            },
+          });
+          if (controller.signal.aborted) throw Object.assign(new Error('Análise cancelada'), { name: 'AbortError' });
+          localVisionAnalyzed += outcome.analyzed;
+          localVisionFailed += outcome.failed;
+          localFrameFailures += outcome.frameFailures;
+          completedBeforeEpisode += targets.length;
+        }
+        visionAbort.current = null;
+      }
+
+      let semanticVisionResult: { labeled: number; failed: number; frameFailures: number; lyricMatches: NonNullable<GenerateOptions['lyricSceneMatches']> } | null = null;
+      let effectiveLyricSceneMatches = lyricSceneMatches;
+      const semanticPending = ready.reduce((total, episode) => total + session.visionTargets(episode.id, 'all').length, 0);
+      if (deepVisionBeforeGenerate && semanticPending > 0) {
+        setGenerationStep('Preparando análise semântica de todas as cenas...');
+        setGenerationProgress(26);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        semanticVisionResult = await runVision('all');
+        if (!semanticVisionResult) {
+          throw new Error('A análise semântica profunda não foi concluída. Confira o modelo de visão, a autorização de envio externo e tente novamente.');
+        }
+        effectiveLyricSceneMatches = { ...lyricSceneMatches, ...semanticVisionResult.lyricMatches };
+      }
+
+      const directorInputs: EpisodeInput[] = ready.map((episode) => {
+        const runtime = session.assetRuntime(episode.id);
+        return {
+          assetId: episode.id,
+          name: episode.name,
+          analysis: runtime.episode!,
+          hasAudio: (episode.probe?.audio.length ?? 0) > 0,
+          sourceFps: episode.probe?.video?.avgFps ?? episode.probe?.video?.fps ?? null,
+          variableFrameRate: episode.probe?.video?.vfr ?? false,
+          audioStreams: episode.probe?.audio.map((audio) => ({ index: audio.index, language: audio.language, title: audio.title })),
+          vision: canonicalizeEpisodeVision(runtime.vision as EpisodeVision | null | undefined, session.project.characterLibrary),
+        };
+      });
+
+      setGenerationStep('Preparando recursos e evidências da montagem...');
+      setGenerationProgress(30);
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       if (useSfx) {
         try {
@@ -640,23 +746,86 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         }
       }
 
-      setGenerationStep('Examinando tomadas, continuidade de combate e personagens...');
-      setGenerationProgress(45);
-      await new Promise((resolve) => setTimeout(resolve, 150));
-
-      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
+      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches: effectiveLyricSceneMatches, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
       const m = musics.find((a) => a.id === musicId)!;
+      const annotationExclusions = session.project.sceneAnnotations
+        .filter((annotation) => annotation.excludedFromAuto)
+        .map((annotation) => annotation.assetId + '@' + annotation.sceneKey);
+      const editorialFootagePlan = planFootage(directorInputs, {
+        style: selectedStyle,
+        intensity,
+        durationS: duration,
+        focus,
+        sequenceIds: seqIds,
+        exclude: [...excluded, ...annotationExclusions],
+        seed: nextSeed,
+        characters,
+        editorialDirection,
+      }, music);
+      const suggestedEditorialRange = chosenStart !== null
+        ? null
+        : editorialFootagePlan.mode === 'fight'
+          ? suggestMusicRanges(music, duration, editorialFootagePlan.fit, 1)[0] ?? null
+          : null;
+      const editorialMusicRange: [number, number] = chosenStart !== null
+        ? chooseMusicRange(music, duration, chosenStart)
+        : suggestedEditorialRange
+          ? [suggestedEditorialRange.startS, suggestedEditorialRange.endS]
+          : chooseMusicRange(music, duration, null);
+      const preflightDirection = planNarrative(music, editorialMusicRange, beatOffsetMs / 1000);
+      const preflightBrief = buildCreativeBrief({
+        style: selectedStyle,
+        episodes: directorInputs,
+        music: { assetId: m.id, name: m.name, analysis: music },
+        options: { durationS: duration, intensity, editorialDirection, organizationMode, focus, voiceMoments },
+        direction: preflightDirection,
+        hasTimedLyrics: !!lyrics?.cues.length,
+      });
 
-      setGenerationStep('Otimizando narrativa, versos da letra e falas dramáticas...');
-      setGenerationProgress(70);
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      setGenerationStep('Aplicando objetivo editorial · ' + preflightBrief.title);
+      setGenerationProgress(38);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, directorInputs, opts);
 
-      const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
-
-      setGenerationStep('Sincronizando golpes com a batida e aplicando efeitos...');
+      setGenerationStep('Construindo storyboard e revisando a montagem...');
+      setGenerationProgress(72);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const brief = buildCreativeBrief({
+        style: selectedStyle,
+        episodes: directorInputs,
+        music: { assetId: m.id, name: m.name, analysis: music },
+        options: { durationS: duration, intensity, editorialDirection, organizationMode, focus, voiceMoments },
+        direction: r.summary.direction,
+        hasTimedLyrics: !!lyrics?.cues.length,
+      });
+      const editorialReview = reviewGeneratedAssembly({
+        project: session.project,
+        commands: r.commands,
+        brief,
+        direction: r.summary.direction,
+        summary: r.summary,
+        episodes: directorInputs,
+        music: { assetId: m.id, name: m.name, analysis: music },
+      });
+      r.commands = editorialReview.commands;
+      const issueCounts = qualityIssueSummary(editorialReview.quality.issues);
+      if (localVisionPending > 0) {
+        r.warnings.push('Análise visual local concluída: ' + localVisionAnalyzed + ' cenas analisadas; ' + localVisionFailed + ' sem resultado; ' + localFrameFailures + ' falhas de extração.');
+      }
+      if (semanticVisionResult) {
+        r.warnings.push('Análise semântica por visão: ' + semanticVisionResult.labeled + ' cenas rotuladas; ' + semanticVisionResult.failed + ' falhas de resposta; ' + semanticVisionResult.frameFailures + ' falhas de extração.');
+      }
+      if (editorialReview.repairsApplied.length) {
+        r.warnings.push('Revisão automática aplicou correção segura: ' + editorialReview.repairsApplied.join(', ') + '.');
+      }
+      for (const issue of editorialReview.quality.issues.slice(0, 6)) {
+        r.warnings.push(mmss(issue.startUs / S) + ' · ' + issue.type + ': ' + issue.suggestion);
+      }
+      if (editorialReview.quality.issues.length > 6) {
+        r.warnings.push((editorialReview.quality.issues.length - 6) + ' outro(s) ponto(s) ficaram no relatório de revisão.');
+      }
+      if (sfxError) r.warnings.push('Não consegui preparar os efeitos sonoros (' + sfxError + '): o vídeo saiu sem eles.');
       setGenerationProgress(90);
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      if (sfxError) r.warnings.push(`Não consegui preparar os efeitos sonoros (${sfxError}): o vídeo saiu sem eles.`);
       // guarda o que estava antes: nada se perde
       await session.saveVersion(`Antes de gerar (${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})`);
       const directionLabel = editorialDirection === 'cinematic' ? 'Cinematográfico' : editorialDirection === 'hype' ? 'Hype' : 'Balanceado';
@@ -669,13 +838,48 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       } catch {}
       setSeed(nextSeed);
       const s = r.summary;
+      const coverageValues = Object.values(editorialReview.quality.coverage);
+      const directionText = [...new Set(s.direction.map((beat) => beat.role))].map((role) =>
+        role === 'opening' ? 'Abertura'
+          : role === 'build' ? 'Crescimento'
+            : role === 'climax' ? 'Clímax'
+              : role === 'release' ? 'Respiro'
+                : role === 'ending' ? 'Encerramento'
+                  : 'Desenvolvimento',
+      ).join(' → ');
+      const summaryText = s.clips + ' cenas, ' + s.cuts + ' cortes'
+        + (s.drop !== null ? ', drop em ' + s.drop.toFixed(1) + ' s' : '')
+        + (s.voices ? ', ' + s.voices + ' fala(s)' + (s.speech ? ' (começando por "' + s.speech + '")' : '') : '')
+        + '. Trecho da música: ' + mmss(s.musicRange[0]) + '–' + mmss(s.musicRange[1])
+        + '. Estrutura musical: ' + directionText + '.'
+        + (s.focus === 'fight' && s.fights.length ? ' Luta usada: ' + s.fights.join(' + ') + '.' : s.focus === 'mix' ? ' Cenas de vários pontos (modo misturar).' : '')
+        + (s.hitsSynced ? ' ' + s.hitsSynced + ' golpes encaixados na batida.' : '')
+        + (s.speedRamps ? ' ' + s.speedRamps + ' rampas de velocidade aplicadas.' : '')
+        + (s.sfx ? ' ' + s.sfx + ' efeitos sonoros.' : '');
       setResult({
         warnings: r.warnings,
-        text: `${s.clips} cenas, ${s.cuts} cortes${s.drop !== null ? `, drop em ${s.drop.toFixed(1)} s` : ''}${s.voices ? `, ${s.voices} fala(s)${s.speech ? ` (começando por "${s.speech}")` : ''}` : ''}. Trecho da música: ${mmss(s.musicRange[0])}–${mmss(s.musicRange[1])}. Direção: ${[...new Set(s.direction.map((beat) => beat.role))].map((role) => role === 'opening' ? 'Abertura' : role === 'build' ? 'Crescimento' : role === 'climax' ? 'Clímax' : role === 'release' ? 'Respiro' : role === 'ending' ? 'Encerramento' : 'Desenvolvimento').join(' → ')}.${s.focus === 'fight' && s.fights.length ? ` Luta usada: ${s.fights.join(' + ')}.` : s.focus === 'mix' ? ' Cenas de vários pontos (modo misturar).' : ''}${s.hitsSynced ? ` ${s.hitsSynced} golpes encaixados na batida.` : ''}${s.speedRamps ? ` ${s.speedRamps} rampas de velocidade aplicadas.` : ''}${s.sfx ? ` ${s.sfx} efeitos sonoros.` : ''}`,
+        text: summaryText,
+        brief,
+        storyboard: editorialReview.storyboard,
+        alignment: editorialReview.alignment,
+        review: {
+          ...issueCounts,
+          checked: coverageValues.filter((item) => item.status === 'checked').length,
+          partial: coverageValues.filter((item) => item.status === 'partial').length,
+          unavailable: coverageValues.filter((item) => item.status === 'unavailable').length,
+          repairsApplied: editorialReview.repairsApplied,
+          issues: editorialReview.quality.issues.slice(0, 8).map((issue) => ({
+            startUs: issue.startUs,
+            severity: issue.severity,
+            type: issue.type,
+            suggestion: issue.suggestion,
+          })),
+        },
       });
     } catch (e) {
       toast({ tone: 'error', title: 'Não deu para gerar', body: (e as Error).message });
     } finally {
+      visionAbort.current = null;
       setBusy(false);
       setGenerationStep(null);
       setGenerationProgress(0);
@@ -841,7 +1045,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       <Dialog
         title="AMV gerado"
         onClose={onClose}
-        width="w-[560px]"
+        width="w-[720px]"
         footer={
           <>
             <Button variant="ghost" onClick={() => setResult(null)}>
@@ -862,8 +1066,123 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           </>
         }
       >
-        <p className="text-sm text-ink">{result.text}</p>
-        <p className="mt-2 text-xs text-muted">Tudo virou clipes comuns: passe o mouse num clipe da timeline para ver por que a IA escolheu aquela cena. Desfazer (Ctrl+Z) volta tudo; a montagem anterior também ficou guardada em Versões.</p>
+        <div className="max-h-[68vh] space-y-4 overflow-y-auto pr-1">
+          <div>
+            <p className="text-sm text-ink">{result.text}</p>
+            <p className="mt-2 text-xs text-muted">Os clipes continuam editáveis. Passe o mouse sobre um clipe da timeline para ver o motivo da escolha. Desfazer (Ctrl+Z) volta tudo; a montagem anterior também ficou guardada em Versões.</p>
+          </div>
+
+          <section className="rounded-md border border-line-soft p-3">
+            <h3 className="text-xs font-semibold text-ink">Objetivo editorial · {result.brief.title}</h3>
+            <p className="mt-1 text-xs text-ink-soft">{result.brief.objective}</p>
+            <p className="mt-1 text-2xs text-muted">
+              {result.brief.preferences.durationS}s · intensidade {INTENSITY[result.brief.preferences.intensity].toLowerCase()} · direção {result.brief.preferences.editorialDirection === 'cinematic' ? 'cinematográfica' : result.brief.preferences.editorialDirection === 'hype' ? 'hype' : 'balanceada'} · organização {result.brief.preferences.organizationMode === 'chronological' ? 'cronológica' : result.brief.preferences.organizationMode === 'free' ? 'livre' : 'narrativa'} · {result.brief.preferences.focus === 'fight' ? 'foco em luta' : 'mistura de cenas'}.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-1.5 text-2xs text-muted">
+              <span className="rounded bg-raised px-2 py-1">{result.brief.evidence.scenes} cenas base</span>
+              <span className="rounded bg-raised px-2 py-1">{result.brief.evidence.semanticCoverage}% com semântica confiável</span>
+              <span className="rounded bg-raised px-2 py-1">{result.brief.evidence.bpmConfidence}% confiança no BPM</span>
+              <span className="rounded bg-raised px-2 py-1">confiança {result.brief.confidence === 'strong' ? 'alta' : result.brief.confidence === 'partial' ? 'parcial' : 'limitada'}</span>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <p className="mb-1 font-medium text-ink-soft">Prioridades</p>
+                <ul className="list-disc space-y-0.5 pl-4 text-muted">
+                  {result.brief.priorities.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+              <div>
+                <p className="mb-1 font-medium text-ink-soft">O que evitar</p>
+                <ul className="list-disc space-y-0.5 pl-4 text-muted">
+                  {result.brief.guardrails.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-ink">Storyboard executado</h3>
+              <span className="text-2xs text-muted">{result.storyboard.length} partes</span>
+            </div>
+            <ol className="space-y-2">
+              {result.storyboard.slice(0, 7).map((beat, index) => (
+                <li key={beat.role + ':' + beat.startS + ':' + index} className="rounded-md border border-line-soft p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-ink">{index + 1}. {beat.label}</span>
+                    <span className="tnum shrink-0 text-2xs text-muted">{mmss(beat.startS)}–{mmss(beat.endS)}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-ink-soft">{beat.intention}</p>
+                  <p className="mt-1 text-2xs text-faint">{beat.musicalEvidence}</p>
+                  {beat.scenes.length > 0 ? (
+                    <ul className="mt-2 space-y-1 text-2xs text-muted">
+                      {beat.scenes.slice(0, 3).map((scene) => (
+                        <li key={scene.clipId}>
+                          <span className="font-medium text-ink-soft">{scene.source} · {mmss(scene.sourceTimeS)}</span>
+                          {scene.action ? ' · ' + scene.action : ''}
+                          {scene.emotion ? ' · ' + scene.emotion : ''}
+                          {scene.characters.length ? ' · ' + scene.characters.join(', ') : ''}
+                          <span className="block truncate text-faint">{scene.reason}</span>
+                        </li>
+                      ))}
+                      {beat.scenes.length > 3 && <li className="text-faint">+ {beat.scenes.length - 3} outros planos nesta parte</li>}
+                    </ul>
+                  ) : (
+                    <p className="mt-1 text-2xs text-faint">Nenhum plano de vídeo ficou associado a esta parte.</p>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </section>
+
+          <section className="rounded-md border border-line-soft p-3">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold text-ink">Segunda revisão</h3>
+              <span className="text-2xs text-muted">{result.review.high} críticos · {result.review.medium} médios · {result.review.low} leves</span>
+            </div>
+            <p className="mt-1 text-2xs text-muted">
+              Cobertura: {result.review.checked} dimensões verificadas · {result.review.partial} parciais · {result.review.unavailable} indisponíveis.
+            </p>
+            {result.review.repairsApplied.length > 0 && (
+              <p className="mt-2 text-xs text-ink-soft">Correção segura aplicada: {result.review.repairsApplied.join(', ')}.</p>
+            )}
+            {result.review.issues.length > 0 ? (
+              <ul className="mt-2 space-y-1 text-xs text-ink-soft">
+                {result.review.issues.map((issue, index) => (
+                  <li key={issue.startUs + ':' + issue.type + ':' + index}>
+                    <span className="tnum text-muted">{mmss(issue.startUs / S)}</span> · <strong>{issue.type}</strong> — {issue.suggestion}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-xs text-ink-soft">Nenhum problema objetivo foi encontrado nos dados disponíveis nesta revisão.</p>
+            )}
+            {result.alignment.length > 0 && (
+              <div className="mt-3 border-t border-line-soft pt-2">
+                <p className="mb-1 text-xs font-medium text-ink-soft">Critérios do objetivo</p>
+                <ul className="space-y-1 text-2xs text-muted">
+                  {result.alignment.map((item) => (
+                    <li key={item.criterion}>
+                      <strong className={item.status === 'met' ? 'text-ink' : item.status === 'review' ? 'text-warn' : 'text-faint'}>
+                        {item.status === 'met' ? 'Atendido' : item.status === 'review' ? 'Revisar' : 'Sem evidência'}
+                      </strong>
+                      {' · '}{item.criterion}: {item.evidence}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {result.brief.limitations.length > 0 && (
+              <div className="mt-3 border-t border-line-soft pt-2">
+                <p className="mb-1 text-xs font-medium text-ink-soft">Limitações da análise</p>
+                <ul className="list-disc space-y-1 pl-4 text-2xs text-muted">
+                  {result.brief.limitations.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+            )}
+            <p className="mt-3 text-2xs text-faint">Esta revisão mede critérios estruturais e problemas detectáveis pela timeline. Não substitui uma avaliação semântica humana de todas as transições nem a conferência do vídeo exportado.</p>
+          </section>
+        </div>
         {result.warnings.length > 0 && (
           <ul className="mt-3 space-y-1 rounded-md border border-warn/30 bg-warn/10 p-3 text-xs text-ink-soft">
             {result.warnings.map((w) => (
@@ -909,7 +1228,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             Cancelar
           </Button>
           <Button variant="primary" icon={<Wand2 size={15} />} disabled={!music || ready.length === 0 || !analysisReadiness.canGenerate || busy || (localizedRange !== undefined && localizedRange.clipIds.length === 0)} onClick={() => void generate(seed)}>
-            {localizedRange ? 'Gerar alternativa' : 'Gerar'}
+            {localizedRange ? 'Gerar alternativa' : 'Gerar e revisar'}
           </Button>
         </>
       }
@@ -920,7 +1239,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             <div className="h-14 w-14 rounded-full border-2 border-violet/30 border-t-violet animate-spin" />
             <Sparkles size={20} className="absolute text-violet-strong" />
           </div>
-          <h4 className="text-sm font-semibold text-ink">Inteligência Artificial Analisando & Gerando AMV</h4>
+          <h4 className="text-sm font-semibold text-ink">Direção criativa e revisão do AMV</h4>
           <p className="mt-1 text-xs font-medium text-violet-strong transition-all duration-200">{generationStep}</p>
           <div className="mt-4 h-1.5 w-64 overflow-hidden rounded-full border border-line bg-base">
             <div
@@ -928,7 +1247,14 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               style={{ width: `${generationProgress}%` }}
             />
           </div>
-          <p className="mt-2 text-2xs text-muted">Avaliando continuidade coreográfica, impactos e sincronização rítmica</p>
+          <p className="mt-2 text-2xs text-muted">As etapas verificam apenas sinais disponíveis; o que não tem evidência aparece como pendente de avaliação.</p>
+          {(generationStep.startsWith('Analisando cenas localmente')
+            || generationStep.startsWith('Análise semântica profunda')
+            || generationStep.startsWith('Preparando análise semântica')) && (
+            <Button size="sm" variant="ghost" className="mt-3" onClick={() => visionAbort.current?.abort()}>
+              Cancelar análise de cenas
+            </Button>
+          )}
         </div>
       )}
       {localizedRange && (
@@ -1298,8 +1624,18 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                     <input type="checkbox" className="mt-0.5 accent-violet" checked={matchLyrics} disabled={!lyrics?.cues.length} onChange={(e) => setMatchLyrics(e.target.checked)} />
                     <span>Relacionar o sentido da letra com as cenas (IA; opcional)</span>
                   </label>
+                  <label className="mt-2 flex items-start gap-1.5 text-2xs text-ink-soft">
+                    <input type="checkbox" className="mt-0.5 accent-violet" checked={deepVisionBeforeGenerate} onChange={(event) => setDeepVisionBeforeGenerate(event.target.checked)} />
+                    <span>Análise semântica profunda antes de gerar (todas as cenas)</span>
+                  </label>
+                  <p className="mt-1 text-2xs text-faint">
+                    Usa o modelo de visão configurado para analisar até 3 quadros por cena e identificar ação, emoção, enquadramento e personagens. Pode demorar e consumir cota. Se o provedor for externo, os quadros amostrados serão enviados apenas com a autorização externa já habilitada nas configurações; o vídeo e o áudio completos não são enviados.
+                  </p>
                   <p className="mt-1 text-2xs text-faint">
                     Usa até 6 versos e reanalisa os quadros amostrados para sugerir combinações; pode consumir cota do modelo. Sem essa opção, a montagem continua local, pela batida, energia, ação e emoção.
+                  </p>
+                  <p className="mt-2 text-2xs text-faint">
+                    Ao clicar em Gerar, as cenas selecionadas que ainda não têm descritores visuais locais serão analisadas automaticamente, em detalhe e sem enviar quadros pela internet. A leitura semântica por IA (personagens, ações e emoções) continua opcional e exige o modelo configurado.
                   </p>
                   {localVisionTodo > 0 && (
                     <>
@@ -1313,7 +1649,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                   )}
                   {visionTodo > 0 ? (
                     <>
-                      <Button size="sm" className="mt-2" onClick={runVision} title="Complementa a análise local com rótulos semânticos de um modelo de visão.">
+                      <Button size="sm" className="mt-2" onClick={() => { void runVision(); }} title="Complementa a análise local com rótulos semânticos de um modelo de visão.">
                         {matchLyrics ? 'Analisar cenas e sentido da letra' : 'Analisar cenas com IA'}
                       </Button>
                       <p className="mt-1 text-2xs text-faint">

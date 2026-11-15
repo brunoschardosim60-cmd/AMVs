@@ -1,15 +1,72 @@
 import type { EpisodeAnalysis, MusicAnalysis } from '@amv/analysis';
 
 /**
- * Estilos do "Gerar meu AMV", tirados das referências reais (ver docs/DECISIONS.md):
- * cada estilo é um conjunto de parâmetros, não um prompt.
+ * Estilos do "Gerar meu AMV": cada estilo tem uma intenção editorial compartilhada
+ * (objetivo/prioridades/limites) e parâmetros de ritmo, cena, transição e efeitos.
+ * A intenção é consumida pelo ranking de cenas, pelo contexto de visão e pelo brief.
  */
 export type StyleId = 'hype' | 'rapido' | 'superacao' | 'letra' | 'discurso' | 'emocional';
 export type EditorialDirection = 'cinematic' | 'balanced' | 'hype';
+export type EditorialIntent = 'combat' | 'impact' | 'overcoming' | 'lyrics' | 'speech' | 'emotion';
+
+export interface StyleEditorialGoal {
+  intent: EditorialIntent;
+  title: string;
+  objective: string;
+  priorities: string[];
+  guardrails: string[];
+}
+
+/** One source of truth shared by scene selection, semantic analysis and the post-generation brief. */
+export const STYLE_EDITORIAL_GOALS: Record<StyleId, StyleEditorialGoal> = {
+  hype: {
+    intent: 'combat',
+    title: 'Combate épico',
+    objective: 'Construir expectativa, deixar a ação crescer e entregar os impactos mais fortes nos momentos musicais de maior energia. Cada golpe deve parecer parte de um confronto, não apenas um corte aleatório na batida.',
+    priorities: ['preparação antes do impacto', 'ação e reação legíveis', 'escalada até o clímax', 'cortes ligados a ataques musicais confiáveis'],
+    guardrails: ['não transformar toda batida em corte', 'não repetir o mesmo plano apenas para preencher duração', 'não sacrificar a leitura da ação por efeitos'],
+  },
+  rapido: {
+    intent: 'impact',
+    title: 'Impacto & Combo',
+    objective: 'Criar uma sequência de impactos precisa e energética, alternando planos curtos e respiros suficientes para que cada ação seja percebida.',
+    priorities: ['ações de alto impacto', 'cadência rápida sem cintilação excessiva', 'variação de planos', 'sincronia nos acentos mais fortes'],
+    guardrails: ['evitar sequências de cortes ilegíveis', 'não acelerar cenas além da duração real da fonte', 'preservar preparação e consequência quando disponíveis'],
+  },
+  superacao: {
+    intent: 'overcoming',
+    title: 'Ascensão épica',
+    objective: 'Construir uma trajetória de tensão e virada: apresentar o desafio, aumentar a expectativa, reservar a maior energia para o clímax e encerrar com sensação de consequência.',
+    priorities: ['abertura com espaço para contexto', 'crescimento progressivo', 'virada próxima ao clímax musical', 'fala marcante quando houver evidência e opção habilitada'],
+    guardrails: ['não chamar qualquer cena intensa de vitória', 'não inventar uma relação causal entre cenas', 'não antecipar todo o impacto na abertura'],
+  },
+  letra: {
+    intent: 'lyrics',
+    title: 'Lyrics sincronizada',
+    objective: 'Fazer a imagem dialogar com o conteúdo e o tempo da letra, mantendo leitura confortável e usando a batida como apoio, não como substituta do significado.',
+    priorities: ['sincronismo temporal confiável', 'correspondência semântica quando disponível', 'legibilidade das palavras', 'imagens coerentes com o verso'],
+    guardrails: ['não fingir correspondência semântica sem evidência', 'não usar timing incerto como karaoke exato', 'não sobrepor texto a falas ou impactos que precisam de espaço'],
+  },
+  discurso: {
+    intent: 'speech',
+    title: 'Dark Speech',
+    objective: 'Deixar as falas conduzirem a ideia: estabelecer contexto visual, organizar pausas e criar escalada de mensagem com a música sustentando a emoção.',
+    priorities: ['falas inteligíveis e bem distribuídas', 'imagem que acompanhe o contexto da fala', 'ducking de música durante a voz', 'pausas e encerramento deliberados'],
+    guardrails: ['não gerar um vídeo sem falas e chamá-lo de discurso', 'não atribuir fala a personagem sem identidade confirmada', 'não mascarar a voz com música ou efeitos'],
+  },
+  emocional: {
+    intent: 'emotion',
+    title: 'Cinema emocional',
+    objective: 'Criar conexão e progressão por expressões, contexto, pausas e consequência; deixar que os momentos importantes respirem em vez de acelerar todos os planos.',
+    priorities: ['planos com duração para leitura emocional', 'continuidade de personagem quando identificável', 'variação entre silêncio e crescimento musical', 'transições discretas'],
+    guardrails: ['não presumir emoção quando a análise não a identificou', 'não aplicar dissolves automaticamente a todo corte', 'não confundir lentidão com progressão dramática'],
+  },
+};
 
 export interface StyleDef {
   id: StyleId;
   label: string;
+  editorialIntent: EditorialIntent;
   description: string;
   /** Batidas por corte conforme a energia da música (baixa, média, alta). */
   beatsPerCut: [number, number, number];
@@ -48,6 +105,7 @@ export interface StyleDef {
 export const STYLES: StyleDef[] = [
   {
     id: 'hype',
+    editorialIntent: 'combat',
     label: 'Hype / Luta',
     description: 'Cortes rápidos na batida, vários animes, clarão e tremida nos impactos. Calmo no começo, explode no drop.',
     beatsPerCut: [4, 2, 1],
@@ -68,6 +126,7 @@ export const STYLES: StyleDef[] = [
   },
   {
     id: 'rapido',
+    editorialIntent: 'impact',
     label: 'Impacto rápido',
     description: 'Cortes de meia batida para destacar socos, golpes e impactos; desacelera nos trechos calmos da música.',
     beatsPerCut: [1, 0.5, 0.5],
@@ -89,6 +148,7 @@ export const STYLES: StyleDef[] = [
   },
   {
     id: 'superacao',
+    editorialIntent: 'overcoming',
     label: 'Superação',
     description: 'Começa pesado e lento, frase marcante antes da virada, depois cenas de vitória. Cor quente.',
     beatsPerCut: [8, 4, 2],
@@ -109,6 +169,7 @@ export const STYLES: StyleDef[] = [
   },
   {
     id: 'letra',
+    editorialIntent: 'lyrics',
     label: 'Letra na tela',
     description: 'Palavras grandes sincronizadas em cenas diferentes quando os tempos são confiáveis; sem karaoke confiável, mantém a frase inteira legível.',
     beatsPerCut: [2, 1, 1],
@@ -129,6 +190,7 @@ export const STYLES: StyleDef[] = [
   },
   {
     id: 'discurso',
+    editorialIntent: 'speech',
     label: 'Discurso motivacional',
     description: 'As falas dos personagens contam a história, com a música baixa por baixo e legenda em pedaços. Preto e branco.',
     beatsPerCut: [8, 8, 4],
@@ -149,6 +211,7 @@ export const STYLES: StyleDef[] = [
   },
   {
     id: 'emocional',
+    editorialIntent: 'emotion',
     label: 'Emocional',
     description: 'Poucos cortes, cenas longas e transições suaves.',
     beatsPerCut: [16, 8, 8],

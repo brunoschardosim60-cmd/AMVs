@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { shotKey, type EpisodeAnalysis, type MusicAnalysis, type Shot } from '@amv/analysis';
 import { applyCommand, ClipSchema, clipEndUs, createProject, evaluateKeyframes, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
-import { chooseMusicRange, generateAmv, lyricCueKey, makeSlots, recommendStyle, styleDef, type EpisodeInput, type GenerateOptions, type MusicInput, voiceGainDb } from '../src/index.js';
+import { chooseMusicRange, generateAmv, lyricCueKey, makeSlots, recommendStyle, styleDef, type EpisodeInput, type GenerateOptions, type MusicInput, voiceGainDb, scoreSpeechCandidate } from '../src/index.js';
 
 const S = 1_000_000;
 
@@ -171,6 +171,20 @@ describe('trecho da música', () => {
     expect(slots.every((s) => !(s.startS < 23.95 && s.endS > 24.05))).toBe(true);
   });
 
+  it('abre corte nas frases musicais mesmo quando o grid de batidas passaria direto', () => {
+    const analysis = music().analysis;
+    analysis.beats = Array.from({ length: 32 }, (_, index) => index * 0.5);
+    analysis.downbeats = [0, 2, 4, 6, 8, 10, 12, 14];
+    analysis.drops = [];
+    analysis.sections = [{ startS: 0, endS: 16, label: 'verso', energy: 0.5 }];
+    analysis.energy = Array(64).fill(0.5);
+    const longCadence = { ...styleDef('hype'), beatsPerCut: [10, 10, 10] as [number, number, number] };
+    const slots = makeSlots(analysis, [0, 16], longCadence, 2);
+
+    expect(slots.some((slot) => Math.abs(slot.endS - 8) < 0.001)).toBe(true);
+    expect(slots.some((slot) => Math.abs(slot.startS - 8) < 0.001 && slot.musicCue === 'início de frase musical')).toBe(true);
+  });
+
   it('estilo Impacto rápido corta em meia batida na parte mais intensa', () => {
     const slots = makeSlots(music().analysis, [40, 50], styleDef('rapido'), 2);
     expect(slots.length).toBeGreaterThan(18);
@@ -231,6 +245,30 @@ describe('trecho da música', () => {
     expect(avg(emotional)).toBeGreaterThan(avg(hype));
     expect(hype.length).toBeLessThan(analysis.beats.filter((beat) => beat >= range[0] && beat <= range[1]).length);
 
+  });
+});
+
+describe('qualidade editorial das falas', () => {
+  const segment = (text: string, kind: 'fala' | 'grito', impact: number, duration = 2.2) => ({
+    startS: 0, endS: duration, kind, confidence: 0.9, text, impact,
+  });
+
+  it('prioriza uma frase completa sobre um grito curto e genérico, mesmo com impacto menor', () => {
+    const phrase = segment('Eu não vou desistir!', 'fala', 0.72);
+    const shout = segment('Vamos!', 'grito', 1);
+    expect(scoreSpeechCandidate(phrase)).toBeGreaterThan(scoreSpeechCandidate(shout));
+  });
+
+  it('não recompensa transcrição longa e pouco específica só pelo número de palavras', () => {
+    const meaningful = segment('Eu vou proteger todos vocês!', 'fala', 0.7);
+    const rambling = segment('Hoje o tempo está bom para passear no parque com meus amigos', 'fala', 0.95, 4);
+    expect(scoreSpeechCandidate(meaningful)).toBeGreaterThan(scoreSpeechCandidate(rambling));
+  });
+
+  it('mantém gritos fortes elegíveis quando não há uma frase melhor', () => {
+    const shout = segment('Eu não vou desistir!', 'grito', 0.95);
+    const neutral = segment('A porta está aberta agora', 'fala', 0.3, 3);
+    expect(scoreSpeechCandidate(shout)).toBeGreaterThan(scoreSpeechCandidate(neutral));
   });
 });
 

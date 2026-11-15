@@ -123,7 +123,14 @@ describe('foco na luta', () => {
     expect(pool.length).toBe(2); // só a luta curta não dá 40 cortes
     const { r, on } = run([ep], { focus: 'fight' });
     expect(r.warnings.some((w) => w.includes('repetem'))).toBe(false);
-    expect(new Set(on('V1').map((c) => `${c.assetId}@${c.sourceInUs}`)).size).toBe(on('V1').length);
+    const clips = on('V1');
+    const fromFightA = (c: Clip) => srcS(c) >= 0 && srcS(c) < 18;
+    const fromFightB = (c: Clip) => srcS(c) >= 70 && srcS(c) < 190;
+    expect(clips.some(fromFightA)).toBe(true);
+    expect(clips.some(fromFightB)).toBe(true);
+    expect(clips.every((c) => fromFightA(c) || fromFightB(c))).toBe(true);
+    expect(clips.length).toBeGreaterThanOrEqual(80);
+    expect(new Set(clips.map((c) => `${c.assetId}@${c.sourceInUs}`)).size).toBe(clips.length);
   });
 
   it('com cenas de sobra, fica numa luta só (não junta outra à toa)', () => {

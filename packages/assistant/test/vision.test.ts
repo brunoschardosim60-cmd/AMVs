@@ -39,6 +39,9 @@ describe('imagens para o modelo', () => {
     const result = await labelScenes(gemini, 'secret', fetch, frames(1), {
       context: {
         style: 'Hype / Luta',
+        editorialObjective: 'Construir expectativa antes do clímax.',
+        editorialPriorities: ['preparação', 'ação e reação'],
+        editorialGuardrails: ['não inventar uma vitória'],
         targetIntensity: 'Intensa',
         music: { bpm: 140, bpmConfidence: 0.9, intensity: 80, sections: [{ label: 'drop', energy: 0.9 }], dropsS: [30] },
         lyrics: ['[0:30] Eu vou vencer'],
@@ -49,6 +52,9 @@ describe('imagens para o modelo', () => {
     expect(request?.headers['x-goog-api-key']).toBe('secret');
     expect(request?.body.contents[0].parts[0].text).toContain('1 imagem');
     expect(request?.body.contents[0].parts[0].text).toContain('"bpm":140');
+    expect(request?.body.contents[0].parts[0].text).toContain('Construir expectativa antes do clímax.');
+    expect(request?.body.contents[0].parts[0].text).toContain('não inventar uma vitória');
+    expect(request?.body.contents[0].parts[0].text).toContain('não altere rótulos para combinar com o estilo');
     expect(request?.body.contents[0].parts[0].text).toContain('Eu vou vencer');
     expect(request?.body.contents[0].parts[0].text).toContain('Nunca vou desistir');
     expect(request?.body.contents[0].parts[1]).toEqual({ inlineData: { mimeType: 'image/jpeg', data: 'IMG0' } });

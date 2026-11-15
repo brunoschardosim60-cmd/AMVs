@@ -233,7 +233,7 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
   const phraseLength = downbeatsInRange.length >= 8 ? 4 : downbeatsInRange.length >= 4 ? 2 : 0;
   const phraseStarts = new Set<number>();
   if (phraseLength > 0) {
-    for (let i = 0; i < downbeatsInRange.length; i += phraseLength) phraseStarts.add(i);
+    for (let i = 0; i < downbeatsInRange.length; i += phraseLength) phraseStarts.add(downbeatsInRange[i]!);
   }
   let i = 0;
   let slotNumber = 0;
@@ -295,6 +295,9 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
       n += Math.max(1, Math.round(style.beatsPerCut[lvl]! * speedUp));
       next = grid[Math.min(grid.length - 1, i + n)] ?? b;
     }
+    // Início de frase musical é um ponto editorial de transição, mesmo quando não coincide com o corte previsto.
+    const phraseBoundary = [...phraseStarts].find((timeS) => timeS > cur + 0.05 && timeS < next - 0.05);
+    if (phraseBoundary !== undefined) next = phraseBoundary;
     if (next <= cur + 0.05 || i + n >= grid.length - 1) next = b;
     const sectionEdge = sectionEdges.find((edge) => edge > cur + 0.05 && edge < next - 0.05);
     if (sectionEdge !== undefined) next = sectionEdge;
@@ -304,11 +307,13 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
       .sort((left, right) => Math.min(right.endS, a + endS) - Math.max(right.startS, a + startS) - (Math.min(left.endS, a + endS) - Math.max(left.startS, a + startS)))[0];
     const impactAtCut = impacts.find((event) => Math.abs(event.timelineS - timelineS) <= 0.08 && event.confidence >= accentThreshold);
     const rhythmChangeAtCut = activeRhythmChange && Math.abs(activeRhythmChange.timelineS - timelineS) <= 0.08;
+    const isPhraseStart = [...phraseStarts].some((timeS) => Math.abs(timeS - cur) <= 0.08);
     const musicCue = activePause ? 'pausa musical'
       : activeGrowth ? 'crescimento musical'
         : rhythmChangeAtCut ? `mudança de ritmo (${activeRhythmChange.direction ?? 'não classificada'})`
         : impactAtCut ? `acento espectral (${impactAtCut.band ?? 'banda não classificada'})`
-          : undefined;
+          : isPhraseStart ? 'início de frase musical'
+            : undefined;
     slots.push({
       startS,
       endS,
@@ -333,7 +338,33 @@ export interface Candidate extends SequencePlanCandidate {
   seq: string;
 }
 
-/** Fala marcante para antes do drop: curta, com impacto alto. */
+/**
+ * Pontua a qualidade editorial de uma fala sem confundir volume/grito com significado.
+ * É uma heurística linguística leve: não tenta inferir emoção nem traduzir o conteúdo.
+ */
+export function scoreSpeechCandidate(s: SpeechSegment): number {
+  const duration = Math.max(0, s.endS - s.startS);
+  const durationFit = Math.max(0, 1 - Math.abs(duration - 2.2) / 4.5);
+  const confidence = Math.max(0, Math.min(1, Number.isFinite(s.confidence) ? s.confidence : 0));
+  const impact = Math.max(0, Math.min(1, Number.isFinite(s.impact) ? s.impact : 0));
+  const rawText = s.text?.trim() ?? '';
+  const normalized = rawText.toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[¿¡]/g, '').replace(/[^\p{L}\p{N}' ]/gu, ' ').replace(/\s+/g, ' ').trim();
+  const words = normalized ? normalized.split(' ') : [];
+  const filler = new Set(['ah', 'oh', 'ei', 'hey', 'vamos', 'sim', 'nao', 'yes', 'yeah', 'no', 'uh', 'ha', 'huh', 'argh', 'okay', 'ok']);
+  let textQuality = words.length === 0 ? 0.12
+    : words.length === 1 ? 0.05
+      : words.length === 2 ? 0.22
+        : words.length <= 9 ? 0.76
+          : words.length <= 14 ? 0.56 : 0.36;
+  if (words.length <= 2 && words.every((word) => filler.has(word))) textQuality = 0.02;
+  if (words.length >= 3 && /[.!?…]\s*$/.test(rawText)) textQuality = Math.min(1, textQuality + 0.05);
+  if (/\b(nao vou|nunca vou|eu juro|eu prometo|desist|proteger|salvar|vencer|fight|never|i will|i won't|no matter|impossible|protect|save)\b/.test(normalized)) {
+    textQuality = Math.min(1, textQuality + 0.12);
+  }
+  return confidence * 0.2 + impact * 0.2 + durationFit * 0.2 + textQuality * 0.4 + (s.kind === 'grito' ? 0.02 : 0);
+}
+
+/** Escolhe uma fala marcante antes do drop, priorizando frase compreensível e completa. */
 export function pickSpeech(eps: EpisodeInput[], maxS: number, exclude: Set<string>, accept?: (ep: EpisodeInput, s: SpeechSegment) => boolean): { ep: EpisodeInput; s: SpeechSegment } | null {
   let best: { ep: EpisodeInput; s: SpeechSegment; score: number } | null = null;
   for (const ep of eps) {
@@ -342,8 +373,8 @@ export function pickSpeech(eps: EpisodeInput[], maxS: number, exclude: Set<strin
       const d = s.endS - s.startS;
       if (d < 0.6 || d > maxS) continue;
       if (accept && !accept(ep, s)) continue;
-      const score = s.impact + (s.kind === 'grito' ? 0.3 : 0) + (s.text ? 0.1 : 0) - Math.abs(d - 2) * 0.05;
-      if (!best || score > best.score) best = { ep, s, score };
+      const score = scoreSpeechCandidate(s);
+      if (!best || score > best.score || (score === best.score && s.startS < best.s.startS)) best = { ep, s, score };
     }
   }
   return best;
@@ -454,7 +485,10 @@ export function chooseSequences(eps: EpisodeInput[], neededS: number, o: { seque
   // complementa com as sequências mais dinâmicas restantes para evitar repetições desnecessárias.
   if (have < neededS * POOL_ROOM && fights.length > 0) {
     const remaining = all
-      .filter((e) => !pool.some((p) => p.ep.assetId === e.ep.assetId && p.seq.id === e.seq.id))
+      // No foco em luta, complementar só com outras lutas. Incluir sequências
+      // calmas aqui contaminava o pool e quebrava a promessa de foco editorial.
+      .filter((e) => e.seq.kind === 'luta'
+        && !pool.some((p) => p.ep.assetId === e.ep.assetId && p.seq.id === e.seq.id))
       .map((e) => ({ e, sc: score(e) }))
       .sort((a, b) => b.sc - a.sc);
     for (const { e } of remaining) {
@@ -964,7 +998,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       .flatMap((ep) => ep.analysis.speech.filter((sp) => nearPool(ep, sp) || (fight && poolEps.has(ep.assetId))).map((sp) => ({ ep, sp })))
       .filter(({ sp }) => sp.endS - sp.startS >= 0.8 && sp.endS - sp.startS <= 4)
       .filter(({ ep, sp }) => !taken.has(`${ep.assetId}@${sp.startS}`))
-      .sort((a, b) => b.sp.impact - a.sp.impact || a.sp.startS - b.sp.startS);
+      .sort((a, b) => scoreSpeechCandidate(b.sp) - scoreSpeechCandidate(a.sp) || a.sp.startS - b.sp.startS);
     // onde cabe: começa num compasso, trecho calmo da música, afastado das outras falas e do drop
     const quiet = (a: number, b: number) => {
       let sum = 0;
@@ -1013,7 +1047,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       .filter((e) => e.hasAudio && !exclude.has(e.assetId) && hasRequestedSpeechAudio(e, lang))
       .flatMap((ep) => ep.analysis.speech.map((s) => ({ ep, s })))
       .filter((x) => x.s.endS - x.s.startS >= 0.8 && x.s.endS - x.s.startS <= 6)
-      .sort((x, y) => y.s.impact - x.s.impact + (rand() - 0.5) * 0.1);
+      .sort((x, y) => scoreSpeechCandidate(y.s) - scoreSpeechCandidate(x.s) || x.s.startS - y.s.startS);
     let t = 0;
     const chosen: typeof lines = [];
     for (const l of lines) {
@@ -1196,11 +1230,13 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const currentVision = visionOf(c.ep, c.shot);
     const transitionCue = sl.isDrop
       ? 'entrada do drop'
-      : previousSlot && previousSlot.section !== sl.section
-        ? 'mudança de seção musical'
-        : previousSlot && Math.abs(previousSlot.energy - sl.energy) >= 0.3
-          ? 'contraste de energia musical'
-          : null;
+      : sl.musicCue === 'início de frase musical'
+        ? 'início de frase musical'
+        : previousSlot && previousSlot.section !== sl.section
+          ? 'mudança de seção musical'
+          : previousSlot && Math.abs(previousSlot.energy - sl.energy) >= 0.3
+            ? 'contraste de energia musical'
+            : null;
     const lyricMatch = sl.lyricCueKey ? effectiveLyricMatches?.[c.id]?.[sl.lyricCueKey] : undefined;
     const breakdown = scoreSceneCandidate({
       shot: c.shot,
@@ -1247,46 +1283,141 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   };
 
   const sequencePlan = planSequence(fitSlots, candidates, {
-    mode: organizationMode,
+    // No foco em lutas, percorre as sequências escolhidas em ordem de origem.
+    // O modo narrativo podia começar pela luta mais forte e, ao esgotá-la,
+    // considerar a luta anterior inacessível, repetindo cenas da primeira.
+    mode: fight ? 'chronological' : organizationMode,
     seed: opts.seed,
     score: (slot, candidate, previous, previousSlot, history) => scoreCandidate(slot, candidate, previous, previousSlot, history)?.score ?? Number.NEGATIVE_INFINITY,
-    candidateWindow: organizationMode === 'narrative' && fitSlots.length > 3
-      ? (slot, musicSlot, forward, progress) => {
+    candidateWindow: fight
+      ? (_slotIndex, musicSlot, forward) => {
+          // No foco em lutas, escolhe a próxima cena cronológica que realmente
+          // cabe no slot. Cenas curtas demais não podem bloquear todo o plano.
+          const ordered = [...forward].sort((a, b) =>
+            a.episodeOrder - b.episodeOrder || a.sourceStartS - b.sourceStartS,
+          );
+          const slotDuration = musicSlot.endS - musicSlot.startS;
+          const fits = ordered.filter((candidate) =>
+            candidate.sourceEndS - candidate.sourceStartS + 1e-6 >= slotDuration * 0.6,
+          );
+          if (!fits.length) return [];
+          const highEnergy = musicSlot.isDrop || musicSlot.energy >= 0.7;
+          if (highEnergy) {
+            // Respeita rótulos explícitos de "não é luta". Análises antigas não
+            // registram confidence; nesse formato, o booleano explícito continua
+            // sendo o sinal disponível (mesma regra usada pelo score de cenas).
+            const nextAction = fits.find((candidate) => {
+              const visual = visionOf(candidate.ep, candidate.shot);
+              const usableFightLabel = visual && (
+                visual.confidence === undefined
+                || (typeof visual.confidence === 'number'
+                  && Number.isFinite(visual.confidence)
+                  && visual.confidence >= 0.55
+                  && visual.confidence <= 1)
+              );
+              return !(usableFightLabel && visual.fight === false);
+            });
+            return [nextAction ?? fits[0]!];
+          }
+          return [fits[0]!];
+        }
+      : organizationMode === 'narrative' && fitSlots.length > 3
+      ? (slotIndex, musicSlot, forward, progress) => {
           const byAsset = new Map<string, Candidate[]>();
           for (const candidate of forward) {
             const list = byAsset.get(candidate.assetId) ?? [];
             list.push(candidate);
             byAsset.set(candidate.assetId, list);
           }
+
           const window: Candidate[] = [];
+          const sectionChanged = slotIndex > 0 && fitSlots[slotIndex - 1]!.section !== musicSlot.section;
+          const atEditorialBoundary = musicSlot.isDrop || musicSlot.musicCue === 'início de frase musical' || sectionChanged;
+          const highEnergy = musicSlot.isDrop || musicSlot.energy >= 0.8;
+
+          const trustedVisualOf = (candidate: Candidate) => {
+            const visual = visionOf(candidate.ep, candidate.shot);
+            return visual && typeof visual.confidence === 'number'
+              && Number.isFinite(visual.confidence) && visual.confidence >= 0.55 && visual.confidence <= 1
+              ? visual
+              : undefined;
+          };
+          const isActionScene = (candidate: Candidate) => {
+            const visual = trustedVisualOf(candidate);
+            if (candidate.shot.tags.includes('calma') || candidate.shot.tags.includes('fala')) return false;
+            if (visual?.fight === false) return false;
+            return candidate.shot.tags.includes('ação')
+              || candidate.shot.tags.includes('impacto')
+              || visual?.action === 'combate'
+              || visual?.action === 'perseguição'
+              || visual?.fight === true;
+          };
+          const isQuietOrSetupScene = (candidate: Candidate) => {
+            const visual = trustedVisualOf(candidate);
+            return candidate.shot.tags.includes('calma')
+              || candidate.shot.tags.includes('fala')
+              || visual?.fight === false
+              || visual?.action === 'preparação'
+              || visual?.action === 'reação'
+              || visual?.action === 'diálogo'
+              || visual?.action === 'ambiente'
+              || visual?.sceneType === 'tension'
+              || visual?.sceneType === 'dialogue'
+              || visual?.sceneType === 'reaction';
+          };
+
+          const appendChoices = (preferred: Candidate[], fallback: Candidate[], limit: number) => {
+            const chosen = preferred.slice(0, limit);
+            const ids = new Set(chosen.map((candidate) => candidate.id));
+            for (const candidate of fallback) {
+              if (chosen.length >= limit) break;
+              if (!ids.has(candidate.id)) {
+                chosen.push(candidate);
+                ids.add(candidate.id);
+              }
+            }
+            window.push(...chosen);
+          };
+
           for (const [assetId, list] of byAsset) {
             const ordered = list.sort((a, b) => a.sequenceOrder - b.sequenceOrder || a.sourceStartS - b.sourceStartS);
             const progressForAsset = progress.get(assetId);
             const currentOrder = progressForAsset?.sequenceOrder ?? ordered[0]!.sequenceOrder;
             const currentSequence = ordered.filter((candidate) => candidate.sequenceOrder === currentOrder);
-            if (musicSlot.isDrop || musicSlot.energy >= 0.8) {
-              const isFightScene = (candidate: Candidate) => !candidate.shot.tags.includes('calma') && visionOf(candidate.ep, candidate.shot)?.fight !== false;
-              if (musicSlot.isDrop) {
-                const anchor = progressForAsset?.sourceEndS ?? currentSequence[0]?.sourceStartS ?? 0;
-                window.push(...currentSequence.filter((candidate) => candidate.sourceStartS <= anchor + 20));
-              } else {
-                window.push(...currentSequence.filter(isFightScene).slice(0, 1));
-              }
+            const anchor = progressForAsset?.sourceEndS ?? currentSequence[0]?.sourceStartS ?? ordered[0]!.sourceStartS;
+            const lookAheadS = musicSlot.isDrop ? 24 : highEnergy ? 16 : 12;
+            const nearby = currentSequence.filter((candidate) =>
+              candidate.sourceStartS >= anchor - 0.05 && candidate.sourceStartS <= anchor + lookAheadS,
+            );
+
+            // O planejador agora compara várias opções próximas: não força a primeira cena cronológica.
+            const preferred = highEnergy ? nearby.filter(isActionScene) : nearby.filter(isQuietOrSetupScene);
+            appendChoices(preferred, nearby, musicSlot.isDrop ? 7 : highEnergy ? 5 : 4);
+
+            // Mudanças musicais explícitas podem abrir a sequência seguinte, mas sem saltar por ela inteira.
+            if (atEditorialBoundary) {
               const nextOrder = ordered.find((candidate) => candidate.sequenceOrder > currentOrder)?.sequenceOrder;
               if (nextOrder !== undefined) {
-                const nextFight = ordered.find((candidate) => candidate.sequenceOrder === nextOrder && isFightScene(candidate));
-                if (nextFight) window.push(nextFight);
+                const nextSequence = ordered.filter((candidate) => candidate.sequenceOrder === nextOrder);
+                const nextPreferred = highEnergy ? nextSequence.filter(isActionScene) : nextSequence.filter(isQuietOrSetupScene);
+                appendChoices(nextPreferred, nextSequence, musicSlot.isDrop ? 2 : 1);
               }
-            } else {
-              window.push(ordered[0]!);
             }
           }
+
           if (musicSlot.lyricCueKey) {
-            window.push(...forward.filter((candidate) => (effectiveLyricMatches?.[candidate.id]?.[musicSlot.lyricCueKey!]?.score ?? 0) >= 0.6));
+            const lyricAlternatives = forward
+              .map((candidate) => ({
+                candidate,
+                score: effectiveLyricMatches?.[candidate.id]?.[musicSlot.lyricCueKey!]?.score ?? 0,
+              }))
+              .filter((item) => item.score >= 0.6)
+              .sort((a, b) => b.score - a.score || a.candidate.sourceStartS - b.candidate.sourceStartS)
+              .slice(0, 2);
+            window.push(...lyricAlternatives.map((item) => item.candidate));
           }
-          return window.length
-            ? [...new Map(window.map((candidate) => [candidate.id, candidate])).values()]
-            : forward.slice(0, 1);
+
+          return [...new Map(window.map((candidate) => [candidate.id, candidate])).values()].slice(0, 16);
         }
       : undefined,
   });
@@ -1304,8 +1435,13 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   let darkRescuedSlots = 0;
   let unfilledSlots = 0;
   const rescueSlot = (slot: Slot): { candidate: Candidate; scored: NonNullable<ReturnType<typeof scoreCandidate>> } | null => {
+    const isForwardForFight = (candidate: Candidate) => !fight || !prev
+      || candidate.episodeOrder > prev.episodeOrder
+      || (candidate.episodeOrder === prev.episodeOrder && candidate.sourceStartS >= prev.sourceEndS - 0.05);
+    // Primeiro tenta material inédito (e cronologicamente à frente, no foco luta).
+    // Só repete depois que não há mais nenhuma cena inédita capaz de caber no slot.
     const tiers: ((candidate: Candidate) => boolean)[] = [
-      (candidate) => !selectedHistory.some((item) => item.id === candidate.id) && candidate.id !== prev?.id,
+      (candidate) => !used.has(candidate.id) && candidate.id !== prev?.id && isForwardForFight(candidate),
       (candidate) => candidate.id !== prev?.id,
       () => true,
     ];

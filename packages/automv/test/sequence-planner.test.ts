@@ -116,6 +116,26 @@ describe('planejador global de sequência', () => {
     expect(result.repeatedSlots).toEqual([]);
   });
 
+  it('compara várias cenas da janela e escolhe a que melhor encaixa no slot', () => {
+    const candidates = [
+      candidate('primeira-cronologica', 0, [2]),
+      candidate('melhor-encaixe', 1, [10]),
+      candidate('terceira-opcao', 2, [6]),
+    ];
+    const result = planSequence([0], candidates, {
+      mode: 'narrative',
+      seed: 9,
+      score: (slot, item) => item.slotScores[slot]!,
+      candidateWindow: (_slot, _musicSlot, forward) => forward
+        .filter((item) => item.sourceStartS <= 12)
+        .slice(0, 4),
+      beamWidth: 8,
+      branchLimit: 8,
+    });
+
+    expect(result.choices.map((item) => item?.id)).toEqual(['melhor-encaixe']);
+  });
+
   it('repete dentro da sequência atual sem reiniciar o progresso narrativo', () => {
     const candidates = [
       candidate('cena-a', 0, [10, 0, 0, 0]),
