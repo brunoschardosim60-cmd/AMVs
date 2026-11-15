@@ -393,6 +393,17 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
         reasons.push('salto temporal livre sem marcador musical ou visual suficiente');
       }
     }
+    const hasReliableCharacterComparison = trusted(previous.vision) && trusted(vision)
+      && previous.vision.characters.length > 0 && vision.characters.length > 0;
+    const sequenceChanged = previous.sequenceId !== input.current.sequenceId;
+    if (input.organizationMode === 'narrative' && sequenceChanged && !input.transitionCue && !hasReliableCharacterComparison) {
+      const continuityPenalty = previous.assetId === current.assetId ? 0.14 : 0.22;
+      transition -= continuityPenalty;
+      reasons.push(previous.assetId === current.assetId
+        ? 'mudança de sequência sem uma nova frase ou acento musical'
+        : 'troca de episódio sem uma nova frase ou acento musical');
+    }
+
     if (transition > 0 && !reasons.some((reason) => reason.startsWith('continuidade visual') || reason.startsWith('personagem em comum'))) {
       reasons.push('continua a sequência de origem sem retroceder');
     } else if (transition < 0) {
