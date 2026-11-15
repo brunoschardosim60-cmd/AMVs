@@ -6,7 +6,7 @@
 - **Letras preservadas:** letras que cruzam um impacto podem terminar antes dele ou começar depois; linhas curtas tentam permanecer por 0,9 s sem invadir a próxima linha.
 - **Movimento mais orgânico:** push-in/pull-out discreto em planos longos sem movimento de impacto; cortes curtos não recebem zoom automático.
 - **Cortes alinhados a frames:** fronteiras dos slots são quantizadas à taxa racional do projeto para evitar cortes entre quadros.
-- **Seleção de cenas:** pontuação penaliza visibilidade muito baixa, superexposição e planos quase parados em trechos musicais agitados; cenas marcadas como quase pretas ficam em reserva.
+- **Seleção de cenas:** pontuação penaliza visibilidade muito baixa, superexposição e planos quase parados em trechos musicais agitados; cenas marcadas como quase pretas ficam em reserva e só entram se nenhum plano normal couber no slot.
 - **Cor com moderação:** exposição/sombras são levantadas em cenas escuras utilizáveis; contraste/saturação ou vinheta variam levemente com energia quando o estilo não fornece uma grade.
 - **Vozes mais consistentes:** a análise guarda estimativa RMS p90 por fala; o ganho compensa diferenças entre episódios com limite de ±4 dB. Não é medição LUFS nem substitui escuta/true-peak.
   A versão de análise do episódio passa de e3 para e4 para recalcular o dado em caches antigos.
