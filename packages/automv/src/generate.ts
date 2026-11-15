@@ -1257,7 +1257,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     mode: organizationMode,
     seed: opts.seed,
     score: (slot, candidate, previous, previousSlot, history) => scoreCandidate(slot, candidate, previous, previousSlot, history)?.score ?? Number.NEGATIVE_INFINITY,
-    candidateWindow: organizationMode === 'narrative' && fitSlots.length > 3
+    candidateWindow: organizationMode === 'narrative' && !fight && fitSlots.length > 3
       ? (slotIndex, musicSlot, forward, progress) => {
           const byAsset = new Map<string, Candidate[]>();
           for (const candidate of forward) {
