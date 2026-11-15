@@ -48,8 +48,8 @@ export interface StyleDef {
 export const STYLES: StyleDef[] = [
   {
     id: 'hype',
-    label: 'Hype / Luta',
-    description: 'Cortes rápidos na batida, vários animes, clarão e tremida nos impactos. Calmo no começo, explode no drop.',
+    label: 'Combate épico',
+    description: 'Abre espaço para a tensão, constrói a sequência e explode no drop. Prioriza combos, golpes decisivos e continuidade da luta.',
     beatsPerCut: [4, 2, 1],
     rhythmPattern: [1, 1.25, 0.75, 1],
     pauseHold: 1.35,
@@ -68,8 +68,8 @@ export const STYLES: StyleDef[] = [
   },
   {
     id: 'rapido',
-    label: 'Impacto rápido',
-    description: 'Cortes de meia batida para destacar socos, golpes e impactos; desacelera nos trechos calmos da música.',
+    label: 'Impacto & Combo',
+    description: 'Edição agressiva para combos e trocas de golpes. Cortes curtos nos acentos fortes, sem acelerar tudo o tempo inteiro.',
     beatsPerCut: [1, 0.5, 0.5],
     rhythmPattern: [1, 1, 1, 1],
     pauseHold: 1.25,
@@ -89,8 +89,8 @@ export const STYLES: StyleDef[] = [
   },
   {
     id: 'superacao',
-    label: 'Superação',
-    description: 'Começa pesado e lento, frase marcante antes da virada, depois cenas de vitória. Cor quente.',
+    label: 'Ascensão épica',
+    description: 'Constrói uma jornada: dificuldade na introdução, fala marcante na virada e cenas de conquista no clímax.',
     beatsPerCut: [8, 4, 2],
     rhythmPattern: [1.25, 1, 0.75, 1],
     pauseHold: 1.7,
@@ -109,8 +109,8 @@ export const STYLES: StyleDef[] = [
   },
   {
     id: 'letra',
-    label: 'Letra na tela',
-    description: 'Palavras grandes sincronizadas em cenas diferentes quando os tempos são confiáveis; sem karaoke confiável, mantém a frase inteira legível.',
+    label: 'Lyrics sincronizada',
+    description: 'A letra conduz a edição. Destaca palavras e frases no tempo certo, mantendo leitura confortável e cenas coerentes com o verso.',
     beatsPerCut: [2, 1, 1],
     rhythmPattern: [1, 1, 0.8, 1.2],
     pauseHold: 1.4,
@@ -129,8 +129,8 @@ export const STYLES: StyleDef[] = [
   },
   {
     id: 'discurso',
-    label: 'Discurso motivacional',
-    description: 'As falas dos personagens contam a história, com a música baixa por baixo e legenda em pedaços. Preto e branco.',
+    label: 'Dark Speech',
+    description: 'Monólogos, ameaças e frases de impacto conduzem a narrativa. Abre espaço para a voz e usa a música como tensão de fundo.',
     beatsPerCut: [8, 8, 4],
     rhythmPattern: [1.25, 1, 1.25, 0.75],
     pauseHold: 1.8,
@@ -149,8 +149,8 @@ export const STYLES: StyleDef[] = [
   },
   {
     id: 'emocional',
-    label: 'Emocional',
-    description: 'Poucos cortes, cenas longas e transições suaves.',
+    label: 'Cinema emocional',
+    description: 'Planos mais longos, expressões e momentos de respiro. Uma montagem com começo, desenvolvimento e encerramento emocional.'
     beatsPerCut: [16, 8, 8],
     rhythmPattern: [1.25, 0.8, 1.4, 0.8],
     pauseHold: 2,
