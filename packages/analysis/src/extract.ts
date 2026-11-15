@@ -158,16 +158,18 @@ export async function analyzeEpisodeFile(runner: ProcessRunner, originalPath: st
   report(0, 'Lendo legendas');
   const subtitles = await embeddedSubtitles(runner, originalPath, probe, undefined, signal).catch(() => []);
   let feat = { t: [] as number[], db: [] as number[], voiceRatio: [] as number[] };
+  let speechAudioStreamIndex: number | null = null;
   if (probe.audio.length) {
     report(0.03, 'Ouvindo falas e gritos');
     const SR = 16000;
-    const pcm = await decodePcm(runner, originalPath, SR, signal, pickAudioStreamByLanguage(probe.audio), (s) => report(0.03 + 0.25 * Math.min(1, s / Math.max(1, durationS)), 'Ouvindo falas e gritos'));
+    speechAudioStreamIndex = pickAudioStreamByLanguage(probe.audio);
+    const pcm = await decodePcm(runner, originalPath, SR, signal, speechAudioStreamIndex, (s) => report(0.03 + 0.25 * Math.min(1, s / Math.max(1, durationS)), 'Ouvindo falas e gritos'));
     feat = voiceFeatures(pcm, SR);
   }
   const speech = detectSpeech(feat, subtitles);
   report(0.3, 'Procurando cortes e ação');
   const frames = await frameStats(runner, videoPath, durationS, signal, (f) => report(0.3 + 0.68 * f, 'Procurando cortes e ação'), scratch);
-  const a = buildEpisodeAnalysis(frames, durationS, feat, speech, subtitles);
+  const a = buildEpisodeAnalysis(frames, durationS, feat, speech, subtitles, speechAudioStreamIndex);
   report(1);
   return a;
 }
