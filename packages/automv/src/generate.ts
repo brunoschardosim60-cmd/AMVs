@@ -1126,7 +1126,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const scoreCandidate = (sl: Slot, c: Candidate, previous: Candidate | null, previousSlot: Slot | null) => {
     const len = sl.endS - sl.startS;
     const shotLen = c.shot.endS - c.shot.startS;
-    if (shotLen + 1e-6 < len * 0.45 && shotLen < 0.25) return null;
+    // O retiming mínimo é 0,6x: abaixo disso o source range ultrapassa o plano e invade a cena seguinte.
+    if (shotLen + 1e-6 < len * 0.6) return null;
     const narrativeBeat = narrativeAt(direction, (sl.startS + sl.endS) / 2);
     const target = Math.min(1, Math.max(0, lowI + (highI - lowI) * sl.energy + boost + (sl.isDrop ? 0.15 : 0)));
     const previousVision = previous ? visionOf(previous.ep, previous.shot) : undefined;
