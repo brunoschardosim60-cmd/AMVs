@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TextWordTiming } from '@amv/project';
-import { splitTimedText } from './textLayer.js';
+import { splitOverlongText, splitTimedText } from './textLayer.js';
 
 const timing = (text: string, startUs: number): TextWordTiming => ({
   text,
@@ -24,15 +24,25 @@ describe('segmentos de texto cronometrados', () => {
       { text: 'つかめ', timingIndex: 1 },
     ]);
   });
-
   it('preserva pontuação junto da sílaba que recebeu o tempo ASS', () => {
     expect(splitTimedText('vencer!', [timing('ven', 0), timing('cer!', 200_000)])).toEqual([
       { text: 'ven', timingIndex: 0 },
       { text: 'cer!', timingIndex: 1 },
     ]);
   });
-
   it('não força timestamps quando os segmentos não correspondem ao texto', () => {
     expect(splitTimedText('texto atual', [timing('texto antigo', 0)])).toBeNull();
+  });
+  it('quebra texto japonês sem espaços dentro da largura disponível', () => {
+    expect(splitOverlongText('夢をつかめ', 2, (value) => Array.from(value).length)).toEqual(['夢を', 'つか', 'め']);
+  });
+  it('preserva um sinal combinante junto ao grafema', () => {
+    const wrapped = splitOverlongText('がき', 1, (value) => Array.from(value).length);
+    expect(wrapped.join('')).toBe('がき');
+    expect(wrapped).toEqual(['が', 'き']);
+  });
+  it('preserva tokens curtos e devolve o texto completo se a largura for inválida', () => {
+    expect(splitOverlongText('AMV', 4, (value) => value.length)).toEqual(['AMV']);
+    expect(splitOverlongText('AMV', 0, (value) => value.length)).toEqual(['AMV']);
   });
 });
