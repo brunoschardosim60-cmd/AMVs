@@ -1303,16 +1303,19 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
           if (!fits.length) return [];
           const highEnergy = musicSlot.isDrop || musicSlot.energy >= 0.7;
           if (highEnergy) {
-            // Evita rótulos visuais confiáveis que dizem explicitamente que não é luta.
-            // Só pula a cena quando há outra cena válida adiante; nunca deixa o slot vazio.
+            // Respeita rótulos explícitos de "não é luta". Análises antigas não
+            // registram confidence; nesse formato, o booleano explícito continua
+            // sendo o sinal disponível (mesma regra usada pelo score de cenas).
             const nextAction = fits.find((candidate) => {
               const visual = visionOf(candidate.ep, candidate.shot);
-              const trustedFight = visual
-                && typeof visual.confidence === 'number'
-                && Number.isFinite(visual.confidence)
-                && visual.confidence >= 0.55
-                && visual.confidence <= 1;
-              return !trustedFight || visual.fight !== false;
+              const usableFightLabel = visual && (
+                visual.confidence === undefined
+                || (typeof visual.confidence === 'number'
+                  && Number.isFinite(visual.confidence)
+                  && visual.confidence >= 0.55
+                  && visual.confidence <= 1)
+              );
+              return !(usableFightLabel && visual.fight === false);
             });
             return [nextAction ?? fits[0]!];
           }
