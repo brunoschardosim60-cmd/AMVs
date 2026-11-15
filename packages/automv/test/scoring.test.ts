@@ -202,6 +202,23 @@ describe('pontuação contextual de cenas', () => {
     expect(uncertain.reasons.some((reason) => reason.includes('emoção visual'))).toBe(false);
   });
 
+  it('favorece personagens recorrentes em vários planos recentes, sem exigir elenco idêntico', () => {
+    const currentVision = vision({ characters: ['Asta'] });
+    const onePriorMatch = scoreSceneCandidate({
+      ...base,
+      vision: currentVision,
+      recentCharacters: [['Asta'], ['Yuno'], ['Noelle']],
+    });
+    const recurringAcrossShots = scoreSceneCandidate({
+      ...base,
+      vision: currentVision,
+      recentCharacters: [['Asta'], ['Yuno'], ['asta'], ['Noelle']],
+    });
+    expect(recurringAcrossShots.transition).toBeGreaterThan(onePriorMatch.transition);
+    expect(recurringAcrossShots.reasons).toContain('personagem recorrente confirmado em múltiplos planos recentes');
+    expect(onePriorMatch.reasons).toContain('personagem reaparece após um corte intermediário');
+  });
+
   it('registra a troca de episódio como diversidade sem fingir match visual', () => {
     const breakdown = scoreSceneCandidate({
       ...base,
