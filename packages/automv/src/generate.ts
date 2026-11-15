@@ -1205,7 +1205,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       }),
       recentCharacters: history.slice(-5, -1).flatMap((item) => {
         const recentVision = visionOf(item.ep, item.shot);
-        return recentVision && Number.isFinite(recentVision.confidence) && recentVision.confidence >= 0.55 && recentVision.confidence <= 1
+        const confidence = recentVision?.confidence;
+        return recentVision && typeof confidence === 'number'
+          && Number.isFinite(confidence) && confidence >= 0.55 && confidence <= 1
           ? [recentVision.characters]
           : [];
       }),
