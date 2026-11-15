@@ -92,6 +92,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [characters, setCharacters] = useState<string[]>([]);
   const [characterDrafts, setCharacterDrafts] = useState<Record<string, string>>({});
   const [visionScope, setVisionScope] = useState<VisionScope>('fights');
+  const [deepVisionBeforeGenerate, setDeepVisionBeforeGenerate] = useState(false);
   const [vision, setVision] = useState<{ done: number; total: number; ep: string } | null>(null);
   const visionAbort = useRef<AbortController | null>(null);
   const [musicStart, setMusicStart] = useState<number | null>(null);
@@ -360,17 +361,17 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     }
   };
 
-  const runVision = async () => {
-    if (!platform || vision) return;
+  const runVision = async (scopeOverride: VisionScope = visionScope): Promise<{ labeled: number; failed: number; frameFailures: number } | null> => {
+    if (!platform || vision) return null;
     try {
       const settings = await loadAiSettings(platform);
       if (!settings.enabled) {
         toast({ tone: 'warn', title: 'Ligue um modelo de IA com visão', body: 'Abra o Assistente e clique na engrenagem. Gemini, Claude, GPT-4o e modelos de visão no Ollama são compatíveis.' });
-        return;
+        return null;
       }
       if (!isLocal(settings) && !settings.allowExternal) {
         toast({ tone: 'warn', title: 'Envio para a internet desligado', body: 'A análise manda quadros dos episódios ao serviço de IA. Autorize na engrenagem do Assistente ou use um modelo local (Ollama).' });
-        return;
+        return null;
       }
       const key = settings.provider.needsKey ? await platform.secrets.get(secretName(settings.presetId)) : null;
       const musicRange = music ? chooseMusicRange(music, duration, chosenStart) : null;
@@ -397,7 +398,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         : undefined;
       if (matchLyrics && !lyricCues?.length) {
         toast({ tone: 'warn', title: 'Carregue uma letra sincronizada', body: 'O encaixe semântico precisa de versos com tempo (.LRC ou .SRT).' });
-        return;
+        return null;
       }
       if (matchLyrics) setLyricSceneMatches({});
       visionAbort.current = new AbortController();
@@ -406,10 +407,26 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       let frameFailures = 0;
       let matchCount = 0;
       for (const e of ready) {
-        const targets = session.visionTargets(e.id, visionScope, undefined, matchLyrics);
+        const targets = session.visionTargets(e.id, scopeOverride, undefined, matchLyrics);
         if (!targets.length) continue;
         setVision({ done: 0, total: targets.length, ep: e.name });
-        const r = await session.runVision(e.id, { provider: settings.provider, key, fetch: platform.http, scope: visionScope, context, matchLyrics, signal: visionAbort.current.signal, onProgress: (done, total) => setVision({ done, total, ep: e.name }) });
+        const r = await session.runVision(e.id, {
+          provider: settings.provider,
+          key,
+          fetch: platform.http,
+          scope: scopeOverride,
+          context,
+          matchLyrics,
+          signal: visionAbort.current.signal,
+          onProgress: (done, total) => {
+            setVision({ done, total, ep: e.name });
+            if (deepVisionBeforeGenerate) {
+              const fraction = done / Math.max(1, total);
+              setGenerationProgress(26 + fraction * 12);
+              setGenerationStep('Análise semântica profunda · ' + e.name + ' (' + done + '/' + total + ')');
+            }
+          },
+        });
         if (matchLyrics) setLyricSceneMatches((current) => ({ ...current, ...r.lyricMatches }));
         matchCount += Object.values(r.lyricMatches).reduce((count, matches) => count + Object.keys(matches).length, 0);
         labeled += r.labeled;
@@ -417,9 +434,14 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         frameFailures += r.frameFailures;
         if (visionAbort.current.signal.aborted) break;
       }
-      toast(failed || frameFailures ? { tone: 'warn', title: `${labeled} cenas analisadas`, body: `${failed} cenas sem resposta do modelo; ${frameFailures} quadros não puderam ser extraídos. Rode de novo para tentar as cenas incompletas.` } : { tone: 'ok', title: `${labeled} cenas analisadas`, body: matchLyrics ? `${matchCount} combinações de letra/cena retornadas; as demais cenas usam a seleção local.` : 'Escolha os personagens ao lado.' });
+      if (visionAbort.current?.signal.aborted) return null;
+      toast(failed || frameFailures
+        ? { tone: 'warn', title: `${labeled} cenas analisadas`, body: `${failed} cenas sem resposta do modelo; ${frameFailures} quadros não puderam ser extraídos. Rode de novo para tentar as cenas incompletas.` }
+        : { tone: 'ok', title: `${labeled} cenas analisadas`, body: matchLyrics ? `${matchCount} combinações de letra/cena retornadas; as demais cenas usam a seleção local.` : 'Escolha os personagens ao lado.' });
+      return { labeled, failed, frameFailures };
     } catch (err) {
       if ((err as Error).name !== 'AbortError') toast({ tone: 'error', title: 'Não deu para analisar as cenas', body: (err as Error).message });
+      return null;
     } finally {
       visionAbort.current = null;
       setVision(null);
@@ -677,6 +699,18 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         visionAbort.current = null;
       }
 
+      let semanticVisionResult: { labeled: number; failed: number; frameFailures: number } | null = null;
+      const semanticPending = ready.reduce((total, episode) => total + session.visionTargets(episode.id, 'all').length, 0);
+      if (deepVisionBeforeGenerate && semanticPending > 0) {
+        setGenerationStep('Preparando análise semântica de todas as cenas...');
+        setGenerationProgress(26);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        semanticVisionResult = await runVision('all');
+        if (!semanticVisionResult) {
+          throw new Error('A análise semântica profunda não foi concluída. Confira o modelo de visão, a autorização de envio externo e tente novamente.');
+        }
+      }
+
       const directorInputs: EpisodeInput[] = ready.map((episode) => {
         const runtime = session.assetRuntime(episode.id);
         return {
@@ -735,6 +769,9 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       const issueCounts = qualityIssueSummary(editorialReview.quality.issues);
       if (localVisionPending > 0) {
         r.warnings.push('Análise visual local concluída: ' + localVisionAnalyzed + ' cenas analisadas; ' + localVisionFailed + ' sem resultado; ' + localFrameFailures + ' falhas de extração.');
+      }
+      if (semanticVisionResult) {
+        r.warnings.push('Análise semântica por visão: ' + semanticVisionResult.labeled + ' cenas rotuladas; ' + semanticVisionResult.failed + ' falhas de resposta; ' + semanticVisionResult.frameFailures + ' falhas de extração.');
       }
       if (editorialReview.repairsApplied.length) {
         r.warnings.push('Revisão automática aplicou correção segura: ' + editorialReview.repairsApplied.join(', ') + '.');
@@ -1543,6 +1580,13 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                     <input type="checkbox" className="mt-0.5 accent-violet" checked={matchLyrics} disabled={!lyrics?.cues.length} onChange={(e) => setMatchLyrics(e.target.checked)} />
                     <span>Relacionar o sentido da letra com as cenas (IA; opcional)</span>
                   </label>
+                  <label className="mt-2 flex items-start gap-1.5 text-2xs text-ink-soft">
+                    <input type="checkbox" className="mt-0.5 accent-violet" checked={deepVisionBeforeGenerate} onChange={(event) => setDeepVisionBeforeGenerate(event.target.checked)} />
+                    <span>Análise semântica profunda antes de gerar (todas as cenas)</span>
+                  </label>
+                  <p className="mt-1 text-2xs text-faint">
+                    Usa o modelo de visão configurado para analisar até 3 quadros por cena e identificar ação, emoção, enquadramento e personagens. Pode demorar e consumir cota. Se o provedor for externo, os quadros amostrados serão enviados apenas com a autorização externa já habilitada nas configurações; o vídeo e o áudio completos não são enviados.
+                  </p>
                   <p className="mt-1 text-2xs text-faint">
                     Usa até 6 versos e reanalisa os quadros amostrados para sugerir combinações; pode consumir cota do modelo. Sem essa opção, a montagem continua local, pela batida, energia, ação e emoção.
                   </p>
