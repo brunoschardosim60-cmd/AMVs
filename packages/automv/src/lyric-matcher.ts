@@ -152,7 +152,8 @@ const THEMES: SemanticTheme[] = [
   },
   {
     name: 'velocidade_movimento',
-    keywords: ['run', 'corr', 'fast', 'rapid', 'speed', 'velocidad', 'fly', 'voa', 'soar', 'sky', 'ceu', 'wind', 'vento', 'storm', 'tempestade', 'fall', 'cai', 'queda', 'drop', 'jump', 'pula', 'salt', 'escape', 'fugir'],
+    // 'drop' sozinho costuma indicar o drop musical, não uma queda física do personagem.
+    keywords: ['run', 'corr', 'fast', 'rapid', 'speed', 'velocidad', 'fly', 'voa', 'soar', 'sky', 'ceu', 'wind', 'vento', 'storm', 'tempestade', 'fall', 'cai', 'queda', 'jump', 'pula', 'salt', 'escape', 'fugir'],
     test: (candidate, vision) => {
       const chase = trustedVision(vision) && vision.action === 'perseguição';
       const motion = Number.isFinite(candidate.shot.motion) && candidate.shot.motion >= 0.55;
