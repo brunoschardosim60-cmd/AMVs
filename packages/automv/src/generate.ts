@@ -920,7 +920,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   if (wantVoice && totalVoice > 0 && style.speechBeforeDrop && dropT !== null) {
     const acceptSpeech = (ep: EpisodeInput, speech: SpeechSegment) =>
       hasRequestedSpeechAudio(ep, lang) && speechTextMatchesAudio(ep, speech, lang);
-    let pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) => nearPool(ep, speech) && acceptSpeech(ep));
+    let pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) => nearPool(ep, speech) && acceptSpeech(ep, speech));
     if (!pick && fight) pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) =>
       poolEps.has(ep.assetId) && acceptSpeech(ep, speech));
     if (pick) {
