@@ -1271,8 +1271,15 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
           const atEditorialBoundary = musicSlot.isDrop || musicSlot.musicCue === 'início de frase musical' || sectionChanged;
           const highEnergy = musicSlot.isDrop || musicSlot.energy >= 0.8;
 
-          const isActionScene = (candidate: Candidate) => {
+          const trustedVisualOf = (candidate: Candidate) => {
             const visual = visionOf(candidate.ep, candidate.shot);
+            return visual && typeof visual.confidence === 'number'
+              && Number.isFinite(visual.confidence) && visual.confidence >= 0.55 && visual.confidence <= 1
+              ? visual
+              : undefined;
+          };
+          const isActionScene = (candidate: Candidate) => {
+            const visual = trustedVisualOf(candidate);
             if (candidate.shot.tags.includes('calma') || candidate.shot.tags.includes('fala')) return false;
             if (visual?.fight === false) return false;
             return candidate.shot.tags.includes('ação')
@@ -1282,7 +1289,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
               || visual?.fight === true;
           };
           const isQuietOrSetupScene = (candidate: Candidate) => {
-            const visual = visionOf(candidate.ep, candidate.shot);
+            const visual = trustedVisualOf(candidate);
             return candidate.shot.tags.includes('calma')
               || candidate.shot.tags.includes('fala')
               || visual?.fight === false
