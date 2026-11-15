@@ -644,8 +644,55 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       let sfxAssets: GenerateOptions['sfxAssets'];
       let sfxError: string | null = null;
       setBusy(true);
+      setGenerationStep('Completando a análise visual local das cenas...');
+      setGenerationProgress(8);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const localVisionPending = ready.reduce((total, episode) => total + session.localVisionTargets(episode.id, 'all').length, 0);
+      let localVisionAnalyzed = 0;
+      let localVisionFailed = 0;
+      let localFrameFailures = 0;
+      if (localVisionPending > 0) {
+        const controller = new AbortController();
+        visionAbort.current = controller;
+        let completedBeforeEpisode = 0;
+        for (const episode of ready) {
+          const targets = session.localVisionTargets(episode.id, 'all');
+          if (!targets.length) continue;
+          setGenerationStep('Analisando cenas localmente · ' + episode.name);
+          const outcome = await session.runLocalVision(episode.id, {
+            scope: 'all',
+            signal: controller.signal,
+            onProgress: (done, total) => {
+              const fraction = (completedBeforeEpisode + done) / Math.max(1, localVisionPending);
+              setGenerationProgress(8 + fraction * 18);
+              setGenerationStep('Analisando cenas localmente · ' + episode.name + ' (' + done + '/' + total + ')');
+            },
+          });
+          if (controller.signal.aborted) throw Object.assign(new Error('Análise cancelada'), { name: 'AbortError' });
+          localVisionAnalyzed += outcome.analyzed;
+          localVisionFailed += outcome.failed;
+          localFrameFailures += outcome.frameFailures;
+          completedBeforeEpisode += targets.length;
+        }
+        visionAbort.current = null;
+      }
+
+      const directorInputs: EpisodeInput[] = ready.map((episode) => {
+        const runtime = session.assetRuntime(episode.id);
+        return {
+          assetId: episode.id,
+          name: episode.name,
+          analysis: runtime.episode!,
+          hasAudio: (episode.probe?.audio.length ?? 0) > 0,
+          sourceFps: episode.probe?.video?.avgFps ?? episode.probe?.video?.fps ?? null,
+          variableFrameRate: episode.probe?.video?.vfr ?? false,
+          audioStreams: episode.probe?.audio.map((audio) => ({ index: audio.index, language: audio.language, title: audio.title })),
+          vision: canonicalizeEpisodeVision(runtime.vision as EpisodeVision | null | undefined, session.project.characterLibrary),
+        };
+      });
+
       setGenerationStep('Preparando recursos e evidências da montagem...');
-      setGenerationProgress(12);
+      setGenerationProgress(30);
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       if (useSfx) {
@@ -662,14 +709,14 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       setGenerationStep('Definindo o objetivo editorial e o arco musical...');
       setGenerationProgress(32);
       await new Promise((resolve) => setTimeout(resolve, 0));
-      const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
+      const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, directorInputs, opts);
 
       setGenerationStep('Construindo storyboard e revisando a montagem...');
       setGenerationProgress(72);
       await new Promise((resolve) => setTimeout(resolve, 0));
       const brief = buildCreativeBrief({
         style: selectedStyle,
-        episodes: inputs,
+        episodes: directorInputs,
         music: { assetId: m.id, name: m.name, analysis: music },
         options: { durationS: duration, intensity, editorialDirection, organizationMode, focus, voiceMoments },
         direction: r.summary.direction,
@@ -681,11 +728,14 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         brief,
         direction: r.summary.direction,
         summary: r.summary,
-        episodes: inputs,
+        episodes: directorInputs,
         music: { assetId: m.id, name: m.name, analysis: music },
       });
       r.commands = editorialReview.commands;
       const issueCounts = qualityIssueSummary(editorialReview.quality.issues);
+      if (localVisionPending > 0) {
+        r.warnings.push('Análise visual local concluída: ' + localVisionAnalyzed + ' cenas analisadas; ' + localVisionFailed + ' sem resultado; ' + localFrameFailures + ' falhas de extração.');
+      }
       if (editorialReview.repairsApplied.length) {
         r.warnings.push('Revisão automática aplicou correção segura: ' + editorialReview.repairsApplied.join(', ') + '.');
       }
@@ -750,6 +800,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     } catch (e) {
       toast({ tone: 'error', title: 'Não deu para gerar', body: (e as Error).message });
     } finally {
+      visionAbort.current = null;
       setBusy(false);
       setGenerationStep(null);
       setGenerationProgress(0);
