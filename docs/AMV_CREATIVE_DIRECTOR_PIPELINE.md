@@ -285,3 +285,9 @@ A funcionalidade só deve ser considerada direção criativa completa quando:
 A geração agora transforma inícios de frase identificados pelos downbeats em possíveis fronteiras de corte e os registra como cue editorial. O planejador narrativo usa essas fronteiras junto com drops e mudanças de seção para permitir uma troca de sequência justificada. Em cada slot, ele recebe uma janela limitada de planos futuros (4 em menor energia, 5 em energia alta, 7 na entrada do drop), prioriza evidência compatível e conserva fallback cronológico. Isso reduz a escolha forçada da primeira cena, sem fingir que a análise local prova intenção narrativa.
 
 A documentação de rastreamento de batidas distingue BPM global de andamento variável; este incremento não promete resolver variações de tempo complexas. O estudo de tempo variável está documentado em https://librosa.org/doc/latest/auto_tutorials/03-advanced/plot_dynamic_beat.html.
+
+### Compatibilidade do foco em luta
+
+O look-ahead narrativo fica desativado quando a geração está no modo **Foco na luta**. Nesse modo, a lógica de seleção de lutas precisa poder expandir para a luta seguinte quando a luta escolhida tem cenas insuficientes; restringir a janela antes disso provoca repetição indevida. O teste de regressão `poucas cenas na luta forte: junta a próxima luta em vez de repetir cenas` cobre esse caso.
+
+O teste de pontuação emocional também foi atualizado para refletir o bônus específico de clímax do brief emocional: uma cena com evidência visual confiável recebe o bônus base do estilo e o reforço adicional de direção editorial no auge.
