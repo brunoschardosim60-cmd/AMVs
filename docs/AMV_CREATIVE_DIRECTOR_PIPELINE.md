@@ -291,3 +291,9 @@ A documentação de rastreamento de batidas distingue BPM global de andamento va
 O look-ahead narrativo fica desativado quando a geração está no modo **Foco na luta**. Nesse modo, a lógica de seleção de lutas precisa poder expandir para a luta seguinte quando a luta escolhida tem cenas insuficientes; restringir a janela antes disso provoca repetição indevida. O teste de regressão `poucas cenas na luta forte: junta a próxima luta em vez de repetir cenas` cobre esse caso.
 
 O teste de pontuação emocional também foi atualizado para refletir o bônus específico de clímax do brief emocional: uma cena com evidência visual confiável recebe o bônus base do estilo e o reforço adicional de direção editorial no auge.
+
+## Seleção editorial de falas — 15/11/2026
+
+A seleção de fala deixou de tratar o tipo **grito** como um bônus dominante. O novo score determinístico combina confiança da transcrição, impacto detectado, duração adequada e qualidade textual heurística. Frases completas de três a nove palavras recebem preferência; interjeições genéricas curtas perdem prioridade; frases com intenção explícita de decisão, promessa, proteção ou superação recebem um reforço pequeno. O score não traduz nem afirma compreender semanticamente o diálogo: é um filtro editorial conservador baseado no texto transcrito.
+
+A mesma pontuação ordena falas antes do drop, falas intercaladas e o estilo Discurso. Empates são resolvidos pelo timestamp de origem, sem aleatoriedade. Testes cobrem frase completa versus grito genérico, transcrição longa pouco específica e preservação de gritos realmente fortes.
