@@ -1762,6 +1762,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       if (nearestBeat && nearestBeat.distance <= 0.1 && nearestBeat.time >= 0 && nearestBeat.time < b) a = nearestBeat.time;
       const lyricKey = lyricCueKey(c);
       const lyricSceneMatch = cutsLog.find((cut) => cut.lyricCueKey === lyricKey && (cut.lyricMatchScore ?? 0) >= 0.65 && cut.startS < b && cut.startS + cut.len > a);
+      const originalLyricStart = a;
       const nextCueStart = opts.lyrics
         .filter((other) => other !== c && Number.isFinite(other.startS) && other.startS > c.startS)
         .reduce((min, other) => Math.min(min, other.startS - range[0]), D);
@@ -1790,8 +1791,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const reason = lyricSceneMatch ? `Letra da música · ${lyricSceneMatch.lyricMatchReason}` : 'Letra da música';
       const wordTimings = c.words?.map((word) => ({
         ...word,
-        startS: word.startS - range[0],
-        endS: word.endS - range[0],
+        startS: word.startS - range[0] + (a - originalLyricStart),
+        endS: word.endS - range[0] + (a - originalLyricStart),
       }));
       cmds.push({
         type: 'clip.add',
