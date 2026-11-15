@@ -1,11 +1,11 @@
-import type { Cue, Shot, ShotVision } from '@amv/analysis';
+import type { Cue, ShotVision } from '@amv/analysis';
 import type { Candidate } from './generate.js';
+import { lyricCueKey } from './lyric-cue-key.js';
 
 export interface LyricSceneMatch {
   score: number;
   reason: string;
 }
-
 export type LyricMatchMap = Record<string, Record<string, LyricSceneMatch>>;
 
 interface SemanticTheme {
@@ -14,44 +14,78 @@ interface SemanticTheme {
   test: (candidate: Candidate, vision?: ShotVision) => { match: boolean; boost: number; reason: string };
 }
 
+function normalizeText(text: string): string {
+  return text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function trustedVision(vision: ShotVision | undefined): vision is ShotVision & { confidence: number } {
+  const confidence = vision?.confidence;
+  return typeof confidence === 'number' && Number.isFinite(confidence) && confidence >= 0.55 && confidence <= 1;
+}
+
+/** Prefixes/stems are allowed, but only at token boundaries; no substring matches. */
+function keywordMatches(text: string, keyword: string): boolean {
+  const tokens = normalizeText(text).match(/[\p{L}\p{N}]+/gu) ?? [];
+  const needle = normalizeText(keyword).match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (!needle.length || needle.length > tokens.length) return false;
+  for (let start = 0; start <= tokens.length - needle.length; start++) {
+    if (needle.every((part, index) => tokens[start + index]!.startsWith(part))) return true;
+  }
+  return false;
+}
+
+function containsAny(text: string, keywords: string[]): boolean {
+  return keywords.some((keyword) => keywordMatches(text, keyword));
+}
+
+function hasDeterminedExpression(vision: ShotVision | undefined): boolean {
+  if (!trustedVision(vision)) return false;
+  return (vision.expressions ?? []).some((expression) =>
+    expression.confidence >= 0.55
+      && ['determinacao', 'determined', 'determination'].includes(normalizeText(expression.label)),
+  );
+}
+
 const THEMES: SemanticTheme[] = [
   {
     name: 'combate',
     keywords: [
       'fight', 'luta', 'batalh', 'war', 'guerra', 'hit', 'golpe', 'strike',
-      'punch', 'soco', 'kick', 'chute', 'sword', 'espada', 'blade', 'lâmina',
+      'punch', 'soco', 'kick', 'chute', 'sword', 'espada', 'blade', 'lamina',
       'blood', 'sangue', 'kill', 'matar', 'destroy', 'destruir', 'enemy', 'inimigo',
       'smash', 'crush', 'esmagar', 'battle', 'clash',
     ],
-    test: (c, vision) => {
-      const isCombat = vision?.action === 'combate' || c.shot.tags.includes('impacto') || c.shot.tags.includes('ação');
-      if (isCombat) {
-        return {
-          match: true,
-          boost: vision?.action === 'combate' ? 0.85 : 0.72,
-          reason: 'ação e combate visual combinam com a letra de confronto',
-        };
-      }
+    test: (candidate, vision) => {
+      const semanticCombat = trustedVision(vision) && vision.action === 'combate';
+      const taggedCombat = candidate.shot.tags.includes('impacto') || candidate.shot.tags.includes('ação');
+      if (semanticCombat || taggedCombat) return {
+        match: true,
+        boost: semanticCombat ? 0.86 : 0.7,
+        reason: semanticCombat
+          ? 'ação de combate identificada pela análise visual confiável'
+          : 'tag local de ação/impacto compatível com a letra de confronto',
+      };
       return { match: false, boost: 0, reason: '' };
     },
   },
   {
-    name: 'poder_determinação',
+    name: 'poder_determinacao',
     keywords: [
       'power', 'poder', 'strong', 'forte', 'god', 'deus', 'king', 'rei',
-      'rise', 'ergue', 'levanta', 'stand', 'never give up', 'não vou desistir',
-      'hope', 'esperanç', 'dream', 'sonho', 'alive', 'vivo', 'win', 'venc',
-      'champion', 'campeão', 'faith', 'fé', 'destiny', 'destino', 'unleash',
+      'rise', 'ergue', 'levanta', 'stand', 'never give up', 'nao vou desistir',
+      'hope', 'esperanc', 'dream', 'sonho', 'alive', 'vivo', 'win', 'venc',
+      'champion', 'campeao', 'faith', 'fe', 'destiny', 'destino', 'unleash',
     ],
-    test: (c, vision) => {
-      const isDetermined = vision?.emotion === 'determinação' || (c.shot.intensity >= 0.7 && c.shot.motion >= 0.5);
-      if (isDetermined) {
-        return {
-          match: true,
-          boost: vision?.emotion === 'determinação' ? 0.88 : 0.68,
-          reason: 'intensidade e expressão de determinação casam com a mensagem de superação',
-        };
-      }
+    test: (_candidate, vision) => {
+      const emotion = trustedVision(vision) && vision.emotion === 'determinação';
+      const expression = hasDeterminedExpression(vision);
+      if (emotion || expression) return {
+        match: true,
+        boost: emotion ? 0.88 : 0.78,
+        reason: emotion
+          ? 'emoção de determinação identificada com confiança suficiente'
+          : 'expressão de determinação identificada com confiança suficiente',
+      };
       return { match: false, boost: 0, reason: '' };
     },
   },
@@ -59,181 +93,129 @@ const THEMES: SemanticTheme[] = [
     name: 'fogo_calor',
     keywords: [
       'fire', 'fogo', 'flame', 'chama', 'burn', 'queim', 'blaze', 'inferno',
-      'heat', 'calor', 'ember', 'brasa', 'spark', 'faísca', 'ignite', 'explos',
+      'heat', 'calor', 'ember', 'brasa', 'spark', 'faisca', 'ignite', 'explos',
     ],
-    test: (c, vision) => {
-      const local = vision?.local;
-      const dominant = local?.dominantColors ?? [];
-      const hasWarmColor = dominant.some((color) => {
-        const hex = color.replace('#', '');
-        if (hex.length < 6) return false;
-        const r = parseInt(hex.slice(0, 2), 16);
-        const g = parseInt(hex.slice(2, 4), 16);
-        const b = parseInt(hex.slice(4, 6), 16);
-        return r > 160 && r > b * 1.5;
-      });
-      const highMotion = c.shot.motion >= 0.65 || c.shot.tags.includes('impacto');
-      if (hasWarmColor || highMotion) {
-        return {
-          match: true,
-          boost: hasWarmColor ? 0.8 : 0.62,
-          reason: 'tonalidade de cores quentes e energia visual reforçam a temática de fogo/chamas',
-        };
-      }
+    test: (_candidate, vision) => {
+      const explicit = trustedVision(vision) && containsAny(
+        vision.note,
+        ['fire', 'fogo', 'flame', 'chama', 'queim', 'incendio', 'lava', 'brasa', 'explos'],
+      );
+      if (explicit) return {
+        match: true,
+        boost: 0.78,
+        reason: 'descrição visual confiável menciona fogo, chama ou explosão',
+      };
       return { match: false, boost: 0, reason: '' };
     },
   },
   {
-    name: 'escuridão_noite',
-    keywords: [
-      'dark', 'escur', 'shadow', 'sombr', 'night', 'noite', 'black', 'negro',
-      'preto', 'abyss', 'abismo', 'void', 'vazio', 'cold', 'frio', 'blind', 'cego',
-    ],
-    test: (c, vision) => {
-      const brightness = vision?.local?.brightness ?? c.shot.brightness;
-      if (brightness < 0.38) {
-        return {
-          match: true,
-          boost: 0.82,
-          reason: 'atmosfera escura e dramática coincide com o verso de escuridão/noite',
-        };
-      }
+    name: 'escuridao_noite',
+    keywords: ['dark', 'escur', 'shadow', 'sombr', 'night', 'noite', 'black', 'negro', 'preto', 'abyss', 'abismo', 'void', 'vazio'],
+    test: (candidate, vision) => {
+      const brightness = vision?.local?.brightness ?? candidate.shot.brightness;
+      if (Number.isFinite(brightness) && brightness < 0.38) return {
+        match: true,
+        boost: 0.72,
+        reason: 'baixa luminância local combina com a atmosfera escura citada na letra',
+      };
       return { match: false, boost: 0, reason: '' };
     },
   },
   {
     name: 'luz_brilho',
-    keywords: [
-      'light', 'luz', 'shine', 'brilh', 'sun', 'sol', 'gold', 'ouro',
-      'star', 'estrel', 'beam', 'raio', 'flash', 'clarão', 'lightning', 'trovão',
-      'relâmpag', 'white', 'branco',
-    ],
-    test: (c, vision) => {
-      const brightness = vision?.local?.brightness ?? c.shot.brightness;
-      if (brightness > 0.62 || c.shot.tags.includes('impacto')) {
-        return {
-          match: true,
-          boost: brightness > 0.62 ? 0.8 : 0.65,
-          reason: 'iluminação intensa e claridade visual casam com o verso luminoso',
-        };
-      }
+    keywords: ['light', 'luz', 'shine', 'brilh', 'sun', 'sol', 'gold', 'ouro', 'star', 'estrel', 'beam', 'raio', 'flash', 'clarao', 'lightning', 'trovao', 'relampag', 'white', 'branco'],
+    test: (candidate, vision) => {
+      const brightness = vision?.local?.brightness ?? candidate.shot.brightness;
+      if (Number.isFinite(brightness) && brightness > 0.68) return {
+        match: true,
+        boost: 0.76,
+        reason: 'alta luminância local combina com a imagem luminosa citada na letra',
+      };
       return { match: false, boost: 0, reason: '' };
     },
   },
   {
-    name: 'emoção_dor_lágrimas',
-    keywords: [
-      'cry', 'chora', 'tear', 'lágrima', 'pain', 'dor', 'hurt', 'ferid',
-      'suffer', 'sofr', 'alone', 'sozinh', 'sad', 'triste', 'grief', 'luto',
-      'heart', 'coração', 'bleed', 'sangr', 'broken', 'quebrad',
-    ],
-    test: (c, vision) => {
-      const isSad = vision?.emotion === 'tristeza' || c.shot.tags.includes('calma');
-      const isCloseUp = vision?.framing === 'close-up' || vision?.framing === 'extreme-close-up';
-      if (isSad || isCloseUp) {
-        return {
-          match: true,
-          boost: vision?.emotion === 'tristeza' ? 0.9 : 0.65,
-          reason: 'expressão emocional e plano fechado ressoam com o teor sentimental da letra',
-        };
-      }
+    name: 'emocao_dor_lagrimas',
+    keywords: ['cry', 'chora', 'tear', 'lagrima', 'pain', 'dor', 'hurt', 'ferid', 'suffer', 'sofr', 'alone', 'sozinh', 'sad', 'triste', 'grief', 'luto', 'heart', 'coracao', 'bleed', 'sangr', 'broken', 'quebrad'],
+    test: (_candidate, vision) => {
+      const emotion = trustedVision(vision) && vision.emotion === 'tristeza';
+      const expression = trustedVision(vision) && (vision.expressions ?? []).some((item) =>
+        item.confidence >= 0.55 && ['tristeza', 'sad', 'crying', 'chorando'].includes(normalizeText(item.label)),
+      );
+      if (emotion || expression) return {
+        match: true,
+        boost: emotion ? 0.9 : 0.8,
+        reason: 'tristeza reconhecida por emoção ou expressão visual confiável',
+      };
       return { match: false, boost: 0, reason: '' };
     },
   },
   {
     name: 'velocidade_movimento',
-    keywords: [
-      'run', 'corr', 'fast', 'rápid', 'speed', 'velocidad', 'fly', 'voa',
-      'soar', 'sky', 'céu', 'wind', 'vento', 'storm', 'tempestade', 'fall',
-      'cai', 'queda', 'drop', 'jump', 'pula', 'salt', 'escape', 'fugir',
-    ],
-    test: (c, vision) => {
-      const highMotion = c.shot.motion >= 0.55 || vision?.action === 'perseguição';
-      if (highMotion) {
-        return {
-          match: true,
-          boost: 0.8,
-          reason: 'velocidade e dinâmica de movimento acelerado sincronizados com a letra',
-        };
-      }
+    keywords: ['run', 'corr', 'fast', 'rapid', 'speed', 'velocidad', 'fly', 'voa', 'soar', 'sky', 'ceu', 'wind', 'vento', 'storm', 'tempestade', 'fall', 'cai', 'queda', 'drop', 'jump', 'pula', 'salt', 'escape', 'fugir'],
+    test: (candidate, vision) => {
+      const chase = trustedVision(vision) && vision.action === 'perseguição';
+      const motion = Number.isFinite(candidate.shot.motion) && candidate.shot.motion >= 0.55;
+      if (chase || motion) return {
+        match: true,
+        boost: chase ? 0.86 : 0.72,
+        reason: chase ? 'perseguição identificada pela análise visual confiável' : 'movimento medido na cena combina com a ideia de velocidade',
+      };
       return { match: false, boost: 0, reason: '' };
     },
   },
 ];
 
-function normalizeText(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '');
+function matchedSpeech(candidate: Candidate, themes: SemanticTheme[]): boolean {
+  const shot = candidate.shot;
+  const duration = Math.max(0, shot.endS - shot.startS);
+  return candidate.ep.analysis.speech.some((speech) => {
+    if (!speech.text?.trim() || !Number.isFinite(speech.confidence) || speech.confidence < 0.65) return false;
+    const overlap = Math.min(shot.endS, speech.endS) - Math.max(shot.startS, speech.startS);
+    if (overlap < Math.min(0.25, duration * 0.25)) return false;
+    return themes.some((theme) => theme.keywords.some((keyword) => keywordMatches(speech.text!, keyword)));
+  });
 }
 
-/**
- * Faz a correspondência semântica automática entre a letra da música e as cenas candidatas.
- * Funciona de forma totalmente local e determinística, sem depender de rede ou de chaves de API externas.
- */
+/** Local thematic cue: not a probability score and not a speaker-identity system. */
 export function matchLyricsSemantics(
   cues: Cue[],
   candidates: Candidate[],
-  visionOf?: (c: Candidate) => ShotVision | undefined,
+  visionOf?: (candidate: Candidate) => ShotVision | undefined,
 ): LyricMatchMap {
   const result: LyricMatchMap = {};
-
   for (const cue of cues) {
-    if (!cue.text?.trim()) continue;
-    const normCue = normalizeText(cue.text);
-    const cueKey = `${Math.round(cue.startS * 1000)}-${Math.round(cue.endS * 1000)}`;
+    if (!cue.text?.trim() || !Number.isFinite(cue.startS) || !Number.isFinite(cue.endS) || cue.endS <= cue.startS) continue;
+    const themes = THEMES.filter((theme) => theme.keywords.some((keyword) => keywordMatches(cue.text, keyword)));
+    if (!themes.length) continue;
+    const cueKey = lyricCueKey(cue);
 
-    // Identifica quais temas semânticos a estrofe da letra aborda
-    const activeThemes: { theme: SemanticTheme; matchCount: number }[] = [];
-    for (const theme of THEMES) {
-      let count = 0;
-      for (const kw of theme.keywords) {
-        if (normCue.includes(kw)) count++;
-      }
-      if (count > 0) activeThemes.push({ theme, matchCount: count });
-    }
-
-    if (!activeThemes.length) continue;
-
-    // Avalia os candidatos para essa linha da letra
     for (const candidate of candidates) {
       const vision = visionOf ? visionOf(candidate) : undefined;
       let bestScore = 0;
       let bestReason = '';
-
-      for (const { theme } of activeThemes) {
-        const testResult = theme.test(candidate, vision);
-        if (testResult.match && testResult.boost > bestScore) {
-          bestScore = testResult.boost;
-          bestReason = testResult.reason;
+      for (const theme of themes) {
+        const match = theme.test(candidate, vision);
+        if (match.match && match.boost > bestScore) {
+          bestScore = match.boost;
+          bestReason = match.reason;
         }
       }
-
-      // Verifica também se o personagem fala algo parecido no episódio
-      const overlappingSpeech = candidate.ep.analysis.speech.find(
-        (sp) => sp.startS >= candidate.shot.startS - 0.5 && sp.endS <= candidate.shot.endS + 0.5,
-      );
-      if (overlappingSpeech?.text) {
-        const normSpeech = normalizeText(overlappingSpeech.text);
-        const commonWord = activeThemes.some(({ theme }) =>
-          theme.keywords.some((kw) => normSpeech.includes(kw)),
-        );
-        if (commonWord) {
-          bestScore = Math.min(0.98, bestScore + 0.15);
-          bestReason = `fala do personagem coincide tematicamente com a letra: "${cue.text}"`;
+      if (matchedSpeech(candidate, themes)) {
+        const speechReason = 'fala reconhecida no mesmo plano reforça o tema lexical da letra (sem identificar quem fala)';
+        if (bestScore < 0.58) {
+          bestScore = 0.58;
+          bestReason = speechReason;
+        } else {
+          // Keep the stronger visual rationale; speech is corroborating evidence, not a replacement.
+          bestReason = bestReason ? bestReason + '; ' + speechReason : speechReason;
         }
       }
-
       if (bestScore >= 0.55) {
         result[candidate.id] ??= {};
-        result[candidate.id]![cueKey] = {
-          score: Math.round(bestScore * 100) / 100,
-          reason: bestReason,
-        };
+        result[candidate.id]![cueKey] = { score: Math.round(bestScore * 100) / 100, reason: bestReason };
       }
     }
   }
-
   return result;
 }
