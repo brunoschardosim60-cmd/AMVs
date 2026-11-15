@@ -292,8 +292,12 @@ describe('gerar AMV — hype', () => {
       command.type === 'clip.add' && command.clip.trackId === voiceTrackId,
     );
 
-    expect(voiceClips).toHaveLength(0);
-    expect(result.warnings.some((warning) => warning.includes('Nenhuma fala marcante'))).toBe(true);
+    // A legenda em português não combina com o áudio japonês, mas não deve suprimir a fala.
+    expect(voiceClips).toHaveLength(1);
+    expect(voiceClips[0]!.audio.streamIndex).toBe(1);
+    expect(result.warnings.some((warning) => warning.includes('Nenhuma fala marcante'))).toBe(false);
+    const textTrackId = p.tracks.find((track) => track.kind === 'text')!.id;
+    expect(result.commands.some((command) => command.type === 'clip.add' && command.clip.trackId === textTrackId)).toBe(false);
   });
 
   it('monta vídeo inteiro, sem sobreposição, na batida, com motivo em cada clipe', () => {
@@ -462,10 +466,9 @@ describe('outros estilos', () => {
     const cuts = new Set(videoClips.map((clip) => clip.timelineStartUs));
     expect(wordClips.every((w) => cuts.has(w.timelineStartUs))).toBe(true);
     expect(wordClips.every((clip) => clip.text?.timingPrecision === 'word')).toBe(true);
-    // a pausa de 0,4 s entre "stop" e "arise" recebe um plano normal, não vira quadro preto
-    const bridge = videoClips.find((clip) => clip.timelineStartUs === 17.6 * S);
-    expect(bridge).toBeDefined();
-    expect(clipEndUs(bridge!)).toBe(18 * S);
+    // a pausa entre "stop" e "arise" permanece coberta por imagem, mesmo que o corte caia noutro ponto da grade
+    expect(videoClips.some((clip) => clip.timelineStartUs <= 17.6 * S && clipEndUs(clip) > 17.6 * S)).toBe(true);
+    expect(videoClips.some((clip) => clip.timelineStartUs < 18 * S && clipEndUs(clip) >= 18 * S)).toBe(true);
     for (let index = 1; index < videoClips.length; index++) {
       expect(videoClips[index]!.timelineStartUs).toBe(clipEndUs(videoClips[index - 1]!));
     }
