@@ -908,9 +908,11 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const wantVoice = opts.useSpeech && voice && opts.style !== 'discurso';
   const totalVoice = wantVoice ? Math.max(0, Math.min(5, Math.round(opts.voiceMoments ?? (style.speechBeforeDrop ? 1 : 0)))) : 0;
   if (wantVoice && totalVoice > 0 && style.speechBeforeDrop && dropT !== null) {
-    const acceptSpeech = (ep: EpisodeInput) => hasRequestedSpeechAudio(ep, lang);
+    const acceptSpeech = (ep: EpisodeInput, speech: SpeechSegment) =>
+      hasRequestedSpeechAudio(ep, lang) && speechTextMatchesAudio(ep, speech, lang);
     let pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) => nearPool(ep, speech) && acceptSpeech(ep));
-    if (!pick && fight) pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep) => poolEps.has(ep.assetId) && acceptSpeech(ep));
+    if (!pick && fight) pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) =>
+      poolEps.has(ep.assetId) && acceptSpeech(ep, speech));
     if (pick) {
       const len = pick.s.endS - pick.s.startS;
       blocks.push({ ep: pick.ep, s: pick.s, atS: dropT - len, len, from: dropT - len, to: dropT, preDrop: true });
