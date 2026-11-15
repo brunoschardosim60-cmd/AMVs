@@ -29,6 +29,8 @@ export interface SceneScoringInput {
   recentSceneIds?: string[];
   /** Enquadramento dos últimos cortes; para variedade de enquadramento. */
   recentFramings?: string[];
+  /** Personagens identificados em planos anteriores, excluindo o corte imediatamente anterior. */
+  recentCharacters?: string[][];
 }
 
 export interface SceneScoreBreakdown {
@@ -257,6 +259,21 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
   let transition = 0;
   let diversity = 0;
   let visual = 0;
+  // Continuidade de elenco em janela curta: evita que o personagem principal desapareça
+  // por um único corte, sem exigir que toda cena tenha o mesmo elenco.
+  if (trusted(vision) && input.recentCharacters?.length) {
+    const currentCharacters = new Set(vision.characters.map(normLabel).filter(Boolean));
+    const matchingShots = input.recentCharacters.filter((characters) =>
+      characters.some((name) => currentCharacters.has(normLabel(name))),
+    ).length;
+    if (matchingShots >= 2) {
+      transition += 0.12;
+      reasons.push('personagem recorrente confirmado em múltiplos planos recentes');
+    } else if (matchingShots === 1) {
+      transition += 0.05;
+      reasons.push('personagem reaparece após um corte intermediário');
+    }
+  }
   // anti-repetição reforçada: penalizar cenas usadas recentemente
   if (input.recentSceneIds?.length) {
     const recentIndex = input.recentSceneIds.indexOf(current.assetId + '@' + current.sourceStartS);
