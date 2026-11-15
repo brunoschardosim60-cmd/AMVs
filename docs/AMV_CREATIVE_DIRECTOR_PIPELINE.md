@@ -31,6 +31,16 @@ Hoje:
 
 Portanto, o resultado rápido não é sinal de que uma direção completa aconteceu. O sistema está executando um planejador com informações pré-computadas.
 
+## 2. Fundamento de pesquisa
+
+A arquitetura foi comparada com literatura sobre montagem computacional:
+
+- **Coerência audiovisual como otimização conjunta:** o estudo *Emotion-Aware Music Driven Movie Montage* (Journal of Computer Science and Technology, 2023) combina entendimento de conteúdo, emoção de música e planos, completude da história por cena e sincronização rítmica em um processo de seleção/composição em duas etapas. Isso sustenta separar análise, intenção, composição e revisão, em vez de tratar batidas como objetivo único. DOI: https://doi.org/10.1007/s11390-023-3064-6
+- **Continuidade de ação importa mais que semelhança superficial:** o estudo *The Impact of Continuity Editing in Narrative Film on Event Segmentation* (Cognitive Science, 2011) distingue continuidade espacial, temporal e de ação; as descontinuidades de ação tiveram maior impacto na segmentação dos eventos pelos espectadores. Por isso, a próxima evolução deve classificar preparação → execução → reação/consequência e avaliar a transição, não apenas distância entre enquadramentos. https://pmc.ncbi.nlm.nih.gov/articles/PMC3208769/
+- **Estrutura semântica orienta a escolha de takes:** *Computational Video Editing for Dialogue-Driven Scenes* (ACM TOG, 2017) combina rótulos estruturais de diálogo, sentimento e enquadramento com idioms de edição selecionáveis. Isso reforça a ideia de estilos como regras editoriais explícitas aplicadas a evidências, não apenas presets de BPM/efeitos. https://graphics.stanford.edu/papers/roughcut/
+
+Esses trabalhos são referências de arquitetura, não provas de que o AMV Studio atual atingiu qualidade equivalente. Eles também mostram por que uma revisão de timeline sem análise semântica e avaliação de transições continua sendo parcial.
+
 ## 2. Resultado desejado
 
 O botão **Gerar AMV** deve iniciar um fluxo com sete entregáveis internos:
