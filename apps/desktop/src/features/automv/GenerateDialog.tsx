@@ -695,9 +695,6 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       if (editorialReview.quality.issues.length > 6) {
         r.warnings.push((editorialReview.quality.issues.length - 6) + ' outro(s) ponto(s) ficaram no relatório de revisão.');
       }
-      if (!editorialReview.quality.issues.length) {
-        r.warnings.push('A revisão não encontrou problemas objetivos nos dados disponíveis. Isso não substitui a conferência artística do preview.');
-      }
       if (sfxError) r.warnings.push('Não consegui preparar os efeitos sonoros (' + sfxError + '): o vídeo saiu sem eles.');
       setGenerationProgress(90);
       // guarda o que estava antes: nada se perde
@@ -939,8 +936,120 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           </>
         }
       >
-        <p className="text-sm text-ink">{result.text}</p>
-        <p className="mt-2 text-xs text-muted">Tudo virou clipes comuns: passe o mouse num clipe da timeline para ver por que a IA escolheu aquela cena. Desfazer (Ctrl+Z) volta tudo; a montagem anterior também ficou guardada em Versões.</p>
+        <div className="max-h-[68vh] space-y-4 overflow-y-auto pr-1">
+          <div>
+            <p className="text-sm text-ink">{result.text}</p>
+            <p className="mt-2 text-xs text-muted">Os clipes continuam editáveis. Passe o mouse sobre um clipe da timeline para ver o motivo da escolha. Desfazer (Ctrl+Z) volta tudo; a montagem anterior também ficou guardada em Versões.</p>
+          </div>
+
+          <section className="rounded-md border border-line-soft p-3">
+            <h3 className="text-xs font-semibold text-ink">Objetivo editorial · {result.brief.title}</h3>
+            <p className="mt-1 text-xs text-ink-soft">{result.brief.objective}</p>
+            <div className="mt-2 flex flex-wrap gap-1.5 text-2xs text-muted">
+              <span className="rounded bg-raised px-2 py-1">{result.brief.evidence.scenes} cenas base</span>
+              <span className="rounded bg-raised px-2 py-1">{result.brief.evidence.semanticCoverage}% com semântica confiável</span>
+              <span className="rounded bg-raised px-2 py-1">{result.brief.evidence.bpmConfidence}% confiança no BPM</span>
+              <span className="rounded bg-raised px-2 py-1">confiança {result.brief.confidence === 'strong' ? 'alta' : result.brief.confidence === 'partial' ? 'parcial' : 'limitada'}</span>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <p className="mb-1 font-medium text-ink-soft">Prioridades</p>
+                <ul className="list-disc space-y-0.5 pl-4 text-muted">
+                  {result.brief.priorities.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+              <div>
+                <p className="mb-1 font-medium text-ink-soft">O que evitar</p>
+                <ul className="list-disc space-y-0.5 pl-4 text-muted">
+                  {result.brief.guardrails.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-ink">Storyboard executado</h3>
+              <span className="text-2xs text-muted">{result.storyboard.length} partes</span>
+            </div>
+            <ol className="space-y-2">
+              {result.storyboard.slice(0, 7).map((beat, index) => (
+                <li key={beat.role + ':' + beat.startS + ':' + index} className="rounded-md border border-line-soft p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-ink">{index + 1}. {beat.label}</span>
+                    <span className="tnum shrink-0 text-2xs text-muted">{mmss(beat.startS)}–{mmss(beat.endS)}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-ink-soft">{beat.intention}</p>
+                  <p className="mt-1 text-2xs text-faint">{beat.musicalEvidence}</p>
+                  {beat.scenes.length > 0 ? (
+                    <ul className="mt-2 space-y-1 text-2xs text-muted">
+                      {beat.scenes.slice(0, 3).map((scene) => (
+                        <li key={scene.clipId}>
+                          <span className="font-medium text-ink-soft">{scene.source} · {mmss(scene.sourceTimeS)}</span>
+                          {scene.action ? ' · ' + scene.action : ''}
+                          {scene.emotion ? ' · ' + scene.emotion : ''}
+                          {scene.characters.length ? ' · ' + scene.characters.join(', ') : ''}
+                          <span className="block truncate text-faint">{scene.reason}</span>
+                        </li>
+                      ))}
+                      {beat.scenes.length > 3 && <li className="text-faint">+ {beat.scenes.length - 3} outros planos nesta parte</li>}
+                    </ul>
+                  ) : (
+                    <p className="mt-1 text-2xs text-faint">Nenhum plano de vídeo ficou associado a esta parte.</p>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </section>
+
+          <section className="rounded-md border border-line-soft p-3">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold text-ink">Segunda revisão</h3>
+              <span className="text-2xs text-muted">{result.review.high} críticos · {result.review.medium} médios · {result.review.low} leves</span>
+            </div>
+            <p className="mt-1 text-2xs text-muted">
+              Cobertura: {result.review.checked} dimensões verificadas · {result.review.partial} parciais · {result.review.unavailable} indisponíveis.
+            </p>
+            {result.review.repairsApplied.length > 0 && (
+              <p className="mt-2 text-xs text-ink-soft">Correção segura aplicada: {result.review.repairsApplied.join(', ')}.</p>
+            )}
+            {result.review.issues.length > 0 ? (
+              <ul className="mt-2 space-y-1 text-xs text-ink-soft">
+                {result.review.issues.map((issue, index) => (
+                  <li key={issue.startUs + ':' + issue.type + ':' + index}>
+                    <span className="tnum text-muted">{mmss(issue.startUs / S)}</span> · <strong>{issue.type}</strong> — {issue.suggestion}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-xs text-ink-soft">Nenhum problema objetivo foi encontrado nos dados disponíveis nesta revisão.</p>
+            )}
+            {result.alignment.length > 0 && (
+              <div className="mt-3 border-t border-line-soft pt-2">
+                <p className="mb-1 text-xs font-medium text-ink-soft">Critérios do objetivo</p>
+                <ul className="space-y-1 text-2xs text-muted">
+                  {result.alignment.map((item) => (
+                    <li key={item.criterion}>
+                      <strong className={item.status === 'met' ? 'text-ink' : item.status === 'review' ? 'text-warn' : 'text-faint'}>
+                        {item.status === 'met' ? 'Atendido' : item.status === 'review' ? 'Revisar' : 'Sem evidência'}
+                      </strong>
+                      {' · '}{item.criterion}: {item.evidence}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {result.brief.limitations.length > 0 && (
+              <div className="mt-3 border-t border-line-soft pt-2">
+                <p className="mb-1 text-xs font-medium text-ink-soft">Limitações da análise</p>
+                <ul className="list-disc space-y-1 pl-4 text-2xs text-muted">
+                  {result.brief.limitations.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+            )}
+            <p className="mt-3 text-2xs text-faint">Esta revisão mede critérios estruturais e problemas detectáveis pela timeline. Não substitui uma avaliação semântica humana de todas as transições nem a conferência do vídeo exportado.</p>
+          </section>
+        </div>
         {result.warnings.length > 0 && (
           <ul className="mt-3 space-y-1 rounded-md border border-warn/30 bg-warn/10 p-3 text-xs text-ink-soft">
             {result.warnings.map((w) => (
@@ -986,7 +1095,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             Cancelar
           </Button>
           <Button variant="primary" icon={<Wand2 size={15} />} disabled={!music || ready.length === 0 || !analysisReadiness.canGenerate || busy || (localizedRange !== undefined && localizedRange.clipIds.length === 0)} onClick={() => void generate(seed)}>
-            {localizedRange ? 'Gerar alternativa' : 'Gerar'}
+            {localizedRange ? 'Gerar alternativa' : 'Gerar e revisar'}
           </Button>
         </>
       }
@@ -1005,7 +1114,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               style={{ width: `${generationProgress}%` }}
             />
           </div>
-          <p className="mt-2 text-2xs text-muted">Avaliando continuidade coreográfica, impactos e sincronização rítmica</p>
+          <p className="mt-2 text-2xs text-muted">As etapas verificam apenas sinais disponíveis; o que não tem evidência aparece como pendente de avaliação.</p>
         </div>
       )}
       {localizedRange && (
