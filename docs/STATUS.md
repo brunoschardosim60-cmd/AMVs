@@ -434,3 +434,16 @@ Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Video
 | Execução das suítes e validação no Windows/WebView2 | pendente | O GitHub não retornou status de checks para os commits desta rodada; não declarar os testes aprovados até a execução efetiva. |
 
 | Anti-repetição na busca global | código e teste adicionados | O beam search recebe os últimos seis planos escolhidos; a penalidade agora participa da escolha, não apenas da justificativa pós-geração. |
+
+
+## 2026-11-14 · Integração do patch de melhorias do AMV
+| Área | Estado | Evidência / ressalva |
+|---|---|---|
+| Cobertura de slots sem cena | implementado com fallback seguro | Reserva global só usa cenas que passam no limite 0,6×; avisos identificam repetição/saltos e slots ainda vazios. |
+| Letras em impactos e tempo mínimo de leitura | implementado | Reposicionamento condicionado a espaço livre; duração-alvo 0,9 s, sem atravessar próximo cue/impacto. |
+| Movimento suave | implementado | Push-in/pull-out limitado a planos >=1,1 s sem animação de impacto preexistente. |
+| Cortes alinhados à grade de frames | implementado | Snap usa FPS racional do projeto. |
+| Pontuação e reserva de cenas escuras | implementado | Penalidades técnicas e dark reserve; cenas escuras só entram como fallback. |
+| Cor e equalização de falas | primeira versão implementada | Correção de voz ±4 dB baseada em dB RMS p90, não LUFS; precisa de escuta e verificação de true peak. |
+| Escalonamento final Lanczos | implementado | Proxy permanece 540p/CRF 26 por desempenho. |
+| Testes de regressão | adicionados | Execução local/CI ainda não confirmada nesta rodada. Render real, Windows/WebView2 e comparação preview/export pendentes. |
