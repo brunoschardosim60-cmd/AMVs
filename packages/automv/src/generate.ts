@@ -836,6 +836,14 @@ interface VoiceBlock {
 }
 
 const DUCK_DB = -16;
+/** Referência aproximada de voz em dB RMS (percentil 90), não LUFS. */
+const VOICE_REF_DB = -18;
+/** Correção conservadora para diferenças entre episódios; limita boost/cut para reduzir risco de clipping. */
+export function voiceGainDb(baseDb: number, loudnessDb: number | undefined): number {
+  if (loudnessDb === undefined || !Number.isFinite(loudnessDb)) return baseDb;
+  const correction = Math.max(-4, Math.min(4, (VOICE_REF_DB - loudnessDb) * 0.65));
+  return Math.round((baseDb + correction) * 10) / 10;
+}
 const VOICE_GAP_S = 1.5;
 
 function generateInner(project: Project, music: MusicInput, episodes: EpisodeInput[], opts: GenerateOptions): GenerateResult {
@@ -1025,13 +1033,14 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const REPEAT_WARNING = 'Poucas cenas em sequência para o tamanho do vídeo: algumas se repetem. Importe mais episódios ou escolha mais lutas.';
   const slots = makeSlots(m, range, style, opts.intensity, opts.lyrics, beatOffsetS);
   const candidates: Candidate[] = [];
+  const darkReserve: Candidate[] = [];
   const consider = (ep: EpisodeInput, shot: Shot) => {
     const id = `${ep.assetId}@${shot.startS}`;
     if (exclude.has(id) || sceneExclusions.has(`${ep.assetId}@${shotKey(shot.startS)}`) || shot.endS - shot.startS < 0.25) return;
     if (plan.wanted && !hasCharacter(ep, shot, plan.wanted)) return;
     const sequence = sequenceFor(ep, shot);
     const seq = sequence ? `${ep.assetId}#${sequence.id}` : `${ep.assetId}#-`;
-    candidates.push({
+    (shot.tags.includes('escura') ? darkReserve : candidates).push({
       ep,
       shot,
       id,
@@ -1060,6 +1069,10 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     if (candidates.length) {
       warnings.push('A luta selecionada tinha poucas cenas aproveitáveis: usei cenas dinâmicas do restante do episódio para preencher o vídeo.');
     }
+  }
+  if (!candidates.length && darkReserve.length) {
+    candidates.push(...darkReserve);
+    warnings.push('Só havia cenas muito escuras disponíveis; usei-as como último recurso. Importe mais episódios para aumentar a variedade.');
   }
   if (!candidates.length) {
     warnings.push(plan.wanted
@@ -1114,6 +1127,21 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     splitFit({ ...sl, startS: cut, isDrop: false, word: undefined });
   };
   for (const sl of visualSlots) splitFit(sl);
+  // Quantiza todas as fronteiras à grade de frames. A mesma fronteira compartilhada
+  // recebe sempre o mesmo arredondamento, evitando lacunas e sobreposições acumuladas.
+  {
+    const frameS = project.settings.fps.den / project.settings.fps.num;
+    if (Number.isFinite(frameS) && frameS > 0) {
+      for (const slot of fitSlots) {
+        const start = Math.round(slot.startS / frameS) * frameS;
+        const end = Math.round(slot.endS / frameS) * frameS;
+        if (end - start >= frameS - 1e-9) {
+          slot.startS = start;
+          slot.endS = end;
+        }
+      }
+    }
+  }
 
   const effectiveLyricMatches = opts.lyricSceneMatches ?? (opts.lyrics && opts.lyrics.length > 0
     ? matchLyricsSemantics(opts.lyrics, candidates, (c) => visionOf(c.ep, c.shot))
@@ -1225,10 +1253,6 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       : undefined,
   });
   if (sequencePlan.repeatedSlots.length && !warnings.includes(REPEAT_WARNING)) warnings.push(REPEAT_WARNING);
-  if (sequencePlan.choices.some((candidate) => candidate === null)) {
-    warnings.push('Alguns trechos da timeline ficaram sem cena compatível com a duração disponível.');
-  }
-
   let syncedHits = 0;
   let hitSlots = 0;
   let speedRamps = 0;
@@ -1238,12 +1262,47 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const cutsLog: { startS: number; len: number; energy: number; intensity: number; isDrop: boolean; hitAtS: number | null; lyricCueKey?: string; lyricMatchScore?: number; lyricMatchReason?: string }[] = [];
 
   const selectedHistory: Candidate[] = [];
+  let rescuedSlots = 0;
+  let unfilledSlots = 0;
+  const rescueSlot = (slot: Slot): { candidate: Candidate; scored: NonNullable<ReturnType<typeof scoreCandidate>> } | null => {
+    const tiers: ((candidate: Candidate) => boolean)[] = [
+      (candidate) => !selectedHistory.some((item) => item.id === candidate.id) && candidate.id !== prev?.id,
+      (candidate) => candidate.id !== prev?.id,
+      () => true,
+    ];
+    for (const accepts of tiers) {
+      let best: { candidate: Candidate; scored: NonNullable<ReturnType<typeof scoreCandidate>> } | null = null;
+      for (const candidate of candidates) {
+        if (!accepts(candidate)) continue;
+        // Não há bypass do limite 0,6×: uma reserva nunca pode invadir o plano seguinte.
+        const scored = scoreCandidate(slot, candidate, prev, prevSlot, selectedHistory);
+        if (!scored) continue;
+        if (!best || scored.score > best.scored.score) best = { candidate, scored };
+      }
+      if (best) return best;
+    }
+    return null;
+  };
   for (const [slotIndex, sl] of fitSlots.entries()) {
     const len = sl.endS - sl.startS;
-    const c = sequencePlan.choices[slotIndex];
-    if (!c) continue;
-    const scored = scoreCandidate(sl, c, prev, prevSlot, selectedHistory);
-    if (!scored) continue;
+    let c = sequencePlan.choices[slotIndex];
+    let scored = c ? scoreCandidate(sl, c, prev, prevSlot, selectedHistory) : null;
+    if (!c || !scored) {
+      const rescue = rescueSlot(sl);
+      if (!rescue) {
+        unfilledSlots++;
+        continue;
+      }
+      c = rescue.candidate;
+      scored = {
+        ...rescue.scored,
+        breakdown: {
+          ...rescue.scored.breakdown,
+          reasons: [...rescue.scored.breakdown.reasons, 'cena de reserva escolhida sem ultrapassar a fonte'],
+        },
+      };
+      rescuedSlots++;
+    }
     const narrativeBeat = narrativeAt(direction, (sl.startS + sl.endS) / 2);
     const target = Math.min(1, Math.max(0, lowI + (highI - lowI) * sl.energy + boost + (sl.isDrop ? 0.15 : 0)));
     const best = {
@@ -1400,6 +1459,20 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         temperature: colorMatch.temperature, tint: colorMatch.tint, hue: 0, shadows: 0, midtones: 0, highlights: 0, vignette: 0,
       }));
     }
+    if (opts.useEffects && c.shot.brightness < 0.25 && Number.isFinite(c.shot.brightness)) {
+      effects.push(fx('color', {
+        brightness: 0, contrast: 1.03, saturation: 1,
+        exposure: Math.round(Math.min(0.45, (0.25 - c.shot.brightness) * 2.2) * 100) / 100,
+        temperature: 0, tint: 0, hue: 0, shadows: 0.16, midtones: 0.04, highlights: 0, vignette: 0,
+      }));
+    }
+    if (opts.useEffects && !priorGrade.length && !effects.some((effect) => effect.effect === 'color' || effect.effect === 'vignette')) {
+      if (sl.isDrop || sl.energy >= 0.75) {
+        effects.push(fx('color', { brightness: 0, contrast: 1.06, saturation: 1.08 }));
+      } else if (sl.energy <= 0.3) {
+        effects.push(fx('vignette', { strength: 0.16 }));
+      }
+    }
     const fxOn = opts.useEffects && style.impactFx > 0;
     const hasVisualImpact = c.shot.tags.includes('impacto') || (visual?.confidence !== undefined && visual.confidence >= 0.55 && visual.action === 'combate');
     let impactLocalUs: number | null = null;
@@ -1529,6 +1602,19 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       clip.sourceOutUs = clip.sourceInUs + clip.durationUs;
       speedRamps++;
     }
+    // Push-in/pull-out discreto nos planos longos sem impacto: movimento comedido,
+    // sem aplicar zoom mecânico em cortes curtos ou quando os efeitos estão desligados.
+    if (fxOn && !visualScaleKeyframes.length && len >= 1.1 && !sl.isDrop) {
+      const strength = Math.min(0.04, 0.018 + len * 0.004);
+      const out = slotIndex % 2 === 1;
+      const from = out ? punchScale * (1 + strength) : punchScale;
+      const to = out ? punchScale : punchScale * (1 + strength);
+      visualScaleKeyframes = [
+        { atUs: 0, value: from, easing: 'ease-in-out' },
+        { atUs: us(len), value: to, easing: 'linear' },
+      ];
+      visualImpactReason = 'movimento de câmera suave no plano';
+    }
     if (visualScaleKeyframes.length) clip.keyframes['transform.scale'] = visualScaleKeyframes;
     cmds.push({ type: 'clip.add', clip });
     if (opts.showText && text && sl.word) {
@@ -1547,6 +1633,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     prevSlot = sl;
     clipsMade++;
   }
+  if (rescuedSlots > 0) warnings.push(`${rescuedSlots} trecho(s) foram preenchidos com cenas de reserva; pode haver repetição ou salto narrativo. Revise esses cortes.`);
+  if (unfilledSlots > 0) warnings.push(`${unfilledSlots} trecho(s) continuaram sem cena: não havia plano com duração suficiente para preencher sem ultrapassar a fonte. Importe mais episódios ou reduza a duração.`);
   if (opts.hitSync !== false && hitSlots > 0 && syncedHits < hitSlots * 0.5) warnings.push(`Só ${syncedHits} de ${hitSlots} cortes fortes tiveram o golpe encaixado na batida (as cenas escolhidas têm o golpe longe do começo).`);
 
 
@@ -1641,7 +1729,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         crop: { left: 0, top: 0, right: 0, bottom: 0 },
       },
     }) });
-    cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: b.preDrop ? 3 : 2, fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
+    cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: voiceGainDb(b.preDrop ? 3 : 2, s.loudnessDb), fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
     if (opts.showText && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations);
     clipsMade++;
   }
@@ -1674,7 +1762,28 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       if (nearestBeat && nearestBeat.distance <= 0.1 && nearestBeat.time >= 0 && nearestBeat.time < b) a = nearestBeat.time;
       const lyricKey = lyricCueKey(c);
       const lyricSceneMatch = cutsLog.find((cut) => cut.lyricCueKey === lyricKey && (cut.lyricMatchScore ?? 0) >= 0.65 && cut.startS < b && cut.startS + cut.len > a);
-      if (!lyricSceneMatch && impactWindows.some((window) => a < window.endS && b > window.startS)) {
+      const nextCueStart = opts.lyrics
+        .filter((other) => other !== c && Number.isFinite(other.startS) && other.startS > c.startS)
+        .reduce((min, other) => Math.min(min, other.startS - range[0]), D);
+      let lyricEnd = Math.min(b, nextCueStart, D);
+      if (!lyricSceneMatch) {
+        // Tenta terminar antes do impacto; se já não houver espaço, começa depois dele.
+        for (let pass = 0; pass < impactWindows.length + 1; pass++) {
+          const overlap = impactWindows.find((window) => a < window.endS && lyricEnd > window.startS);
+          if (!overlap) break;
+          if (overlap.startS - a >= 0.6) lyricEnd = Math.min(lyricEnd, overlap.startS);
+          else a = Math.max(a, overlap.endS);
+        }
+      }
+      // Garante leitura mínima sem passar por cima da próxima linha ou de um impacto.
+      if (lyricEnd - a < 0.9 && nextCueStart >= a + 0.9 && D >= a + 0.9) {
+        const proposedEnd = a + 0.9;
+        const nextImpact = impactWindows
+          .filter((window) => window.startS >= a && window.startS < proposedEnd)
+          .reduce((min, window) => Math.min(min, window.startS), proposedEnd);
+        lyricEnd = Math.min(proposedEnd, nextImpact, nextCueStart, D);
+      }
+      if (lyricEnd - a < 0.6 || impactWindows.some((window) => a < window.endS && lyricEnd > window.startS)) {
         skippedLyrics++;
         continue;
       }
@@ -1686,7 +1795,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       }));
       cmds.push({
         type: 'clip.add',
-        clip: textClip(text.id, a, b - a, c.text, H, 'line', reason, true, Math.max(impactScore(c.text), lyricSceneMatch?.lyricMatchScore ?? 0), wordTimings, 'lyrics-cinematic'),
+        clip: textClip(text.id, a, lyricEnd - a, c.text, H, 'line', reason, true, Math.max(impactScore(c.text), lyricSceneMatch?.lyricMatchScore ?? 0), wordTimings, 'lyrics-cinematic'),
       });
     }
   }
