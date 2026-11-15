@@ -16,6 +16,14 @@ export interface CreativeBrief {
   objective: string;
   priorities: string[];
   guardrails: string[];
+  preferences: {
+    durationS: number;
+    intensity: 0 | 1 | 2 | 3;
+    editorialDirection: 'cinematic' | 'balanced' | 'hype';
+    organizationMode: 'chronological' | 'narrative' | 'free';
+    focus: 'fight' | 'mix';
+    voiceMoments: number;
+  };
   arc: Array<{ role: NarrativeRole; label: string; startS: number; endS: number; intention: string; evidence: string }>;
   evidence: {
     episodes: number;
@@ -177,6 +185,14 @@ export function buildCreativeBrief(input: {
     objective: intent.objective,
     priorities: [...intent.priorities],
     guardrails: [...intent.guardrails],
+    preferences: {
+      durationS: input.options.durationS,
+      intensity: input.options.intensity,
+      editorialDirection: input.options.editorialDirection ?? 'balanced',
+      organizationMode: input.options.organizationMode ?? 'narrative',
+      focus: input.options.focus ?? 'fight',
+      voiceMoments: input.options.voiceMoments ?? 0,
+    },
     arc: input.direction.map((beat) => ({
       role: beat.role,
       label: narrativeRoleLabel(beat.role),
@@ -297,9 +313,11 @@ function buildBriefAlignment(input: {
   summary: GenerateResult['summary'];
   videoClips: Clip[];
   textClips: Clip[];
+  episodes: EpisodeInput[];
 }): BriefAlignmentCheck[] {
   const checks: BriefAlignmentCheck[] = [];
-  const { brief, summary, videoClips, textClips } = input;
+  const { brief, summary, videoClips, textClips, episodes } = input;
+  const episodeById = new Map(episodes.map((episode) => [episode.assetId, episode]));
   const durationS = videoClips.reduce((max, clip) => Math.max(max, clipEndUs(clip) / SECOND), 0);
   const sortedDurations = videoClips.map((clip) => clip.durationUs / SECOND).sort((a, b) => a - b);
   const medianDuration = sortedDurations.length ? sortedDurations[Math.floor(sortedDurations.length / 2)]! : 0;
@@ -321,10 +339,21 @@ function buildBriefAlignment(input: {
       evidence: videoClips.length + ' planos; duração mediana de ' + medianDuration.toFixed(2) + ' s.',
     });
   } else if (brief.style === 'hype') {
+    const climaxBeats = brief.arc.filter((beat) => beat.role === 'climax');
+    const actionAtClimax = climaxBeats.length > 0 && videoClips.some((clip) => {
+      if (!climaxBeats.some((beat) => clip.timelineStartUs < beat.endS * SECOND && clipEndUs(clip) > beat.startS * SECOND)) return false;
+      const episode = episodeById.get(clip.assetId ?? '');
+      if (!episode) return false;
+      const sourceMidS = sourceTimeAt(clip, clip.durationUs / 2) / SECOND;
+      const shot = episode.analysis.shots.find((item) => sourceMidS >= item.startS && sourceMidS < item.endS);
+      return !!shot?.tags.some((tag) => ['ação', 'impacto', 'luta', 'combate', 'golpe'].includes(tag.toLocaleLowerCase('pt-BR')));
+    });
     checks.push({
-      criterion: 'Ação disponível para o clímax',
-      status: brief.evidence.semanticScenes > 0 ? (summary.hitsSynced > 0 || roles.has('climax') ? 'met' : 'review') : 'unknown',
-      evidence: summary.hitsSynced + ' impactos sincronizados; ' + (roles.has('climax') ? 'há seção musical de clímax' : 'não foi identificada seção de clímax') + '.',
+      criterion: 'Ação visual no clímax',
+      status: actionAtClimax ? (summary.hitsSynced > 0 ? 'met' : 'review') : 'unknown',
+      evidence: actionAtClimax
+        ? 'Há pelo menos um plano classificado com ação/impacto durante a seção musical de clímax; ' + summary.hitsSynced + ' impacto(s) ficaram sincronizados.'
+        : 'Não há evidência suficiente de um plano de ação no clímax. A seção musical sozinha não comprova um clímax visual.',
     });
   } else if (brief.style === 'superacao') {
     const hasArc = roles.has('opening') && (roles.has('build') || roles.has('development')) && roles.has('climax');
@@ -414,6 +443,7 @@ export function reviewGeneratedAssembly(input: CreativeDirectorInput): CreativeR
     summary: input.summary,
     videoClips: finalVideoClips,
     textClips: finalTextClips,
+    episodes: input.episodes,
   });
   return {
     commands: finalCommands,
