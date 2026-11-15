@@ -1291,15 +1291,32 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     score: (slot, candidate, previous, previousSlot, history) => scoreCandidate(slot, candidate, previous, previousSlot, history)?.score ?? Number.NEGATIVE_INFINITY,
     candidateWindow: fight
       ? (_slotIndex, musicSlot, forward) => {
-          // Em foco de luta, não pule cenas fortes que ainda podem ser usadas:
-          // consumir a próxima cena mantém a montagem contínua e evita esgotar
-          // o pool cedo e depender de cenas repetidas no fallback.
-          const next = [...forward].sort((a, b) =>
+          // No foco em lutas, escolhe a próxima cena cronológica que realmente
+          // cabe no slot. Cenas curtas demais não podem bloquear todo o plano.
+          const ordered = [...forward].sort((a, b) =>
             a.episodeOrder - b.episodeOrder || a.sourceStartS - b.sourceStartS,
-          )[0];
-          if (!next) return [];
+          );
           const slotDuration = musicSlot.endS - musicSlot.startS;
-          return next.sourceEndS - next.sourceStartS + 1e-6 >= slotDuration * 0.6 ? [next] : [];
+          const fits = ordered.filter((candidate) =>
+            candidate.sourceEndS - candidate.sourceStartS + 1e-6 >= slotDuration * 0.6,
+          );
+          if (!fits.length) return [];
+          const highEnergy = musicSlot.isDrop || musicSlot.energy >= 0.7;
+          if (highEnergy) {
+            // Evita rótulos visuais confiáveis que dizem explicitamente que não é luta.
+            // Só pula a cena quando há outra cena válida adiante; nunca deixa o slot vazio.
+            const nextAction = fits.find((candidate) => {
+              const visual = visionOf(candidate.ep, candidate.shot);
+              const trustedFight = visual
+                && typeof visual.confidence === 'number'
+                && Number.isFinite(visual.confidence)
+                && visual.confidence >= 0.55
+                && visual.confidence <= 1;
+              return !trustedFight || visual.fight !== false;
+            });
+            return [nextAction ?? fits[0]!];
+          }
+          return [fits[0]!];
         }
       : organizationMode === 'narrative' && fitSlots.length > 3
       ? (slotIndex, musicSlot, forward, progress) => {
@@ -1415,12 +1432,13 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   let darkRescuedSlots = 0;
   let unfilledSlots = 0;
   const rescueSlot = (slot: Slot): { candidate: Candidate; scored: NonNullable<ReturnType<typeof scoreCandidate>> } | null => {
-    // Em foco de luta, o plano já percorre as cenas em ordem cronológica.
-    // Se o próximo plano não couber, deixar o slot vazio é melhor que voltar
-    // para uma cena antiga e fingir que há material novo.
-    if (fight) return null;
+    const isForwardForFight = (candidate: Candidate) => !fight || !prev
+      || candidate.episodeOrder > prev.episodeOrder
+      || (candidate.episodeOrder === prev.episodeOrder && candidate.sourceStartS >= prev.sourceEndS - 0.05);
+    // Primeiro tenta material inédito (e cronologicamente à frente, no foco luta).
+    // Só repete depois que não há mais nenhuma cena inédita capaz de caber no slot.
     const tiers: ((candidate: Candidate) => boolean)[] = [
-      (candidate) => !used.has(candidate.id) && candidate.id !== prev?.id,
+      (candidate) => !used.has(candidate.id) && candidate.id !== prev?.id && isForwardForFight(candidate),
       (candidate) => candidate.id !== prev?.id,
       () => true,
     ];
