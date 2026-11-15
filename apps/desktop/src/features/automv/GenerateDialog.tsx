@@ -997,7 +997,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             <div className="h-14 w-14 rounded-full border-2 border-violet/30 border-t-violet animate-spin" />
             <Sparkles size={20} className="absolute text-violet-strong" />
           </div>
-          <h4 className="text-sm font-semibold text-ink">Inteligência Artificial Analisando & Gerando AMV</h4>
+          <h4 className="text-sm font-semibold text-ink">Direção criativa e revisão do AMV</h4>
           <p className="mt-1 text-xs font-medium text-violet-strong transition-all duration-200">{generationStep}</p>
           <div className="mt-4 h-1.5 w-64 overflow-hidden rounded-full border border-line bg-base">
             <div
