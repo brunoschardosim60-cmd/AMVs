@@ -76,6 +76,8 @@ export interface EpisodeAnalysis {
   /** Lutas e trechos calmos, em ordem. */
   sequences: Sequence[];
   speech: SpeechSegment[];
+  /** Índice da faixa usada para medir loudness das falas; null = faixa padrão/única. */
+  speechAudioStreamIndex?: number | null;
   /** Legendas embutidas lidas do arquivo (se texto). */
   subtitles: Cue[];
   /** Intensidade 0..1 a cada `curveStepS` (para gráficos). */
@@ -207,7 +209,7 @@ export function detectSpeech(feat: { t: number[]; db: number[]; voiceRatio: numb
 }
 
 /** Junta tudo em planos com intensidade e etiquetas. */
-export function buildEpisodeAnalysis(frames: FrameStat[], durationS: number, audioDb: { t: number[]; db: number[] }, speech: SpeechSegment[], subtitles: Cue[]): EpisodeAnalysis {
+export function buildEpisodeAnalysis(frames: FrameStat[], durationS: number, audioDb: { t: number[]; db: number[] }, speech: SpeechSegment[], subtitles: Cue[], speechAudioStreamIndex: number | null = null): EpisodeAnalysis {
   const cuts = detectCuts(frames);
   const bounds = [0, ...cuts, durationS];
   const ydifHi = Math.max(1, percentile(frames.map((f) => f.ydif), 95));
@@ -258,7 +260,7 @@ export function buildEpisodeAnalysis(frames: FrameStat[], durationS: number, aud
   const step = 1;
   const curve: number[] = [];
   for (let t = 0; t < durationS; t += step) curve.push(shots.find((s) => t >= s.startS && t < s.endS)?.intensity ?? 0);
-  return { version: EPISODE_ANALYSIS_VERSION, durationS, shots, sequences: buildSequences(shots), speech, subtitles, intensityCurve: Array.from(movingAverage(curve, 2), r2), curveStepS: step };
+  return { version: EPISODE_ANALYSIS_VERSION, durationS, shots, sequences: buildSequences(shots), speech, speechAudioStreamIndex, subtitles, intensityCurve: Array.from(movingAverage(curve, 2), r2), curveStepS: step };
 }
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
