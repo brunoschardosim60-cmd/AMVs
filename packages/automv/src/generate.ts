@@ -1251,42 +1251,95 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     seed: opts.seed,
     score: (slot, candidate, previous, previousSlot, history) => scoreCandidate(slot, candidate, previous, previousSlot, history)?.score ?? Number.NEGATIVE_INFINITY,
     candidateWindow: organizationMode === 'narrative' && fitSlots.length > 3
-      ? (slot, musicSlot, forward, progress) => {
+      ? (slotIndex, musicSlot, forward, progress) => {
           const byAsset = new Map<string, Candidate[]>();
           for (const candidate of forward) {
             const list = byAsset.get(candidate.assetId) ?? [];
             list.push(candidate);
             byAsset.set(candidate.assetId, list);
           }
+
           const window: Candidate[] = [];
+          const sectionChanged = slotIndex > 0 && fitSlots[slotIndex - 1]!.section !== musicSlot.section;
+          const atEditorialBoundary = musicSlot.isDrop || sectionChanged;
+          const highEnergy = musicSlot.isDrop || musicSlot.energy >= 0.8;
+
+          const isActionScene = (candidate: Candidate) => {
+            const visual = visionOf(candidate.ep, candidate.shot);
+            if (candidate.shot.tags.includes('calma') || candidate.shot.tags.includes('fala')) return false;
+            if (visual?.fight === false) return false;
+            return candidate.shot.tags.includes('ação')
+              || candidate.shot.tags.includes('impacto')
+              || visual?.action === 'combate'
+              || visual?.action === 'perseguição'
+              || visual?.fight === true;
+          };
+          const isQuietOrSetupScene = (candidate: Candidate) => {
+            const visual = visionOf(candidate.ep, candidate.shot);
+            return candidate.shot.tags.includes('calma')
+              || candidate.shot.tags.includes('fala')
+              || visual?.fight === false
+              || visual?.action === 'preparação'
+              || visual?.action === 'reação'
+              || visual?.action === 'diálogo'
+              || visual?.action === 'ambiente'
+              || visual?.sceneType === 'tension'
+              || visual?.sceneType === 'dialogue'
+              || visual?.sceneType === 'reaction';
+          };
+
+          const appendChoices = (preferred: Candidate[], fallback: Candidate[], limit: number) => {
+            const chosen = preferred.slice(0, limit);
+            const ids = new Set(chosen.map((candidate) => candidate.id));
+            for (const candidate of fallback) {
+              if (chosen.length >= limit) break;
+              if (!ids.has(candidate.id)) {
+                chosen.push(candidate);
+                ids.add(candidate.id);
+              }
+            }
+            window.push(...chosen);
+          };
+
           for (const [assetId, list] of byAsset) {
             const ordered = list.sort((a, b) => a.sequenceOrder - b.sequenceOrder || a.sourceStartS - b.sourceStartS);
             const progressForAsset = progress.get(assetId);
             const currentOrder = progressForAsset?.sequenceOrder ?? ordered[0]!.sequenceOrder;
             const currentSequence = ordered.filter((candidate) => candidate.sequenceOrder === currentOrder);
-            if (musicSlot.isDrop || musicSlot.energy >= 0.8) {
-              const isFightScene = (candidate: Candidate) => !candidate.shot.tags.includes('calma') && visionOf(candidate.ep, candidate.shot)?.fight !== false;
-              if (musicSlot.isDrop) {
-                const anchor = progressForAsset?.sourceEndS ?? currentSequence[0]?.sourceStartS ?? 0;
-                window.push(...currentSequence.filter((candidate) => candidate.sourceStartS <= anchor + 20));
-              } else {
-                window.push(...currentSequence.filter(isFightScene).slice(0, 1));
-              }
+            const anchor = progressForAsset?.sourceEndS ?? currentSequence[0]?.sourceStartS ?? ordered[0]!.sourceStartS;
+            const lookAheadS = musicSlot.isDrop ? 24 : highEnergy ? 16 : 12;
+            const nearby = currentSequence.filter((candidate) =>
+              candidate.sourceStartS >= anchor - 0.05 && candidate.sourceStartS <= anchor + lookAheadS,
+            );
+
+            // O planejador agora compara várias opções próximas: não força a primeira cena cronológica.
+            const preferred = highEnergy ? nearby.filter(isActionScene) : nearby.filter(isQuietOrSetupScene);
+            appendChoices(preferred, nearby, musicSlot.isDrop ? 7 : highEnergy ? 5 : 4);
+
+            // Mudanças musicais explícitas podem abrir a sequência seguinte, mas sem saltar por ela inteira.
+            if (atEditorialBoundary) {
               const nextOrder = ordered.find((candidate) => candidate.sequenceOrder > currentOrder)?.sequenceOrder;
               if (nextOrder !== undefined) {
-                const nextFight = ordered.find((candidate) => candidate.sequenceOrder === nextOrder && isFightScene(candidate));
-                if (nextFight) window.push(nextFight);
+                const nextSequence = ordered.filter((candidate) => candidate.sequenceOrder === nextOrder);
+                const nextPreferred = highEnergy ? nextSequence.filter(isActionScene) : nextSequence.filter(isQuietOrSetupScene);
+                appendChoices(nextPreferred, nextSequence, musicSlot.isDrop ? 2 : 1);
               }
-            } else {
-              window.push(ordered[0]!);
             }
           }
+
           if (musicSlot.lyricCueKey) {
-            window.push(...forward.filter((candidate) => (effectiveLyricMatches?.[candidate.id]?.[musicSlot.lyricCueKey!]?.score ?? 0) >= 0.6));
+            const lyricAlternatives = forward
+              .map((candidate) => ({
+                candidate,
+                score: effectiveLyricMatches?.[candidate.id]?.[musicSlot.lyricCueKey!]?.score ?? 0,
+              }))
+              .filter((item) => item.score >= 0.6)
+              .sort((a, b) => b.score - a.score || a.candidate.sourceStartS - b.candidate.sourceStartS)
+              .slice(0, 2);
+            window.push(...lyricAlternatives.map((item) => item.candidate));
           }
-          return window.length
-            ? [...new Map(window.map((candidate) => [candidate.id, candidate])).values()]
-            : forward.slice(0, 1);
+
+          return [...new Map(window.map((candidate) => [candidate.id, candidate])).values()].slice(0, 16);
         }
       : undefined,
   });
