@@ -323,7 +323,6 @@ function buildBriefAlignment(input: {
   const checks: BriefAlignmentCheck[] = [];
   const { brief, summary, videoClips, textClips, episodes } = input;
   const episodeById = new Map(episodes.map((episode) => [episode.assetId, episode]));
-  const durationS = videoClips.reduce((max, clip) => Math.max(max, clipEndUs(clip) / SECOND), 0);
   const sortedDurations = videoClips.map((clip) => clip.durationUs / SECOND).sort((a, b) => a - b);
   const medianDuration = sortedDurations.length ? sortedDurations[Math.floor(sortedDurations.length / 2)]! : 0;
   const roles = new Set(brief.arc.map((beat) => beat.role));
