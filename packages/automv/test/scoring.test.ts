@@ -180,6 +180,76 @@ describe('pontuação contextual de cenas', () => {
     expect(breakdown).not.toHaveProperty('quality');
   });
 
+  it('usa o objetivo editorial de ascensão para favorecer preparação, ação e consequência com evidência confiável', () => {
+    const plainShot = { ...shot, tags: [] as Shot['tags'] };
+    const neutralBuild = scoreSceneCandidate({
+      ...base,
+      shot: plainShot,
+      style: styleDef('superacao'),
+      narrativeRole: 'build',
+    });
+    const preparationBuild = scoreSceneCandidate({
+      ...base,
+      shot: plainShot,
+      style: styleDef('superacao'),
+      narrativeRole: 'build',
+      vision: vision({ fight: false, action: 'preparação', sceneType: 'tension' }),
+    });
+    expect(preparationBuild.narrative).toBeGreaterThan(neutralBuild.narrative);
+    expect(preparationBuild.reasons).toContain('brief de ascensão: preparação/tensão favorecida antes da virada');
+
+    const neutralClimax = scoreSceneCandidate({
+      ...base,
+      shot: plainShot,
+      style: styleDef('superacao'),
+      narrativeRole: 'climax',
+    });
+    const actionClimax = scoreSceneCandidate({
+      ...base,
+      shot: plainShot,
+      style: styleDef('superacao'),
+      narrativeRole: 'climax',
+      vision: vision({ fight: true, action: 'combate' }),
+    });
+    expect(actionClimax.action).toBeGreaterThan(neutralClimax.action);
+    expect(actionClimax.reasons).toContain('brief de ascensão: ação/determinação confiável favorecida no clímax');
+
+    const untrusted = scoreSceneCandidate({
+      ...base,
+      shot: plainShot,
+      style: styleDef('superacao'),
+      narrativeRole: 'build',
+      vision: vision({ fight: false, action: 'preparação', sceneType: 'tension', confidence: 0.4 }),
+    });
+    expect(untrusted.narrative).toBe(neutralBuild.narrative);
+  });
+
+  it('usa intenção de discurso e de letra para priorizar fala e correspondência semântica', () => {
+    const talkShot = { ...shot, tags: ['fala'] as Shot['tags'] };
+    const speech = scoreSceneCandidate({
+      ...base,
+      shot: talkShot,
+      style: styleDef('discurso'),
+      narrativeRole: 'build',
+      vision: vision({ fight: false, action: 'diálogo', sceneType: 'dialogue' }),
+    });
+    expect(speech.narrative).toBeGreaterThan(0);
+    expect(speech.reasons).toContain('brief de discurso: cena de diálogo confiável favorecida para conduzir a mensagem');
+
+    const matchedLyrics = scoreSceneCandidate({
+      ...base,
+      style: styleDef('letra'),
+      lyricMatchScore: 1,
+    });
+    const unrelatedLyrics = scoreSceneCandidate({
+      ...base,
+      style: styleDef('letra'),
+      lyricMatchScore: 0,
+    });
+    expect(matchedLyrics.total - unrelatedLyrics.total).toBeCloseTo(2.6);
+    expect(matchedLyrics.reasons).toContain('correspondência semântica reforçada pelo objetivo de sincronizar a letra');
+  });
+
   it('recompensa progressão de cena e só usa personagem/ação visual com confiança suficiente', () => {
     const previousVision = vision({ characters: ['Asta'], action: 'preparação' });
     const currentVision = vision({ characters: ['asta'], action: 'combate' });
