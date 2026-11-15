@@ -1,5 +1,18 @@
 # Novidades
 
+## 0.6.22
+
+**Direção editorial e seleção de cenas mais consistentes no Auto AMV.**
+
+- Define um objetivo editorial antes da montagem e aplica as prioridades/limites na seleção de cenas, não apenas na descrição do estilo.
+- Adiciona storyboard por seção musical, com origem, função narrativa e justificativa para os cortes.
+- Inclui uma segunda revisão técnica da montagem, com evidências e estados verificado, parcial ou indisponível; só corrige automaticamente problemas seguros.
+- Permite análise semântica profunda de todas as cenas como opção explícita; completa também a análise visual local pendente antes da geração.
+- Melhora a seleção de falas, favorecendo frases completas e específicas sem descartar gritos que realmente tenham impacto.
+- Torna o foco em luta mais cuidadoso com a ordem das sequências e com rótulos visuais que indicam cenas que não são combate.
+
+## 0.6.21
+
 ## 0.6.21
 
 **Continuidade de personagens mais consistente entre cortes.**
