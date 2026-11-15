@@ -360,3 +360,5 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - **Validação:** testes de regressão foram adicionados aos pacotes analysis/automv. A execução das suítes e a inspeção de render real/WebView2 continuam pendentes até haver resultado verificável do CI e validação com mídia autorizada.
 
 - **Cache de análise:** EPISODE_ANALYSIS_VERSION avançou de e3 para e4 porque a nova medição de fala precisa ser calculada; episódios antigos serão reanalisados automaticamente pelo fluxo de versão do cache.
+
+- **Correspondência da medição de voz:** o cache e4 registra o índice da faixa usada na análise. A correção de ganho só é aplicada quando a faixa selecionada para a geração é a mesma faixa medida; se o usuário trocar de japonês para português (ou vice-versa), mantém-se o ganho base em vez de usar uma medição de outro áudio.
