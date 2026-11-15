@@ -179,6 +179,9 @@ describe('legendas na timeline', () => {
     expect(toLrc(cues)).toBe('[01:01.50]linha um\n');
     expect(toVtt(cues)).toBe('WEBVTT\n\n00:01:01.500 --> 00:01:03.000\nlinha um\n');
     expect(readability('uma frase bem comprida para meio segundo', 0.5)).toMatch(/rápido/);
+    expect(readability('a'.repeat(46), 10)).toMatch(/45 caracteres/);
+    expect(readability('primeira\nsegunda\nterceira', 10)).toMatch(/duas linhas/);
+    expect(readability('夢をつかめ', 1)).toBeNull();
     expect(readability('ok', 1)).toBeNull();
   });
 });

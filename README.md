@@ -4,11 +4,12 @@ App desktop (Tauri + React + Python) para criar Anime Music Videos com editor n�
 
 O que já faz:
 - **Editor** multipista com preview, efeitos, transições, textos, mixagem e exportação até 4K a partir dos originais.
-- **Gerar meu AMV**: analisa a música (BPM, drop) e os episódios (cenas, falas, gritos, legendas) e monta o vídeo em 5 estilos, tudo editável.
+- **Gerar meu AMV**: analisa música, cenas, falas e legendas e monta o vídeo em 6 estilos, com clipes editáveis.
 - **Assistente**: pedidos em português viram propostas que você aprova item por item. Funciona offline ou com Ollama, Claude, OpenAI e compatíveis.
 - **Músicas**: biblioteca com análise, filtros, playlists, comparação, player persistente e recomendação por tema.
 - **Legendas**: importar SRT/ASS/VTT/LRC, encaixar as falas do episódio, editar, sincronizar e exportar.
 
+- Direção editorial e prompt reutilizável do Auto AMV: [`docs/prompts/AMV_EDITORIAL_PROMPT.md`](docs/prompts/AMV_EDITORIAL_PROMPT.md) · [pesquisa e critérios](docs/AMV_EDITORIAL_QUALITY.md)
 - Pesquisa técnica de algoritmos: [`docs/AMV_ALGORITHM_RESEARCH.md`](docs/AMV_ALGORITHM_RESEARCH.md)
 - Validação real do Auto AMV: [`docs/AMV_REAL_MEDIA_VALIDATION.md`](docs/AMV_REAL_MEDIA_VALIDATION.md)
 - Integração do patch e validações pendentes: [`docs/MELHORIAS-AMV.md`](docs/MELHORIAS-AMV.md)

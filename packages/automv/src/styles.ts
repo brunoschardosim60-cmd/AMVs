@@ -110,7 +110,7 @@ export const STYLES: StyleDef[] = [
   {
     id: 'letra',
     label: 'Letra na tela',
-    description: 'Uma palavra grande da letra a cada corte, cada uma numa cena diferente. Precisa da letra com tempo (LRC).',
+    description: 'Palavras grandes sincronizadas em cenas diferentes quando os tempos são confiáveis; sem karaoke confiável, mantém a frase inteira legível.',
     beatsPerCut: [2, 1, 1],
     rhythmPattern: [1, 1, 0.8, 1.2],
     pauseHold: 1.4,

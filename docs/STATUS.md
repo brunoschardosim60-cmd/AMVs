@@ -453,3 +453,12 @@ Métricas completas e comparativos fora do repositório em `C:\Users\Bruno\Video
 | Segurança da equalização de voz por idioma | implementado e testado em regressão | A análise e4 registra o índice da faixa medida; só aplica correção quando bate com a faixa escolhida. Idioma/faixa diferente mantém ganho base. |
 
 | Continuidade de personagens em vários cortes | implementado com teste de regressão | Recompensa moderada para personagens confiáveis que reaparecem na janela recente; não é tracking de identidade e não penaliza rótulos incertos. |
+
+
+| Correspondência letra/cena | implementação nesta branch | Matcher e planejador compartilham a mesma chave; regras semânticas mais estritas e testes de regressão adicionados. |
+| Tipografia CJK e legibilidade | implementação nesta branch | Texto sem espaços quebra por grafemas; typewriter conta caracteres Unicode e readability verifica duas linhas/45 caracteres. |
+| Direção editorial reutilizável | documentada nesta branch | Prompt baseado na arquitetura e pesquisa externa; não é um recurso de LLM já conectado ao runtime. |
+
+| Legenda traduzida × áudio original | corrigido nesta branch | Idioma do texto controla só a exibição da legenda; o áudio escolhido permanece na montagem. Teste: áudio japonês + legenda portuguesa. |
+
+| Karaoke com timing incerto | corrigido nesta branch | Só ASS/LRC/manual ou Whisper com confiança ≥0,90 e sem incerteza habilitam corte palavra a palavra; demais fontes permanecem como frase. |

@@ -509,7 +509,7 @@ describe('faixa de áudio da fala (japonês × português)', () => {
     expect(run([ep], { focus: 'fight', useSpeech: true, voiceLang: 'pt' }).on('Vozes')[0]!.audio.streamIndex).toBe(1);
   });
 
-  it('título vence tag errada e não mostra legenda em idioma diferente do áudio', () => {
+  it('preserva voz japonesa e esconde legenda portuguesa traduzida', () => {
     const streams = [
       { index: 1, language: 'jpn', title: 'English Dub' },
       { index: 2, language: 'jpn', title: 'Japanese Original' },
@@ -517,17 +517,18 @@ describe('faixa de áudio da fala (japonês × português)', () => {
     const ep = {
       ...twoFights('ep1', 0.7, 0.7, [{
         startS: 20, endS: 22, kind: 'fala' as const, confidence: 0.9,
-        text: 'I will win!', language: 'eng', impact: 0.9,
+        text: 'Eu vou vencer!', language: 'por', impact: 0.9,
       }]),
       audioStreams: streams,
     };
     const { out, on } = run([ep], { focus: 'fight', useSpeech: true, showText: true });
     expect(pickAudioStream(ep)).toBe(2);
-    // legenda em inglês não combina com o áudio japonês escolhido: a fala não é usada (nem voz nem legenda)
-    expect(on('Vozes')).toHaveLength(0);
+    // a legenda em inglês não combina com a faixa japonesa: preserva o áudio original e esconde só o texto traduzido
+    expect(on('Vozes')).toHaveLength(1);
+    expect(on('Vozes')[0]!.audio.streamIndex).toBe(2);
     const textTrack = out.tracks.find((track) => track.kind === 'text')!;
     expect(out.clips.some((clip) => clip.trackId === textTrack.id)).toBe(false);
-    expect(on('V1').some((clip) => clip.reason?.includes('I will win!'))).toBe(false);
+    expect(on('V1').some((clip) => clip.reason?.includes('Eu vou vencer!'))).toBe(false);
   });
 
   it('mantém a legenda quando o idioma do texto corresponde à faixa selecionada', () => {

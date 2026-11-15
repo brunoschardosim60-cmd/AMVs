@@ -403,11 +403,14 @@ export function toVtt(cues: Cue[]): string {
   return 'WEBVTT\n\n' + cues.map((c) => `${t(c.startS)} --> ${t(c.endS)}\n${c.text}\n`).join('\n');
 }
 
-/** Avisos de leitura: muito rápido para ler, muito comprido. */
+/** Avisos de leitura: velocidade e linhas longas/altas. */
 export function readability(text: string, durS: number): string | null {
-  const chars = text.replace(/\s+/g, ' ').trim().length;
-  if (durS > 0 && chars / durS > 20) return `rápido demais para ler (${Math.round(chars / durS)} caracteres/s)`;
-  if (text.split('\n').some((l) => l.length > 48)) return 'linha comprida: quebre em duas';
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  const chars = Array.from(normalized).length;
+  if (durS > 0 && chars / durS > 20) return 'rápido demais para ler (' + Math.round(chars / durS) + ' caracteres/s)';
+  const lines = text.replace(/\r/g, '').split('\n');
+  if (lines.length > 2) return 'legenda com mais de duas linhas: divida em trechos menores';
+  if (lines.some((line) => Array.from(line).length > 45)) return 'linha comprida (mais de 45 caracteres): quebre em duas';
   return null;
 }
 

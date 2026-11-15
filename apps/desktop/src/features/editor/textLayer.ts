@@ -69,6 +69,38 @@ export function splitTimedText(
   return null;
 }
 
+interface GraphemeSegmenterLike {
+  segment(input: string): Iterable<{ segment: string }>;
+}
+type GraphemeSegmenterConstructor = new (
+  locales?: string | string[],
+  options?: { granularity: 'grapheme' },
+) => GraphemeSegmenterLike;
+
+/** Breaks overlong tokens at grapheme boundaries (important for CJK scripts). */
+export function splitOverlongText(
+  text: string,
+  maxWidth: number,
+  measure: (value: string) => number,
+): string[] {
+  if (!text) return [];
+  if (!Number.isFinite(maxWidth) || maxWidth <= 0) return [text];
+  const Segmenter = (Intl as unknown as { Segmenter?: GraphemeSegmenterConstructor }).Segmenter;
+  const units = Segmenter
+    ? Array.from(new Segmenter(undefined, { granularity: 'grapheme' }).segment(text), (part) => part.segment)
+    : Array.from(text);
+  const lines: string[] = [];
+  let current = '';
+  for (const unit of units) {
+    if (current && measure(current + unit) > maxWidth) {
+      lines.push(current);
+      current = unit;
+    } else current += unit;
+  }
+  if (current) lines.push(current);
+  return lines.length ? lines : [text];
+}
+
 function measured(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, text: string, spacing: number): number {
   if (!spacing) return ctx.measureText(text).width;
   const chars = Array.from(text);
@@ -102,11 +134,14 @@ function layoutLines(
   const lines: TextLine[] = [];
   let timingIndex = 0;
   const append = (word: string, index: number, parts: TextPart[]) => {
-    const part = { word, space: '', timingIndex: index, width: measured(ctx, word, spacing) };
-    if (parts.length && parts.reduce((sum, item) => sum + item.width, 0) + part.width > width) {
-      lines.push({ parts: parts.splice(0), width: 0 });
+    const chunks = splitOverlongText(word, width, (value) => measured(ctx, value, spacing));
+    for (const chunk of chunks) {
+      const part = { word: chunk, space: '', timingIndex: index, width: measured(ctx, chunk, spacing) };
+      if (parts.length && parts.reduce((sum, item) => sum + item.width, 0) + part.width > width) {
+        lines.push({ parts: parts.splice(0), width: 0 });
+      }
+      parts.push(part);
     }
-    parts.push(part);
   };
   for (const paragraph of text.split('\n')) {
     const parts: TextPart[] = [];
@@ -184,7 +219,7 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   }
   if (a === 'typewriter') {
     const span = Math.min(1.5, dur * 0.6);
-    visibleChars = Math.floor((localS / span) * t.text.length);
+    visibleChars = Math.floor((localS / span) * Array.from(t.text).length);
   }
   const b = t.animationOut;
   if (b && dur - localS < outDuration) {
@@ -199,7 +234,7 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   }
   if (alpha <= 0) return;
 
-  const shown = t.text.slice(0, Math.max(0, visibleChars));
+  const shown = Array.from(t.text).slice(0, Math.max(0, visibleChars)).join('');
   const size = t.size * scale * k;
   ctx.save();
   ctx.globalAlpha = Math.min(1, alpha);
