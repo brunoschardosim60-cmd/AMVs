@@ -1203,6 +1203,12 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         const framing = visionOf(item.ep, item.shot)?.framing;
         return framing ? [framing] : [];
       }),
+      recentCharacters: history.slice(-5, -1).flatMap((item) => {
+        const recentVision = visionOf(item.ep, item.shot);
+        return recentVision && Number.isFinite(recentVision.confidence) && recentVision.confidence >= 0.55 && recentVision.confidence <= 1
+          ? [recentVision.characters]
+          : [];
+      }),
     });
     const dropSequenceBonus = sl.isDrop && opts.focus === 'mix' && previous?.ep.assetId === c.ep.assetId && c.sequenceOrder > previous.sequenceOrder
       ? MIX_SEQUENCE_DROP_BONUS
