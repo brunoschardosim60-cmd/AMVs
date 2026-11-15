@@ -9,6 +9,7 @@ A primeira fatia funcional está conectada ao fluxo normal de **Gerar e revisar*
 - Gera um brief explícito por estilo, com objetivo, prioridades, limites e preferências escolhidas pelo usuário.
 - Antes da montagem, completa os descritores visuais locais pendentes para todas as cenas elegíveis dos episódios selecionados. É processamento local, retomável pelo cache e cancelável; não envia quadros a provedores externos.
 - Recria as entradas do gerador com os descritores acabados, para que os sinais locais recentes possam participar da seleção de cenas.
+- Oferece uma opção explícita de análise semântica profunda de todas as cenas pelo modelo de visão configurado; só executa com autorização externa habilitada quando o provedor não é local, e pode ser cancelada.
 - Cria um storyboard pós-montagem por seção musical, com intenção, origem, tempo e motivo de cada plano. Ação, emoção e personagens só aparecem quando há rótulo semântico acima do limiar de confiança.
 - Executa uma segunda avaliação audiovisual usando o relatório objetivo existente, mostra cobertura checked/partial/unavailable e compara critérios do estilo com evidências reais.
 - Aplica uma correção automática deliberadamente restrita: encurta somente legendas geradas com sobreposição comprovada, e só mantém a alteração se o peso de problemas objetivos diminuir.
