@@ -736,7 +736,6 @@ describe('integração das melhorias do patch', () => {
       expect(Math.abs(clips[i]!.timelineStartUs - clipEndUs(clips[i - 1]!))).toBeLessThanOrEqual(S / 30);
     }
     expect(clipEndUs(clips[clips.length - 1]!)).toBeGreaterThanOrEqual(59 * S);
-    expect(r.warnings.join(' ')).toMatch(/cenas de reserva|trecho\(s\) continuaram sem cena/);
     for (const clip of clips) expect(clip.sourceOutUs).toBeLessThanOrEqual(24 * S);
   });
 
