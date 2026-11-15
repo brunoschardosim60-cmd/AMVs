@@ -340,6 +340,19 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
     if (diversity < 0) reasons.push('penalidade leve por permanecer no mesmo episódio');
   }
 
+  // Qualidade técnica básica: penaliza visibilidade ruim e planos quase imóveis em trechos agitados.
+  if (Number.isFinite(shot.brightness) && shot.brightness < 0.2) {
+    visual -= 0.2 * Math.max(0, (0.2 - shot.brightness) / 0.2);
+    reasons.push('cena escura penalizada por baixa visibilidade');
+  } else if (Number.isFinite(shot.brightness) && shot.brightness > 0.92) {
+    visual -= 0.14;
+    reasons.push('cena superexposta penalizada');
+  }
+  if (Number.isFinite(shot.motion) && shot.motion < 0.05 && input.musicEnergy >= 0.65 && !shot.tags.includes('fala')) {
+    visual -= 0.12;
+    reasons.push('cena quase parada penalizada em trecho musical agitado');
+  }
+
   const lyric = input.lyricMatchScore === undefined
     ? 0
     : (Math.max(0, Math.min(1, input.lyricMatchScore)) - 0.5) * 2;
