@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectSpeech } from '../src/index.js';
+import { buildEpisodeAnalysis, detectSpeech } from '../src/index.js';
 
 describe('nível estimado de cada fala', () => {
   const t = Array.from({ length: 200 }, (_, i) => i * 0.032);
@@ -14,6 +14,19 @@ describe('nível estimado de cada fala', () => {
     expect(speech).toHaveLength(2);
     expect(speech[0]!.loudnessDb).toBeCloseTo(-28, 0);
     expect(speech[1]!.loudnessDb).toBeCloseTo(-10, 0);
+  });
+
+
+  it('registra qual faixa foi usada para medir as falas', () => {
+    const analysis = buildEpisodeAnalysis(
+      [{ t: 0, scene: 0, ydif: 0, yavg: 100 }, { t: 1, scene: 0, ydif: 0, yavg: 100 }],
+      2,
+      { t: [0.5], db: [-20] },
+      [],
+      [],
+      7,
+    );
+    expect(analysis.speechAudioStreamIndex).toBe(7);
   });
 
   it('guarda nível estimado também na detecção sem legendas', () => {
