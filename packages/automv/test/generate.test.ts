@@ -171,6 +171,20 @@ describe('trecho da música', () => {
     expect(slots.every((s) => !(s.startS < 23.95 && s.endS > 24.05))).toBe(true);
   });
 
+  it('abre corte nas frases musicais mesmo quando o grid de batidas passaria direto', () => {
+    const analysis = music().analysis;
+    analysis.beats = Array.from({ length: 32 }, (_, index) => index * 0.5);
+    analysis.downbeats = [0, 2, 4, 6, 8, 10, 12, 14];
+    analysis.drops = [];
+    analysis.sections = [{ startS: 0, endS: 16, label: 'verso', energy: 0.5 }];
+    analysis.energy = Array(64).fill(0.5);
+    const longCadence = { ...styleDef('hype'), beatsPerCut: [10, 10, 10] as [number, number, number] };
+    const slots = makeSlots(analysis, [0, 16], longCadence, 2);
+
+    expect(slots.some((slot) => Math.abs(slot.endS - 8) < 0.001)).toBe(true);
+    expect(slots.some((slot) => Math.abs(slot.startS - 8) < 0.001 && slot.musicCue === 'início de frase musical')).toBe(true);
+  });
+
   it('estilo Impacto rápido corta em meia batida na parte mais intensa', () => {
     const slots = makeSlots(music().analysis, [40, 50], styleDef('rapido'), 2);
     expect(slots.length).toBeGreaterThan(18);
