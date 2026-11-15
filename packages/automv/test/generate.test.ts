@@ -246,6 +246,33 @@ describe('gerar AMV — hype', () => {
     expect(result.warnings.some((warning) => warning.includes('Confiança baixa na pulsação'))).toBe(true);
   });
 
+  it('não escolhe planos curtos que exigiriam ultrapassar a cena para preencher o slot', () => {
+    const p = project();
+    const ep = episode('ep1', 2, 0);
+    ep.analysis.durationS = 8;
+    ep.analysis.shots = [
+      {
+        startS: 0, endS: 0.25, motion: 1, loud: 1, intensity: 1, brightness: 0.5,
+        tags: ['ação', 'impacto'], line: null, peakS: 0.2,
+      },
+      {
+        startS: 4, endS: 7.5, motion: 0.8, loud: 0.8, intensity: 0.8, brightness: 0.5,
+        tags: ['ação', 'impacto'], line: null, peakS: 5.5,
+      },
+    ];
+    ep.analysis.sequences = [];
+    const result = generateAmv(p, music(), [ep], {
+      ...base, durationS: 2, musicStartS: 40, focus: 'mix', useSpeech: false, hitSync: false,
+    });
+    const videoTrackId = p.tracks.find((track) => track.name === 'V1')!.id;
+    const clips = result.commands.flatMap((command) =>
+      command.type === 'clip.add' && command.clip.trackId === videoTrackId ? [command.clip] : [],
+    );
+
+    expect(clips.length).toBeGreaterThan(0);
+    expect(clips.every((clip) => clip.sourceInUs >= 4 * S && clip.sourceOutUs <= 7.5 * S)).toBe(true);
+  });
+
   it('monta vídeo inteiro, sem sobreposição, na batida, com motivo em cada clipe', () => {
     const { r, out, on } = run();
     const v1 = on('V1');
