@@ -395,7 +395,7 @@ export function windowArgs(o: WindowInput): WindowJob {
       const fit = Math.min(P.width / cw, P.height / ch);
       const LW = even(cw * fit * tr.scale * kx);
       const LH = even(ch * fit * tr.scale * kx);
-      chain.push(`scale=${LW}:${LH}:flags=bicubic`, 'setsar=1');
+      chain.push(`scale=${LW}:${LH}:flags=lanczos`, 'setsar=1');
       const z = zoomExpr(c, `it+${n(Ls)}`);
       if (z) chain.push(`zoompan=z='${z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${LW}x${LH}:fps=${FPS}`);
       const lutPath = o.colorLutPath?.(c);
@@ -444,7 +444,7 @@ export function windowArgs(o: WindowInput): WindowJob {
     const scaleFrames = c.text ? undefined : c.keyframes['transform.scale'];
     if (scaleFrames?.length) {
       const scale = keyframeExpr(scaleFrames, tr.scale, `n*${fps.den}/${fps.num}+${n(Ls)}`);
-      chain.push(`scale=w='max(2,trunc(iw*(${scale})/${n(tr.scale)}/2)*2)':h='max(2,trunc(ih*(${scale})/${n(tr.scale)}/2)*2)':eval=frame:flags=bicubic`, 'setsar=1');
+      chain.push(`scale=w='max(2,trunc(iw*(${scale})/${n(tr.scale)}/2)*2)':h='max(2,trunc(ih*(${scale})/${n(tr.scale)}/2)*2)':eval=frame:flags=lanczos`, 'setsar=1');
     }
     const opacityFrames = c.keyframes['transform.opacity'];
     if (c.text && !textBaked && (tr.opacity < 1 || opacityFrames?.length)) {
