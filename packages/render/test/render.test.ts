@@ -32,7 +32,7 @@ beforeAll(async () => {
   await ff(['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=5', '-af', 'volume=0.5', join(dir, 'tone.wav')]);
   await ff(['-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000:duration=5', '-af', 'volume=0.5', join(dir, 'voice-tone.wav')]);
   await ff(['-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=30:d=5', '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000:duration=5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', join(dir, 'video-audio.mp4')]);
-});
+}, 60_000);
 afterAll(() => { if (!process.env.KEEP) rmSync(dir, { recursive: true, force: true }); });
 
 async function asset(path: string, id: string): Promise<Asset> {
