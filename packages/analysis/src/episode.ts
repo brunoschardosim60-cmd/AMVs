@@ -6,7 +6,7 @@
 import { mean, movingAverage, percentile, rmsFrames, stft, toDb } from './dsp.js';
 import { impactScore, type Cue } from './subtitles.js';
 
-export const EPISODE_ANALYSIS_VERSION = 'e3';
+export const EPISODE_ANALYSIS_VERSION = 'e4';
 
 export interface FrameStat {
   t: number;
