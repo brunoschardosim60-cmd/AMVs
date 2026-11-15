@@ -6,7 +6,8 @@
 
 A primeira fatia funcional está conectada ao fluxo normal de **Gerar e revisar**:
 
-- Gera um brief explícito por estilo, com objetivo, prioridades, limites e preferências escolhidas pelo usuário.
+- Define o objetivo editorial antes da seleção, a partir de uma fonte de verdade compartilhada pelos seis estilos; o ranking de cenas usa essa intenção para favorecer preparação, ação, reação, diálogo, emoção ou correspondência de letra quando há evidência confiável.
+- Gera um brief explícito por estilo, com objetivo, prioridades, limites e preferências escolhidas pelo usuário, usando a mesma fonte de verdade que influencia a seleção.
 - Antes da montagem, completa os descritores visuais locais pendentes para todas as cenas elegíveis dos episódios selecionados. É processamento local, retomável pelo cache e cancelável; não envia quadros a provedores externos.
 - Recria as entradas do gerador com os descritores acabados, para que os sinais locais recentes possam participar da seleção de cenas.
 - Oferece uma opção explícita de análise semântica profunda de todas as cenas pelo modelo de visão configurado; só executa com autorização externa habilitada quando o provedor não é local, e pode ser cancelada.
