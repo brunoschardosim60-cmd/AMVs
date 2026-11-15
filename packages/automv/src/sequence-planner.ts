@@ -33,7 +33,7 @@ interface BeamState<TCandidate, TSlot> {
 export interface SequencePlannerOptions<TCandidate extends SequencePlanCandidate, TSlot> {
   mode: OrganizationMode;
   seed: number;
-  score: (slot: TSlot, candidate: TCandidate, previous: TCandidate | null, previousSlot: TSlot | null) => number;
+  score: (slot: TSlot, candidate: TCandidate, previous: TCandidate | null, previousSlot: TSlot | null, history: readonly TCandidate[]) => number;
   candidateWindow?: (
     slotIndex: number,
     slot: TSlot,
@@ -139,7 +139,8 @@ export function planSequence<TCandidate extends SequencePlanCandidate, TSlot>(
       const pool = repeated ? repeatedCandidates : eligible;
       const rank = (items: TCandidate[]) => items
         .map((candidate) => {
-          const score = options.score(slot, candidate, state.last, state.lastSlot);
+          const history = state.choices.filter((choice): choice is TCandidate => choice !== null).slice(-6);
+          const score = options.score(slot, candidate, state.last, state.lastSlot, history);
           return {
             candidate,
             score: Number.isFinite(score) ? score + stableTie(options.seed, slotIndex, candidate.id) : Number.NEGATIVE_INFINITY,
