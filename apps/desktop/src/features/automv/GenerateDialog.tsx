@@ -1,5 +1,5 @@
 import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type CameraMotionType, type Cue, type SceneEmotion } from '@amv/analysis';
-import { canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, prepareLocalizedRegeneration, recommendEpisodePreset, recommendStyle, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
+import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
 import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { loadCreativeProfiles, saveCreativeProfiles } from '../../core/creativeProfiles';
@@ -101,7 +101,23 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [matchLyrics, setMatchLyrics] = useState(false);
   const [lyricSceneMatches, setLyricSceneMatches] = useState<NonNullable<GenerateOptions['lyricSceneMatches']>>({});
   const [seed, setSeed] = useState(1);
-  const [result, setResult] = useState<{ warnings: string[]; text: string } | null>(null);
+  const [result, setResult] = useState<{
+    warnings: string[];
+    text: string;
+    brief: ReturnType<typeof buildCreativeBrief>;
+    storyboard: ReturnType<typeof reviewGeneratedAssembly>['storyboard'];
+    alignment: ReturnType<typeof reviewGeneratedAssembly>['alignment'];
+    review: {
+      high: number;
+      medium: number;
+      low: number;
+      checked: number;
+      partial: number;
+      unavailable: number;
+      repairsApplied: string[];
+      issues: Array<{ startUs: number; severity: string; type: string; suggestion: string }>;
+    };
+  } | null>(null);
   const [localizedCandidates, setLocalizedCandidates] = useState<LocalizedCandidate[]>([]);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const [candidateMode, setCandidateMode] = useState(false);
@@ -628,9 +644,9 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       let sfxAssets: GenerateOptions['sfxAssets'];
       let sfxError: string | null = null;
       setBusy(true);
-      setGenerationStep('Mapeando compassos, batidas e energia da música...');
-      setGenerationProgress(20);
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      setGenerationStep('Preparando recursos e evidências da montagem...');
+      setGenerationProgress(12);
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       if (useSfx) {
         try {
@@ -640,23 +656,50 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         }
       }
 
-      setGenerationStep('Examinando tomadas, continuidade de combate e personagens...');
-      setGenerationProgress(45);
-      await new Promise((resolve) => setTimeout(resolve, 150));
-
       const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
       const m = musics.find((a) => a.id === musicId)!;
 
-      setGenerationStep('Otimizando narrativa, versos da letra e falas dramáticas...');
-      setGenerationProgress(70);
-      await new Promise((resolve) => setTimeout(resolve, 150));
-
+      setGenerationStep('Definindo o objetivo editorial e o arco musical...');
+      setGenerationProgress(32);
+      await new Promise((resolve) => setTimeout(resolve, 0));
       const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, inputs, opts);
 
-      setGenerationStep('Sincronizando golpes com a batida e aplicando efeitos...');
+      setGenerationStep('Construindo storyboard e revisando a montagem...');
+      setGenerationProgress(72);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const brief = buildCreativeBrief({
+        style: selectedStyle,
+        episodes: inputs,
+        music: { assetId: m.id, name: m.name, analysis: music },
+        options: { durationS: duration, intensity, editorialDirection, organizationMode, focus, voiceMoments },
+        direction: r.summary.direction,
+        hasTimedLyrics: !!lyrics?.cues.length,
+      });
+      const editorialReview = reviewGeneratedAssembly({
+        project: session.project,
+        commands: r.commands,
+        brief,
+        direction: r.summary.direction,
+        summary: r.summary,
+        episodes: inputs,
+        music: { assetId: m.id, name: m.name, analysis: music },
+      });
+      r.commands = editorialReview.commands;
+      const issueCounts = qualityIssueSummary(editorialReview.quality.issues);
+      if (editorialReview.repairsApplied.length) {
+        r.warnings.push('Revisão automática aplicou correção segura: ' + editorialReview.repairsApplied.join(', ') + '.');
+      }
+      for (const issue of editorialReview.quality.issues.slice(0, 6)) {
+        r.warnings.push(mmss(issue.startUs / S) + ' · ' + issue.type + ': ' + issue.suggestion);
+      }
+      if (editorialReview.quality.issues.length > 6) {
+        r.warnings.push((editorialReview.quality.issues.length - 6) + ' outro(s) ponto(s) ficaram no relatório de revisão.');
+      }
+      if (!editorialReview.quality.issues.length) {
+        r.warnings.push('A revisão não encontrou problemas objetivos nos dados disponíveis. Isso não substitui a conferência artística do preview.');
+      }
+      if (sfxError) r.warnings.push('Não consegui preparar os efeitos sonoros (' + sfxError + '): o vídeo saiu sem eles.');
       setGenerationProgress(90);
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      if (sfxError) r.warnings.push(`Não consegui preparar os efeitos sonoros (${sfxError}): o vídeo saiu sem eles.`);
       // guarda o que estava antes: nada se perde
       await session.saveVersion(`Antes de gerar (${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})`);
       const directionLabel = editorialDirection === 'cinematic' ? 'Cinematográfico' : editorialDirection === 'hype' ? 'Hype' : 'Balanceado';
@@ -669,9 +712,43 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       } catch {}
       setSeed(nextSeed);
       const s = r.summary;
+      const coverageValues = Object.values(editorialReview.quality.coverage);
+      const directionText = [...new Set(s.direction.map((beat) => beat.role))].map((role) =>
+        role === 'opening' ? 'Abertura'
+          : role === 'build' ? 'Crescimento'
+            : role === 'climax' ? 'Clímax'
+              : role === 'release' ? 'Respiro'
+                : role === 'ending' ? 'Encerramento'
+                  : 'Desenvolvimento',
+      ).join(' → ');
+      const summaryText = s.clips + ' cenas, ' + s.cuts + ' cortes'
+        + (s.drop !== null ? ', drop em ' + s.drop.toFixed(1) + ' s' : '')
+        + (s.voices ? ', ' + s.voices + ' fala(s)' + (s.speech ? ' (começando por "' + s.speech + '")' : '') : '')
+        + '. Trecho da música: ' + mmss(s.musicRange[0]) + '–' + mmss(s.musicRange[1])
+        + '. Estrutura musical: ' + directionText + '.'
+        + (s.focus === 'fight' && s.fights.length ? ' Luta usada: ' + s.fights.join(' + ') + '.' : s.focus === 'mix' ? ' Cenas de vários pontos (modo misturar).' : '')
+        + (s.hitsSynced ? ' ' + s.hitsSynced + ' golpes encaixados na batida.' : '')
+        + (s.speedRamps ? ' ' + s.speedRamps + ' rampas de velocidade aplicadas.' : '')
+        + (s.sfx ? ' ' + s.sfx + ' efeitos sonoros.' : '');
       setResult({
         warnings: r.warnings,
-        text: `${s.clips} cenas, ${s.cuts} cortes${s.drop !== null ? `, drop em ${s.drop.toFixed(1)} s` : ''}${s.voices ? `, ${s.voices} fala(s)${s.speech ? ` (começando por "${s.speech}")` : ''}` : ''}. Trecho da música: ${mmss(s.musicRange[0])}–${mmss(s.musicRange[1])}. Direção: ${[...new Set(s.direction.map((beat) => beat.role))].map((role) => role === 'opening' ? 'Abertura' : role === 'build' ? 'Crescimento' : role === 'climax' ? 'Clímax' : role === 'release' ? 'Respiro' : role === 'ending' ? 'Encerramento' : 'Desenvolvimento').join(' → ')}.${s.focus === 'fight' && s.fights.length ? ` Luta usada: ${s.fights.join(' + ')}.` : s.focus === 'mix' ? ' Cenas de vários pontos (modo misturar).' : ''}${s.hitsSynced ? ` ${s.hitsSynced} golpes encaixados na batida.` : ''}${s.speedRamps ? ` ${s.speedRamps} rampas de velocidade aplicadas.` : ''}${s.sfx ? ` ${s.sfx} efeitos sonoros.` : ''}`,
+        text: summaryText,
+        brief,
+        storyboard: editorialReview.storyboard,
+        alignment: editorialReview.alignment,
+        review: {
+          ...issueCounts,
+          checked: coverageValues.filter((item) => item.status === 'checked').length,
+          partial: coverageValues.filter((item) => item.status === 'partial').length,
+          unavailable: coverageValues.filter((item) => item.status === 'unavailable').length,
+          repairsApplied: editorialReview.repairsApplied,
+          issues: editorialReview.quality.issues.slice(0, 8).map((issue) => ({
+            startUs: issue.startUs,
+            severity: issue.severity,
+            type: issue.type,
+            suggestion: issue.suggestion,
+          })),
+        },
       });
     } catch (e) {
       toast({ tone: 'error', title: 'Não deu para gerar', body: (e as Error).message });
