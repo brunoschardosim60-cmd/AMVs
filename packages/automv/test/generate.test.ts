@@ -273,6 +273,29 @@ describe('gerar AMV — hype', () => {
     expect(clips.every((clip) => clip.sourceInUs >= 4 * S && clip.sourceOutUs <= 7.5 * S)).toBe(true);
   });
 
+  it('não mistura legenda de um idioma com a faixa de voz de outro antes do drop', () => {
+    const p = project();
+    const ep = episode('ep1', 30, 3);
+    ep.audioStreams = [
+      { index: 1, language: 'jpn', title: 'Japanese' },
+      { index: 2, language: 'por', title: 'Português' },
+    ];
+    ep.analysis.speech = [
+      { startS: 21, endS: 23.2, kind: 'grito', confidence: 0.9, text: 'Eu não vou desistir!', language: 'pt', impact: 1 },
+    ];
+    const result = generateAmv(p, music(), [ep], {
+      ...base, durationS: 60, musicStartS: 16, voiceLang: 'original', voiceMoments: 1,
+      focus: 'mix', useSpeech: true,
+    });
+    const voiceTrackId = p.tracks.find((track) => track.name === 'Vozes')!.id;
+    const voiceClips = result.commands.filter((command) =>
+      command.type === 'clip.add' && command.clip.trackId === voiceTrackId,
+    );
+
+    expect(voiceClips).toHaveLength(0);
+    expect(result.warnings.some((warning) => warning.includes('Nenhuma fala marcante'))).toBe(true);
+  });
+
   it('monta vídeo inteiro, sem sobreposição, na batida, com motivo em cada clipe', () => {
     const { r, out, on } = run();
     const v1 = on('V1');
