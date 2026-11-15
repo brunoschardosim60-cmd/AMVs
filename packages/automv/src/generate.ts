@@ -1790,15 +1790,15 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   let skippedLyrics = 0;
   if (opts.showText && text && opts.lyrics?.length && style.subtitles !== 'none') {
     const timedWordCueKeys = new Set(slots.filter((slot) => slot.word && slot.lyricCueKey).map((slot) => slot.lyricCueKey!));
-    const impactWindows = [
-      ...(dropT === null ? [] : [{ startS: dropT - 0.12, endS: dropT + 0.2 }]),
-      ...cutsLog
-        .filter((cut) => cut.isDrop || (cut.energy >= 0.85 && cut.intensity >= 0.85))
-        .map((cut) => {
-          const at = cut.hitAtS ?? cut.startS;
-          return { startS: Math.max(0, at - 0.1), endS: at + 0.2 };
-        }),
-    ];
+    const dropWindow = dropT === null ? null : { startS: dropT - 0.12, endS: dropT + 0.2 };
+    // Outros cortes fortes são acentos visuais, não bloqueios absolutos para a leitura da letra.
+    const secondaryImpactWindows = cutsLog
+      .filter((cut) => !cut.isDrop && cut.energy >= 0.85 && cut.intensity >= 0.85)
+      .map((cut) => {
+        const at = cut.hitAtS ?? cut.startS;
+        return { startS: Math.max(0, at - 0.1), endS: at + 0.2 };
+      })
+      .sort((left, right) => left.startS - right.startS);
     const beatsOnTimeline = m.beats.map((beat) => beat + beatOffsetS - range[0]);
     for (const c of opts.lyrics) {
       if (!Number.isFinite(c.startS) || c.endS <= range[0] || c.startS >= range[1]) continue;
@@ -1823,24 +1823,31 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         .reduce((min, other) => Math.min(min, other.startS - range[0]), D);
       let lyricEnd = Math.min(b, nextCueStart, D);
       if (!lyricSceneMatch) {
-        // Procura uma janela livre contínua; pode ser necessário passar por mais de um impacto.
         const maxEnd = Math.min(nextCueStart, D);
         const preferredDuration = Math.max(0.9, lyricEnd - a);
         lyricEnd = Math.min(maxEnd, a + preferredDuration);
-        const orderedWindows = [...impactWindows].sort((left, right) => left.startS - right.startS);
-        for (const window of orderedWindows) {
-          if (window.endS <= a) continue;
-          if (window.startS >= lyricEnd) break;
+
+        // O drop é o único bloqueio absoluto: a letra termina antes dele ou começa depois.
+        if (dropWindow && a < dropWindow.endS && lyricEnd > dropWindow.startS) {
+          if (dropWindow.startS - a >= 0.6) {
+            lyricEnd = Math.min(lyricEnd, dropWindow.startS);
+          } else {
+            a = Math.max(a, dropWindow.endS);
+            lyricEnd = Math.min(maxEnd, a + preferredDuration);
+          }
+        }
+
+        // Acentos secundários apenas encurtam a linha quando há espaço legível antes.
+        // Quando estão colados ao drop, não podem empurrar a frase indefinidamente nem apagá-la.
+        for (const window of secondaryImpactWindows) {
+          if (window.endS <= a || window.startS >= lyricEnd) continue;
           if (window.startS - a >= 0.6) {
             lyricEnd = Math.min(lyricEnd, window.startS);
             break;
           }
-          // Menos de 0,6 s antes do impacto: desloca a frase para depois dele.
-          a = Math.max(a, window.endS);
-          lyricEnd = Math.min(maxEnd, a + preferredDuration);
         }
       }
-      if (lyricEnd - a < 0.6 || (!lyricSceneMatch && impactWindows.some((window) => a < window.endS && lyricEnd > window.startS))) {
+      if (lyricEnd - a < 0.6 || (!lyricSceneMatch && dropWindow && a < dropWindow.endS && lyricEnd > dropWindow.startS)) {
         skippedLyrics++;
         continue;
       }
