@@ -60,11 +60,29 @@ describe('direção criativa do Auto AMV', () => {
 
     expect(brief.title).toBe('Combate épico');
     expect(brief.objective).toContain('expectativa');
+    expect(brief.preferences.durationS).toBe(4);
+    expect(brief.preferences.organizationMode).toBe('narrative');
     expect(brief.priorities).toContain('ação e reação legíveis');
     expect(brief.evidence.scenes).toBe(1);
     expect(brief.evidence.semanticScenes).toBe(0);
     expect(brief.confidence).toBe('limited');
     expect(brief.limitations.some((item) => item.includes('rótulos semânticos'))).toBe(true);
+
+    const review = reviewGeneratedAssembly({
+      project: createProject({ name: 'no-semantic-evidence' }),
+      commands: [],
+      brief,
+      direction,
+      summary: {
+        clips: 0, cuts: 0, speech: null, musicRange: [0, 4], drop: 1, focus: 'mix', fights: [],
+        voices: 0, hitsSynced: 0, speedRamps: 0, sfx: 0, direction,
+      },
+      episodes: [emptyEpisode()],
+      music: music(),
+    });
+    const actionCheck = review.alignment.find((item) => item.criterion === 'Ação visual no clímax');
+    expect(actionCheck?.status).toBe('unknown');
+    expect(actionCheck?.evidence).toContain('não comprova um clímax visual');
   });
 
   it('faz a segunda revisão e só aplica correção segura quando a qualidade objetiva melhora', () => {
