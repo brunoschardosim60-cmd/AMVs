@@ -135,7 +135,7 @@ describe('foco na luta', () => {
       clips: clips.length,
       uniqueSourceIn: new Set(keys).size,
       duplicates: dups.slice(0, 20),
-      duplicateReasons: clips.filter((c, i) => dups.includes(keys[i]!)).map((c) => c.why).slice(0, 20),
+      duplicateClips: clips.filter((c, i) => dups.includes(keys[i]!)).map((c) => ({ sourceInUs: c.sourceInUs, sourceOutUs: c.sourceOutUs, timelineStartUs: c.timelineStartUs, durationUs: c.durationUs, label: c.label })).slice(0, 20),
     });
     expect(new Set(on('V1').map((c) => `${c.assetId}@${c.sourceInUs}`)).size).toBe(on('V1').length);
   });
