@@ -458,9 +458,46 @@ describe('outros estilos', () => {
     expect(words.slice(0, 5)).toEqual(['NEVER', 'GONNA', 'STOP', 'ARISE', 'AGAIN']);
     const wordClips = on('Legendas');
     // cada palavra começa exatamente num corte de vídeo
-    const cuts = new Set(on('V1').map((c) => c.timelineStartUs));
+    const videoClips = on('V1').sort((left, right) => left.timelineStartUs - right.timelineStartUs);
+    const cuts = new Set(videoClips.map((clip) => clip.timelineStartUs));
     expect(wordClips.every((w) => cuts.has(w.timelineStartUs))).toBe(true);
     expect(wordClips.every((clip) => clip.text?.timingPrecision === 'word')).toBe(true);
+    // a pausa de 0,4 s entre "stop" e "arise" recebe um plano normal, não vira quadro preto
+    const bridge = videoClips.find((clip) => clip.timelineStartUs === 17.6 * S);
+    expect(bridge).toBeDefined();
+    expect(clipEndUs(bridge!)).toBe(18 * S);
+    for (let index = 1; index < videoClips.length; index++) {
+      expect(videoClips[index]!.timelineStartUs).toBe(clipEndUs(videoClips[index - 1]!));
+    }
+  });
+
+  it('letra: timings estimados/incertos ficam como frase; Whisper confiável pode sincronizar palavras', () => {
+    const uncertainLyrics = [{
+      startS: 16,
+      endS: 18,
+      text: 'never gonna stop',
+      words: [
+        { startS: 16, endS: 16.4, text: 'never', source: 'estimated' as const, confidence: 1 },
+        { startS: 16.4, endS: 17, text: 'gonna', source: 'whisper' as const, confidence: 0.55, uncertain: true },
+        { startS: 17, endS: 17.6, text: 'stop', source: 'whisper' as const, confidence: 0.75 },
+      ],
+    }];
+    const uncertain = run({ style: 'letra', lyrics: uncertainLyrics, useSpeech: false });
+    const phrase = uncertain.on('Legendas').find((clip) => clip.reason === 'Letra da música' && clip.text?.text === 'never gonna stop');
+    expect(phrase).toBeDefined();
+    expect(phrase!.text!.timingPrecision).toBe('segment');
+    expect(uncertain.on('Legendas').some((clip) => clip.reason === 'Palavra da letra')).toBe(false);
+
+    const reliableLyrics = [{
+      ...uncertainLyrics[0]!,
+      words: [
+        { startS: 16, endS: 16.4, text: 'never', source: 'whisper' as const, confidence: 0.95 },
+        { startS: 16.4, endS: 17, text: 'gonna', source: 'whisper' as const, confidence: 0.93 },
+        { startS: 17, endS: 17.6, text: 'stop', source: 'whisper' as const, confidence: 0.96 },
+      ],
+    }];
+    const reliable = run({ style: 'letra', lyrics: reliableLyrics, useSpeech: false });
+    expect(reliable.on('Legendas').filter((clip) => clip.reason === 'Palavra da letra').length).toBeGreaterThan(0);
   });
 
   it('letra sem tempos por palavra fica como frase única, sem inventar sincronização interna', () => {
