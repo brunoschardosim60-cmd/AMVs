@@ -806,6 +806,17 @@ describe('integração das melhorias do patch', () => {
     const clips = out.clips.filter((clip) => clip.trackId === trackId);
     expect(clips.length).toBeGreaterThan(5);
     for (const clip of clips) expect(Math.floor(clip.sourceInUs / S / 4) % 2).toBe(1);
+
+    const onlyDark = episode('ep2', 30, 9);
+    onlyDark.analysis.shots.forEach((shot) => {
+      shot.brightness = 0.04;
+      shot.tags = [...shot.tags, 'escura'];
+    });
+    const fallback = generateAmv(project(), music(), [onlyDark], {
+      ...base, durationS: 20, musicStartS: 0, useSpeech: false, focus: 'mix',
+    });
+    expect(fallback.summary.clips).toBeGreaterThan(0);
+    expect(fallback.warnings.join(' ')).toMatch(/muito escuras/);
   });
 
   it('levanta discretamente exposição de cenas escuras utilizáveis', () => {
