@@ -165,6 +165,10 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     setLyrics(null);
     setLyricSceneMatches({});
   }, [musicId]);
+
+  useEffect(() => () => {
+    transcriptionAbort.current?.abort();
+  }, []);
   const ready = episodes.filter((e) => epIds.includes(e.id) && session.assetRuntime(e.id).episode);
   const selectedEpisodes = episodes.filter((episode) => epIds.includes(episode.id));
   const selectedMusic = musics.find((asset) => asset.id === musicId);
@@ -1478,7 +1482,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               Comparar alternativas ({localizedCandidates.length})
             </Button>
           )}
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
             Cancelar
           </Button>
           <Button variant="primary" icon={<Wand2 size={15} />} disabled={!music || ready.length === 0 || !analysisReadiness.canGenerate || busy || (localizedRange !== undefined && localizedRange.clipIds.length === 0)} onClick={() => void generate(seed)}>
@@ -1502,17 +1506,25 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             />
           </div>
           <p className="mt-2 text-2xs text-muted">As etapas verificam apenas sinais disponíveis; o que não tem evidência aparece como pendente de avaliação.</p>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="mt-3"
-            onClick={() => {
-              visionAbort.current?.abort();
-              transcriptionAbort.current?.abort();
-            }}
-          >
-            Cancelar processo
-          </Button>
+          {(generationStep.startsWith('Analisando cenas localmente')
+            || generationStep.startsWith('Análise semântica profunda')
+            || generationStep.startsWith('Preparando análise semântica')
+            || generationStep.startsWith('Entendendo as falas do anime')
+            || generationStep.startsWith('Extraindo áudio')
+            || generationStep.startsWith('Reconhecendo palavras')
+            || generationStep.startsWith('Traduzindo as falas')) && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="mt-3"
+              onClick={() => {
+                visionAbort.current?.abort();
+                transcriptionAbort.current?.abort();
+              }}
+            >
+              Cancelar etapa
+            </Button>
+          )}
         </div>
       )}
       {localizedRange && (
@@ -2136,7 +2148,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                 <Button size="sm" variant="ghost" disabled={lyricsSyncing} onClick={pickLyrics}>Importar .LRC / .SRT</Button>
                 {lyrics && <span className="text-2xs text-muted">Ativa: {lyrics.name} · {lyrics.cues.length} linhas</span>}
               </div>
-              <p className="text-2xs text-muted">O Whisper reconhece as palavras cantadas e alinha cada verso no áudio. Linhas que não baterem com a transcrição ficam de fora, em vez de receberem um tempo inventado.</p>
+              <p className="text-2xs text-muted">O Whisper reconhece as palavras cantadas e alinha cada verso no áudio. Na primeira utilização, o modelo pode baixar os pesos necessários; depois a transcrição roda localmente. Linhas sem correspondência não recebem um tempo inventado.</p>
             </div>
           </div>
         </div>
