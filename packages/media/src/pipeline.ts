@@ -166,6 +166,8 @@ export async function makeThumbStrip(
 
 /** 10 ms por bucket no nível mais detalhado. */
 export const WAVEFORM_BASE_BUCKET = WAVEFORM_RATE / 100;
+/** PCM deve continuar chegando enquanto o FFmpeg decodifica; sem dados por 90 s, encerra o job. */
+export const WAVEFORM_IDLE_TIMEOUT_MS = 90_000;
 
 export async function computeWaveform(
   runner: ProcessRunner,
@@ -174,21 +176,46 @@ export async function computeWaveform(
   report: Reporter,
   signal?: AbortSignal,
   streamIndex: number | null = null,
+  idleTimeoutMs = WAVEFORM_IDLE_TIMEOUT_MS,
 ): Promise<Waveform> {
   const acc = new PeakAccumulator(WAVEFORM_BASE_BUCKET);
   const totalSamples = Math.max(1, (probe.durationUs / 1e6) * WAVEFORM_RATE);
   let lastReport = 0;
-  const r = await runner.run('ffmpeg', waveformPcmArgs(input, streamIndex), {
-    signal,
-    onStdoutBytes: (chunk) => {
-      acc.push(chunk);
-      if (acc.totalSamples - lastReport > WAVEFORM_RATE * 5) {
-        lastReport = acc.totalSamples;
-        report(Math.min(0.99, acc.totalSamples / totalSamples));
-      }
-    },
-  });
   if (signal?.aborted) throw new CancelledError();
+  const processController = new AbortController();
+  let idleTimedOut = false;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const abortFromCaller = () => processController.abort();
+  const resetIdleTimer = () => {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      idleTimedOut = true;
+      processController.abort();
+    }, Math.max(1, idleTimeoutMs));
+  };
+  signal?.addEventListener('abort', abortFromCaller, { once: true });
+  resetIdleTimer();
+  let r: Awaited<ReturnType<ProcessRunner['run']>>;
+  try {
+    r = await runner.run('ffmpeg', waveformPcmArgs(input, streamIndex, probe.durationUs), {
+      signal: processController.signal,
+      onStdoutBytes: (chunk) => {
+        if (!processController.signal.aborted) resetIdleTimer();
+        acc.push(chunk);
+        if (acc.totalSamples - lastReport > WAVEFORM_RATE * 5) {
+          lastReport = acc.totalSamples;
+          report(Math.min(0.99, acc.totalSamples / totalSamples), 'decodificando áudio');
+        }
+      },
+    });
+  } finally {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    signal?.removeEventListener('abort', abortFromCaller);
+  }
+  if (signal?.aborted) throw new CancelledError();
+  if (idleTimedOut) {
+    throw new Error(`o FFmpeg ficou ${Math.round(idleTimeoutMs / 1000)} s sem enviar áudio; a geração da forma de onda foi interrompida para não bloquear a importação`);
+  }
   if (r.code !== 0) throw new ToolError('ffmpeg', r.code, r.stderr);
   const { mins, maxs } = acc.finish();
   report(1);

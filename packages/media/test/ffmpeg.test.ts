@@ -22,6 +22,7 @@ import {
   probeWarnings,
 } from '../src/index.js';
 import { NodeRunner, nodeFs } from '../src/node.js';
+import type { ProcessRunner } from '../src/runner.js';
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), '../../../fixtures/generated');
 const f = (name: string) => join(FIX, name);
@@ -171,6 +172,19 @@ describe('miniaturas e waveform', () => {
     }
     expect(loud).toHaveLength(16);
     loud.forEach((t, i) => expect(t).toBeCloseTo(i * 0.5, 1));
+  });
+
+  it('interrompe waveform se FFmpeg deixar de enviar áudio', async () => {
+    const { probe } = await probeFile(runner, f('click_120bpm.wav'));
+    const stalled: ProcessRunner = {
+      run: (_tool, _args, options = {}) => new Promise((resolve) => {
+        const onAbort = () => resolve({ code: null, stdout: '', stderr: 'cancelado pelo watchdog' });
+        if (options.signal?.aborted) onAbort();
+        else options.signal?.addEventListener('abort', onAbort, { once: true });
+      }),
+    };
+    await expect(computeWaveform(stalled, f('click_120bpm.wav'), probe, () => undefined, undefined, null, 10))
+      .rejects.toThrow(/sem enviar áudio/);
   });
 });
 
