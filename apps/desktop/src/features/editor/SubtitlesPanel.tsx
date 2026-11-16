@@ -292,7 +292,7 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     try {
       const transcript = await transcribeAsset(lyricsAsset, audioIndex, controller);
       const detectedLanguage = transcript.language?.trim().toLowerCase();
-      const lyricsUseJapaneseScript = /[\\u3040-\\u30ff\\u3400-\\u9fff]/.test(untimedLyrics.text);
+      const lyricsUseJapaneseScript = /[\u3040-\u30ff\u3400-\u9fff]/.test(untimedLyrics.text);
       if (['ja', 'jpn', 'japanese'].includes(detectedLanguage ?? '') && !lyricsUseJapaneseScript) {
         toast({
           tone: 'warn',
