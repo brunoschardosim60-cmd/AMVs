@@ -23,6 +23,7 @@ function JobRow({ j, onCancel }: { j: JobSnapshot; onCancel: () => void }) {
       {(j.status === 'failed' || j.status === 'cancelled') && <CircleX size={14} className={j.status === 'failed' ? 'text-danger' : 'text-muted'} />}
       <span className="min-w-0">
         <span className="block truncate text-ink-soft">{j.label}</span>
+        {j.status === 'running' && j.detail && <span className="block truncate text-muted" title={j.detail}>{j.detail}</span>}
         {j.status === 'failed' && <span className="block truncate text-danger" title={j.error ?? ''}>{j.error}</span>}
       </span>
       {j.status === 'running' ? <Progress value={j.progress} live /> : <span className="text-muted">{{ queued: 'na fila', done: 'pronto', failed: 'falhou', cancelled: 'cancelado', running: '' }[j.status]}</span>}
