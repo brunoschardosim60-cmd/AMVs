@@ -161,6 +161,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
 
   const music = session.assetRuntime(musicId).music;
   useEffect(() => {
+    transcriptionAbort.current?.abort();
     setLyrics(null);
     setLyricSceneMatches({});
   }, [musicId]);
