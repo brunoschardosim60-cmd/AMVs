@@ -36,6 +36,20 @@ const CAMERA_MOTION_LABEL: Record<CameraMotionType, string> = {
   unknown: 'movimento não classificado',
 };
 const FLOW_DIRECTIONS = ['direita', 'baixo-direita', 'baixo', 'baixo-esquerda', 'esquerda', 'cima-esquerda', 'cima', 'cima-direita'];
+const speechLanguageName = (language: string | null | undefined): string | undefined => {
+  const value = language?.trim().toLowerCase();
+  if (!value) return undefined;
+  const names: Record<string, string> = {
+    ja: 'japonês', jpn: 'japonês', japanese: 'japonês',
+    en: 'inglês', eng: 'inglês', english: 'inglês',
+    pt: 'português', por: 'português', 'pt-br': 'português brasileiro',
+    es: 'espanhol', spa: 'espanhol', fr: 'francês', fra: 'francês',
+    de: 'alemão', deu: 'alemão', it: 'italiano', ita: 'italiano',
+    ko: 'coreano', kor: 'coreano', zh: 'chinês', zho: 'chinês',
+    ru: 'russo', rus: 'russo',
+  };
+  return names[value] ?? language;
+};
 const flowDirectionLabel = (degrees: number | null): string | null =>
   degrees === null ? null : FLOW_DIRECTIONS[((Math.round(degrees / 45) % 8) + 8) % 8]!;
 
@@ -1019,25 +1033,44 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                 ko: 'coreano',
                 zh: 'chinês',
               };
-              setGenerationStep(`Traduzindo as falas para ${targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage}...`);
+              const target = targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage;
+              setGenerationStep(`Traduzindo as falas para ${target}...`);
               setGenerationProgress(34);
-              const translated = await translateLines(
-                settings.provider,
-                key,
-                platform!.http,
-                speechCandidates.map(({ speech }) => speech.text!),
-                {
-                  target: targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage,
-                  batchSize: 20,
-                  signal: speechController?.signal,
-                  onProgress: (done, total) => setGenerationProgress(34 + 4 * done / Math.max(1, total)),
-                },
-              );
-              translated.translations.forEach((value, index) => {
-                const candidate = speechCandidates[index]!;
-                if (value?.trim()) speechTranslations[`${candidate.episodeInput.assetId}@${candidate.speech.startS}`] = value.trim();
+              // Agrupa por idioma de origem para não pedir ao modelo que traduza japonês,
+              // português e inglês como se fossem um único idioma de entrada.
+              const groups = new Map<string, number[]>();
+              speechCandidates.forEach((candidate, index) => {
+                const source = speechLanguageName(candidate.speech.language) ?? 'detectar automaticamente';
+                const indexes = groups.get(source) ?? [];
+                indexes.push(index);
+                groups.set(source, indexes);
               });
-              if (translated.failed) automaticSpeechWarnings.push(`${translated.failed} fala(s) não conseguiram ser traduzidas; essas aparecem no idioma original.`);
+              let translatedCount = 0;
+              let failedCount = 0;
+              for (const [source, indexes] of groups) {
+                const translated = await translateLines(
+                  settings.provider,
+                  key,
+                  platform!.http,
+                  indexes.map((index) => speechCandidates[index]!.speech.text!),
+                  {
+                    target,
+                    ...(source !== 'detectar automaticamente' ? { source } : {}),
+                    batchSize: 20,
+                    signal: speechController?.signal,
+                    onProgress: (done, total) => setGenerationProgress(34 + 4 * (translatedCount + done) / Math.max(1, speechCandidates.length)),
+                  },
+                );
+                translated.translations.forEach((value, localIndex) => {
+                  const candidate = speechCandidates[indexes[localIndex]!]!;
+                  if (value?.trim()) {
+                    speechTranslations[`${candidate.episodeInput.assetId}@${candidate.speech.startS}`] = value.trim();
+                    translatedCount++;
+                  }
+                });
+                failedCount += translated.failed;
+              }
+              if (failedCount) automaticSpeechWarnings.push(`${failedCount} fala(s) não puderam ser traduzidas com segurança para ${target}; essas aparecem no idioma original. Confira a configuração do modelo de IA.`);
             }
           } catch (error) {
             if ((error as Error).name === 'AbortError') throw error;
