@@ -569,12 +569,20 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       });
       if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
       const transcriptPartialPath = `${transcriptPath}.partial`;
+      let transcriptCached = false;
       try {
         await platform.fs.writeFile(transcriptPartialPath, new TextEncoder().encode(JSON.stringify(transcript)));
         await platform.fs.rename(transcriptPartialPath, transcriptPath);
+        transcriptCached = true;
       } catch (cacheError) {
         try { if (await platform.fs.exists(transcriptPartialPath)) await platform.fs.remove(transcriptPartialPath); } catch {}
         console.warn('Não foi possível guardar a transcrição em cache:', cacheError);
+      }
+      // O WAV mono pode ser grande; depois de salvar a transcrição, o áudio temporário não é mais necessário.
+      if (transcriptCached) {
+        try { if (await platform.fs.exists(audioPath)) await platform.fs.remove(audioPath); } catch (cleanupError) {
+          console.warn('Não foi possível limpar o WAV temporário da transcrição:', cleanupError);
+        }
       }
       return transcript;
     } finally {
