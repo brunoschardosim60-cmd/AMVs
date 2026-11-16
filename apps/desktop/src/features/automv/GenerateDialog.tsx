@@ -160,6 +160,10 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   }, [platform, toast]);
 
   const music = session.assetRuntime(musicId).music;
+  useEffect(() => {
+    setLyrics(null);
+    setLyricSceneMatches({});
+  }, [musicId]);
   const ready = episodes.filter((e) => epIds.includes(e.id) && session.assetRuntime(e.id).episode);
   const selectedEpisodes = episodes.filter((episode) => epIds.includes(episode.id));
   const selectedMusic = musics.find((asset) => asset.id === musicId);
@@ -544,6 +548,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     }
     const controller = new AbortController();
     transcriptionAbort.current = controller;
+    setLyrics(null);
     setLyricsSyncing(true);
     setLyricsSyncProgress({ stage: 'Preparando áudio da música', progress: 0 });
     try {
@@ -884,7 +889,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                 startS: segment.start,
                 endS: segment.end,
                 kind: previous?.kind ?? 'fala',
-                confidence: Math.max(previous?.confidence ?? 0, 0.74),
+                // O endpoint não fornece confiança por segmento; mantém o valor heurístico conservador.
+                confidence: Math.max(previous?.confidence ?? 0, 0.55),
                 text: segment.text,
                 language: sourceLanguage,
                 impact: Math.max(previous?.impact ?? 0, impactScore(segment.text)),
@@ -2087,7 +2093,11 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               <textarea
                 className="min-h-24 w-full resize-y rounded-control border border-line bg-base p-2 text-xs text-ink placeholder:text-faint"
                 value={lyricDraft}
-                onChange={(event) => setLyricDraft(event.target.value)}
+                onChange={(event) => {
+                  setLyricDraft(event.target.value);
+                  setLyrics(null);
+                  setLyricSceneMatches({});
+                }}
                 placeholder="Cole ou escreva a letra aqui, uma linha por verso..."
                 rows={5}
               />
