@@ -48,7 +48,7 @@ const speechLanguageName = (language: string | null | undefined): string | undef
     ko: 'coreano', kor: 'coreano', zh: 'chinês', zho: 'chinês',
     ru: 'russo', rus: 'russo',
   };
-  return names[value] ?? language;
+  return names[value] ?? language ?? undefined;
 };
 const flowDirectionLabel = (degrees: number | null): string | null =>
   degrees === null ? null : FLOW_DIRECTIONS[((Math.round(degrees / 45) % 8) + 8) % 8]!;
