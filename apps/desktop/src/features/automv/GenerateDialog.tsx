@@ -838,9 +838,9 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       const automaticSpeechWarnings: string[] = [];
       const speechTranslations: Record<string, string> = {};
       const wantsSpeech = voiceMoments > 0 || selectedStyle === 'discurso';
-      if (wantsSpeech) {
-        const controller = new AbortController();
-        transcriptionAbort.current = controller;
+      const speechController = wantsSpeech ? new AbortController() : null;
+      if (speechController) {
+        transcriptionAbort.current = speechController;
         let completed = 0;
         for (const episodeInput of directorInputs) {
           const asset = selectedEpisodes.find((item) => item.id === episodeInput.assetId);
@@ -855,7 +855,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           setGenerationStep(`Entendendo as falas do anime · ${episodeInput.name}`);
           setGenerationProgress(27 + (completed / Math.max(1, directorInputs.length)) * 5);
           try {
-            const transcript = await transcribeAudioAsset(asset, audioIndex, controller, (stage, progress) => {
+            const transcript = await transcribeAudioAsset(asset, audioIndex, speechController!, (stage, progress) => {
               setGenerationStep(`${stage} · ${episodeInput.name}`);
               setGenerationProgress(27 + ((completed + progress) / Math.max(1, directorInputs.length)) * 5);
             });
@@ -900,7 +900,6 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           }
           completed++;
         }
-        transcriptionAbort.current = null;
       }
 
       const annotationExclusions = session.project.sceneAnnotations
@@ -928,8 +927,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             if (!durationFits || !speech.text?.trim()) return false;
             if (editorialFootagePlan.mode !== 'fight') return true;
             return pool.some((entry) => entry.ep.assetId === episodeInput.assetId
-              && speech.startS >= entry.seq.startS - 15 && speech.endS <= entry.seq.endS + 5)
-              || pool.some((entry) => entry.ep.assetId === episodeInput.assetId);
+              && speech.startS >= entry.seq.startS - 15 && speech.endS <= entry.seq.endS + 5);
           })
           .sort((left, right) => scoreSpeechCandidate(right.speech) - scoreSpeechCandidate(left.speech)
             || left.speech.startS - right.speech.startS)
@@ -937,8 +935,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         if (speechCandidates.length) {
           const settings = await loadAiSettings(platform!);
           if (!settings.enabled || !(isLocal(settings) || settings.allowExternal)) {
-            throw new Error('Para legendar as falas no idioma escolhido, ative um modelo no Assistente. Use o Ollama local ou autorize o provedor externo; ou escolha “Idioma original”.');
-          }
+            automaticSpeechWarnings.push('A IA de tradução está desativada ou sem autorização externa; as falas foram mantidas no idioma original. Ative um modelo no Assistente para traduzi-las automaticamente.');
+          } else {
           const key = settings.provider.needsKey ? await platform!.secrets.get(secretName(settings.presetId)) : null;
           const targetLanguage: Record<string, string> = {
             'pt-BR': 'português brasileiro',
@@ -956,8 +954,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             speechCandidates.map(({ speech }) => speech.text!),
             {
               target: targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage,
-              source: 'idioma detectado automaticamente',
               batchSize: 20,
+              signal: speechController?.signal,
               onProgress: (done, total) => setGenerationProgress(34 + 4 * done / Math.max(1, total)),
             },
           );
@@ -966,6 +964,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             if (value?.trim()) speechTranslations[`${candidate.episodeInput.assetId}@${candidate.speech.startS}`] = value.trim();
           });
           if (translated.failed) automaticSpeechWarnings.push(`${translated.failed} fala(s) não conseguiram ser traduzidas; essas aparecem no idioma original.`);
+          }
         }
       }
 
@@ -1099,9 +1098,14 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         },
       });
     } catch (e) {
-      toast({ tone: 'error', title: 'Não deu para gerar', body: (e as Error).message });
+      if ((e as Error).name === 'AbortError') {
+        toast({ tone: 'info', title: 'Geração cancelada', body: 'A montagem não foi aplicada.' });
+      } else {
+        toast({ tone: 'error', title: 'Não deu para gerar', body: (e as Error).message });
+      }
     } finally {
       visionAbort.current = null;
+      transcriptionAbort.current = null;
       setBusy(false);
       setGenerationStep(null);
       setGenerationProgress(0);
@@ -1470,13 +1474,17 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             />
           </div>
           <p className="mt-2 text-2xs text-muted">As etapas verificam apenas sinais disponíveis; o que não tem evidência aparece como pendente de avaliação.</p>
-          {(generationStep.startsWith('Analisando cenas localmente')
-            || generationStep.startsWith('Análise semântica profunda')
-            || generationStep.startsWith('Preparando análise semântica')) && (
-            <Button size="sm" variant="ghost" className="mt-3" onClick={() => visionAbort.current?.abort()}>
-              Cancelar análise de cenas
-            </Button>
-          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="mt-3"
+            onClick={() => {
+              visionAbort.current?.abort();
+              transcriptionAbort.current?.abort();
+            }}
+          >
+            Cancelar processo
+          </Button>
         </div>
       )}
       {localizedRange && (
@@ -2035,7 +2043,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                   <option value={4}>4</option>
                 </select>
               </label>
-              {voiceMoments > 0 && <p className="text-2xs text-muted">A música abaixa sozinha durante cada fala e volta depois.</p>}
+              {(voiceMoments > 0 || selectedStyle === 'discurso') && <p className="text-2xs text-muted">A música abaixa sozinha durante cada fala e volta depois.</p>}
               {hasTwoAudio && voiceMoments > 0 && (
                 <label className="flex items-center gap-2">
                   Áudio da fala
@@ -2048,7 +2056,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               {hasTwoAudio && voiceMoments > 0 && (
                 <p className="text-2xs text-muted">Seus episódios têm 2 faixas de áudio (idiomas). Elas são do anime, não da música.{noOriginal ? ' Em algum episódio não achei a faixa desse idioma: usei a padrão.' : ''}</p>
               )}
-              {voiceMoments > 0 && (
+              {(voiceMoments > 0 || selectedStyle === 'discurso') && (
                 <label className="flex items-center gap-2">
                   Idioma das legendas das falas
                   <select className="h-7 rounded-control border border-line bg-base px-1.5 text-xs" value={speechCaptionLanguage} onChange={(e) => setSpeechCaptionLanguage(e.target.value)}>
@@ -2061,7 +2069,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                   </select>
                 </label>
               )}
-              {voiceMoments > 0 && <p className="text-2xs text-muted">O app transcreve o áudio localmente e traduz as frases escolhidas pelo modelo configurado no Assistente.</p>}
+              {(voiceMoments > 0 || selectedStyle === 'discurso') && <p className="text-2xs text-muted">O app transcreve o áudio localmente e traduz as frases escolhidas pelo modelo configurado no Assistente.</p>}
               <label className="flex items-center gap-2" title="Subida até o drop, impacto no drop, golpes nas pancadas e whoosh nos cortes. Gerados pelo app, sem direitos autorais.">
                 <input type="checkbox" className="accent-violet" checked={useSfx} onChange={(e) => setUseSfx(e.target.checked)} /> Efeitos sonoros (impacto, subida, whoosh)
               </label>
@@ -2087,6 +2095,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                 <Button size="sm" disabled={!lyricDraft.trim() || lyricsSyncing || !selectedMusic} onClick={() => void syncWrittenLyrics()}>
                   {lyricsSyncing ? `${lyricsSyncProgress?.stage ?? 'Sincronizando'} · ${Math.round((lyricsSyncProgress?.progress ?? 0) * 100)}%` : 'Sincronizar texto com a música'}
                 </Button>
+                {lyricsSyncing && <Button size="sm" variant="ghost" onClick={() => transcriptionAbort.current?.abort()}>Cancelar</Button>}
                 <Button size="sm" variant="ghost" onClick={pickLyrics}>Importar .LRC / .SRT</Button>
                 {lyrics && <span className="text-2xs text-muted">Ativa: {lyrics.name} · {lyrics.cues.length} linhas</span>}
               </div>
