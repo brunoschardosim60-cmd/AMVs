@@ -957,7 +957,6 @@ interface VoiceBlock {
   preDrop: boolean;
 }
 
-const DUCK_DB = -16;
 /** Referência aproximada de voz em dB RMS (percentil 90), não LUFS. */
 const VOICE_REF_DB = -18;
 /** Correção conservadora para diferenças entre episódios; limita boost/cut para reduzir risco de clipping. */
