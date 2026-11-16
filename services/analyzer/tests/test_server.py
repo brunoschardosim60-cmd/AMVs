@@ -3,7 +3,7 @@ import time
 from fastapi.testclient import TestClient
 
 from amv_analyzer import server
-from amv_analyzer.server import create_app, free_port, module_status
+from amv_analyzer.server import bind_local_socket, create_app, module_status
 
 
 def test_exige_token():
@@ -31,8 +31,12 @@ def test_modulo_segmentacao_exige_checkpoint(monkeypatch, tmp_path):
     assert "sam2.1_hiera_tiny.pt" in status["reason"]
 
 
-def test_porta_livre_local():
-    assert 1024 < free_port() < 65536
+def test_porta_local_permanece_reservada():
+    with bind_local_socket() as listener:
+        host, port = listener.getsockname()
+        assert host == "127.0.0.1"
+        assert 1024 < port < 65536
+        assert listener.getsockopt(server.socket.SOL_SOCKET, server.socket.SO_ACCEPTCONN) == 1
 
 
 def test_transcribe_job_exposes_progress_and_result(tmp_path, monkeypatch):
@@ -201,3 +205,22 @@ def test_segmentation_jobs_validam_semente_intervalo_e_cancelamento(tmp_path, mo
             break
         time.sleep(0.01)
     assert response.json()["status"] == "cancelled"
+
+def test_jobs_finalizados_tem_retencao_limitada_sem_remover_jobs_ativos():
+    jobs = {}
+    for index in range(30):
+        job = server.SpeechJob()
+        job.status = "completed"
+        job.finished_at = float(index + 1)
+        jobs[str(index)] = job
+
+    active = server.SpeechJob()
+    active.status = "running"
+    jobs["active"] = active
+
+    server.prune_completed_jobs(jobs, keep=20)
+
+    assert "active" in jobs
+    assert len(jobs) == 21
+    assert all(str(index) not in jobs for index in range(10))
+    assert all(str(index) in jobs for index in range(10, 30))

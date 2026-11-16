@@ -508,6 +508,36 @@ describe('exportação', () => {
     expect(afterSpeech).toBeCloseTo(beforeSpeech, 1);
   });
 
+  it('mantém o ducking durante micro pausas e recupera após a fala terminar', async () => {
+    const p = await project((p) => [
+      clip(track(p, 'Música'), 'tone', 0, 5 * S, 0, {
+        audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null, duckingMode: 'manual' },
+        keyframes: {
+          'audio.gainDb': [
+            { atUs: 820_000, value: 0, easing: 'linear' },
+            { atUs: 1 * S, value: -16, easing: 'linear' },
+            // Duas falas com 350 ms de pausa ficam num único bloco de ducking.
+            { atUs: 4 * S, value: -16, easing: 'linear' },
+            { atUs: 4_650_000, value: 0, easing: 'linear' },
+          ],
+        },
+      }),
+      clip(track(p, 'Vozes'), 'voice-tone', 1 * S, 1_200_000, 0),
+      clip(track(p, 'Vozes'), 'voice-tone', 2_550_000, 1_450_000, 0),
+    ]);
+    const output = join(dir, 'speech-ducking-pause.wav');
+    await renderProject(p, output, {
+      width: 320, height: 180, enc: { codec: 'h264', quality: 0 }, audioBitrateK: 192, audioOnly: true,
+    }, env(p, 'speech-ducking-pause'), () => undefined);
+
+    const beforeSpeech = await rmsBandDb(output, 0.2, 0.35, 440, 1);
+    const microPause = await rmsBandDb(output, 2.3, 0.18, 440, 1);
+    const afterSpeech = await rmsBandDb(output, 4.8, 0.15, 440, 1);
+    expect(beforeSpeech - microPause).toBeGreaterThan(12);
+    expect(afterSpeech - microPause).toBeGreaterThan(12);
+    expect(Math.abs(afterSpeech - beforeSpeech)).toBeLessThan(2.5);
+  });
+
   it('normaliza a mixagem WAV ao alvo EBU R128 configurado', async () => {
     let p = await project((p) => [
       clip(track(p, 'V1'), 'rg', 0, 4 * S, 0, { sourceOutUs: 4 * S }),

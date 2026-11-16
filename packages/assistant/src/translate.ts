@@ -51,6 +51,16 @@ export function parseTranslationArray(text: string, n: number): string[] | null 
   return out;
 }
 
+/** Evita aceitar uma resposta claramente escrita em outro sistema de escrita (ex.: japonês quando o destino é português). */
+function hasUnexpectedWritingSystem(text: string, target: string): boolean {
+  const latinTarget = /^(pt|pt-br|portugu|brazil|en|english|ingl|es|espan|spanish|fr|french|fran|de|german|alem|it|ital)/i.test(target.trim());
+  if (!latinTarget) return false;
+  const letters = Array.from(text.matchAll(/\p{L}/gu)).length;
+  if (!letters) return true;
+  const nonLatin = Array.from(text.matchAll(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Cyrillic}\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Thai}]/gu)).length;
+  return nonLatin >= 2 && nonLatin / letters > 0.2;
+}
+
 /** Traduz `lines` para `opts.target`. Lança só em falha de conexão/chave; linhas que o modelo erra voltam como null. */
 export async function translateLines(cfg: ProviderConfig, key: string | null, fetch: FetchLike, lines: string[], opts: TranslateOptions): Promise<TranslateResult> {
   const size = Math.max(1, opts.batchSize ?? 20);
@@ -62,14 +72,21 @@ export async function translateLines(cfg: ProviderConfig, key: string | null, fe
     const batch = lines.slice(i, i + size);
     const content = JSON.stringify(batch);
     let got: string[] | null = null;
+    let rejectedForLanguage = false;
     for (let attempt = 0; attempt < 2 && !got; attempt++) {
-      const ask = attempt === 0 ? content : `${content}\n\nA resposta anterior não tinha exatamente ${batch.length} itens. Devolva um array JSON com ${batch.length} strings, uma por linha, na mesma ordem.`;
+      const retryReason = rejectedForLanguage
+        ? `A resposta anterior veio em um sistema de escrita incompatível com o idioma de destino (${opts.target}). Traduza de verdade para ${opts.target}; não copie o texto original. `
+        : `A resposta anterior não tinha exatamente ${batch.length} itens. `;
+      const ask = attempt === 0 ? content : `${content}\n\n${retryReason}Devolva um array JSON com ${batch.length} strings, uma por linha, na mesma ordem.`;
       const r = await chat(cfg, key, fetch, SYSTEM(opts.target, opts.source), [{ role: 'user', content: ask }], [], opts.signal);
       usage.input += r.usage?.input ?? 0;
       usage.output += r.usage?.output ?? 0;
       got = parseTranslationArray(r.text, batch.length);
-      // linha que tinha texto e voltou vazia conta como erro do lote
       if (got && got.some((t, k) => !t && batch[k]!.trim())) got = null;
+      if (got && got.some((line) => hasUnexpectedWritingSystem(line, opts.target))) {
+        got = null;
+        rejectedForLanguage = true;
+      }
     }
     if (got) got.forEach((t, k) => (out[i + k] = t));
     else failed += batch.length;

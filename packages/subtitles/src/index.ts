@@ -37,6 +37,11 @@ export interface UntimedLyricAlignment {
 
 type CueWord = NonNullable<Cue['words']>[number];
 
+/** Identifica kana ou ideogramas CJK; útil para evitar alinhar uma tradução latina ao áudio japonês. */
+export function hasJapaneseOrCjkScript(text: string): boolean {
+  return /[\u3040-\u30ff\u3400-\u9fff]/u.test(text);
+}
+
 function lyricTokens(text: string, characters: boolean): string[] {
   const normalized = text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
   if (characters) return Array.from(normalized).filter((part) => /[\p{L}\p{N}]/u.test(part));

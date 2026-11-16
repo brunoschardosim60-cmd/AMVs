@@ -4,7 +4,7 @@ import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVisi
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { translateLines } from '@amv/assistant';
 import { joinPath } from '@amv/media';
-import { alignUntimedLyrics } from '@amv/subtitles';
+import { alignUntimedLyrics, hasJapaneseOrCjkScript } from '@amv/subtitles';
 import { loadCreativeProfiles, saveCreativeProfiles } from '../../core/creativeProfiles';
 import { getAnalysisReadiness } from './analysis-readiness';
 import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2, Zap } from 'lucide-react';
@@ -36,6 +36,20 @@ const CAMERA_MOTION_LABEL: Record<CameraMotionType, string> = {
   unknown: 'movimento não classificado',
 };
 const FLOW_DIRECTIONS = ['direita', 'baixo-direita', 'baixo', 'baixo-esquerda', 'esquerda', 'cima-esquerda', 'cima', 'cima-direita'];
+const speechLanguageName = (language: string | null | undefined): string | undefined => {
+  const value = language?.trim().toLowerCase();
+  if (!value) return undefined;
+  const names: Record<string, string> = {
+    ja: 'japonês', jpn: 'japonês', japanese: 'japonês',
+    en: 'inglês', eng: 'inglês', english: 'inglês',
+    pt: 'português', por: 'português', 'pt-br': 'português brasileiro',
+    es: 'espanhol', spa: 'espanhol', fr: 'francês', fra: 'francês',
+    de: 'alemão', deu: 'alemão', it: 'italiano', ita: 'italiano',
+    ko: 'coreano', kor: 'coreano', zh: 'chinês', zho: 'chinês',
+    ru: 'russo', rus: 'russo',
+  };
+  return names[value] ?? language ?? undefined;
+};
 const flowDirectionLabel = (degrees: number | null): string | null =>
   degrees === null ? null : FLOW_DIRECTIONS[((Math.round(degrees / 45) % 8) + 8) % 8]!;
 
@@ -607,9 +621,24 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     setLyricsSyncProgress({ stage: 'Preparando áudio da música', progress: 0 });
     try {
       const transcript = await transcribeAudioAsset(selectedMusic, audioIndex, controller, (stage, progress) => setLyricsSyncProgress({ stage, progress }));
+      const audioInfo = selectedMusic.probe?.audio.find((stream) => stream.index === audioIndex);
+      const sourceLanguage = speechLanguageName(transcript.language ?? audioInfo?.language ?? audioInfo?.title);
+      const lyricsUseJapaneseScript = hasJapaneseOrCjkScript(text);
+      if (sourceLanguage === 'japonês' && !lyricsUseJapaneseScript) {
+        toast({
+          tone: 'warn',
+          title: 'Idioma da letra não corresponde ao reconhecimento',
+          body: 'O áudio foi reconhecido como japonês, mas o texto colado usa alfabeto latino. Isso pode ser uma tradução ou uma romanização; a correspondência palavra a palavra não é confiável. Sincronize uma letra compatível com o reconhecimento ou importe LRC/SRT temporizado; depois traduza preservando os tempos.',
+        });
+        return;
+      }
       const words = transcript.segments.flatMap((segment) => segment.words ?? []).filter((word) => word.text.trim() && word.end > word.start);
       if (!words.length) {
-        toast({ tone: 'warn', title: 'Não consegui reconhecer as palavras cantadas', body: 'O modelo não devolveu tempos por palavra. Tente um trecho mais limpo ou use um .LRC/.SRT sincronizado.' });
+        toast({
+          tone: 'warn',
+          title: 'Sem tempos por palavra',
+          body: 'A transcrição terminou, mas o modelo não forneceu tempos por palavra. O alinhamento automático precisa desses tempos. Use um LRC/SRT sincronizado ou tente um trecho mais limpo e um modelo maior.',
+        });
         return;
       }
       const aligned = alignUntimedLyrics(text, words);
@@ -1005,7 +1034,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           try {
             const settings = await loadAiSettings(platform!);
             if (!settings.enabled || !(isLocal(settings) || settings.allowExternal)) {
-              automaticSpeechWarnings.push('A IA de tradução está desativada ou sem autorização externa; as falas foram mantidas no idioma original. Ative um modelo no Assistente para traduzi-las automaticamente.');
+              automaticSpeechWarnings.push('A tradução automática está desativada ou sem autorização externa. Falas em idioma diferente do escolhido não terão legenda até serem traduzidas; o áudio original permanece. Ative um modelo no Assistente para traduzir as falas.');
             } else {
               const key = settings.provider.needsKey ? await platform!.secrets.get(secretName(settings.presetId)) : null;
               const targetLanguage: Record<string, string> = {
@@ -1019,29 +1048,48 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                 ko: 'coreano',
                 zh: 'chinês',
               };
-              setGenerationStep(`Traduzindo as falas para ${targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage}...`);
+              const target = targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage;
+              setGenerationStep(`Traduzindo as falas para ${target}...`);
               setGenerationProgress(34);
-              const translated = await translateLines(
-                settings.provider,
-                key,
-                platform!.http,
-                speechCandidates.map(({ speech }) => speech.text!),
-                {
-                  target: targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage,
-                  batchSize: 20,
-                  signal: speechController?.signal,
-                  onProgress: (done, total) => setGenerationProgress(34 + 4 * done / Math.max(1, total)),
-                },
-              );
-              translated.translations.forEach((value, index) => {
-                const candidate = speechCandidates[index]!;
-                if (value?.trim()) speechTranslations[`${candidate.episodeInput.assetId}@${candidate.speech.startS}`] = value.trim();
+              // Agrupa por idioma de origem para não pedir ao modelo que traduza japonês,
+              // português e inglês como se fossem um único idioma de entrada.
+              const groups = new Map<string, number[]>();
+              speechCandidates.forEach((candidate, index) => {
+                const source = speechLanguageName(candidate.speech.language) ?? 'detectar automaticamente';
+                const indexes = groups.get(source) ?? [];
+                indexes.push(index);
+                groups.set(source, indexes);
               });
-              if (translated.failed) automaticSpeechWarnings.push(`${translated.failed} fala(s) não conseguiram ser traduzidas; essas aparecem no idioma original.`);
+              let translatedCount = 0;
+              let failedCount = 0;
+              for (const [source, indexes] of groups) {
+                const translated = await translateLines(
+                  settings.provider,
+                  key,
+                  platform!.http,
+                  indexes.map((index) => speechCandidates[index]!.speech.text!),
+                  {
+                    target,
+                    ...(source !== 'detectar automaticamente' ? { source } : {}),
+                    batchSize: 20,
+                    signal: speechController?.signal,
+                    onProgress: (done, total) => setGenerationProgress(34 + 4 * (translatedCount + done) / Math.max(1, speechCandidates.length)),
+                  },
+                );
+                translated.translations.forEach((value, localIndex) => {
+                  const candidate = speechCandidates[indexes[localIndex]!]!;
+                  if (value?.trim()) {
+                    speechTranslations[`${candidate.episodeInput.assetId}@${candidate.speech.startS}`] = value.trim();
+                    translatedCount++;
+                  }
+                });
+                failedCount += translated.failed;
+              }
+              if (failedCount) automaticSpeechWarnings.push(`${failedCount} fala(s) não puderam ser traduzidas com segurança para ${target}; se o idioma original for diferente ou desconhecido, a legenda será omitida. Se já estiver no idioma escolhido, o texto original poderá ser mantido. O áudio original permanece. Confira a configuração do modelo de IA.`);
             }
           } catch (error) {
             if ((error as Error).name === 'AbortError') throw error;
-            automaticSpeechWarnings.push(`Falha na tradução automática: ${(error as Error).message}. As falas não traduzidas aparecem no idioma original.`);
+            automaticSpeechWarnings.push(`Falha na tradução automática: ${(error as Error).message}. Falas em idioma diferente ou desconhecido não terão legenda traduzida; o texto original será mantido apenas quando corresponder ao idioma escolhido. O áudio original permanece.`);
           }
         }
       }
@@ -2129,7 +2177,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                   <option value={4}>4</option>
                 </select>
               </label>
-              {(voiceMoments > 0 || selectedStyle === 'discurso') && <p className="text-2xs text-muted">A música abaixa sozinha durante cada fala e volta depois.</p>}
+              {(voiceMoments > 0 || selectedStyle === 'discurso') && <p className="text-2xs text-muted">A música abaixa antes da fala, permanece baixa nas pausas curtas e retorna suavemente quando a fala termina.</p>}
               {hasTwoAudio && voiceMoments > 0 && (
                 <label className="flex items-center gap-2">
                   Áudio da fala

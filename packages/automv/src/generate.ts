@@ -17,6 +17,7 @@ import { editorialStyle, styleDef, type EditorialDirection, type StyleDef, type 
 import type { CreativeEmphasis } from './creative-profiles.js';
 import { matchLyricsSemantics } from './lyric-matcher.js';
 import { lyricCueKey } from './lyric-cue-key.js';
+import { buildSpeechDuckingKeyframes } from './speech-ducking.js';
 export { lyricCueKey } from './lyric-cue-key.js';
 
 export interface EpisodeInput {
@@ -861,9 +862,51 @@ function speechTranslation(ep: EpisodeInput, speech: SpeechSegment, opts: Genera
   return { [opts.speechTranslationLanguage ?? 'pt']: translated };
 }
 
+type CaptionLanguageFamily = 'ja' | 'pt' | 'en' | 'es' | 'fr' | 'de' | 'it' | 'ko' | 'zh';
+
+function captionLanguageFamily(value: string | null | undefined): CaptionLanguageFamily | null {
+  const normalized = (value ?? '').trim().toLowerCase().replace(/_/g, '-');
+  const aliases: Record<CaptionLanguageFamily, string[]> = {
+    ja: ['ja', 'jpn', 'jp', 'japanese', 'japonês', 'japones'],
+    pt: ['pt', 'por', 'pob', 'ptb', 'pt-br', 'português', 'portugues', 'português brasileiro'],
+    en: ['en', 'eng', 'english', 'inglês', 'ingles'],
+    es: ['es', 'spa', 'spanish', 'espanhol'],
+    fr: ['fr', 'fra', 'fre', 'french', 'francês', 'frances'],
+    de: ['de', 'deu', 'ger', 'german', 'alemão', 'alemao'],
+    it: ['it', 'ita', 'italian', 'italiano'],
+    ko: ['ko', 'kor', 'korean', 'coreano'],
+    zh: ['zh', 'zho', 'chi', 'chinese', 'chinês', 'chines'],
+  };
+  for (const [family, values] of Object.entries(aliases) as [CaptionLanguageFamily, string[]][]) {
+    if (values.includes(normalized)) return family;
+  }
+  return null;
+}
+
 function speechCaptionText(ep: EpisodeInput, speech: SpeechSegment, lang: 'original' | 'pt', opts: GenerateOptions): string | null {
   if (!speechCaptionMatchesAudio(ep, speech, lang)) return null;
   if (speechTranslation(ep, speech, opts)) return speech.text?.trim() || null;
+
+  // O idioma detectado pelo Whisper pode falhar em falas curtas. Kana japonês é uma
+  // evidência direta de que o texto não é português/inglês/espanhol etc., mesmo que
+  // o metadado da transcrição tenha classificado o trecho como idioma latino.
+  const hasJapaneseKana = !!speech.text && /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(speech.text);
+  const requestedLanguage = opts.speechTranslationLanguage;
+  if (requestedLanguage && requestedLanguage !== 'original') {
+    const requestedFamily = captionLanguageFamily(requestedLanguage);
+    const sourceFamily = captionLanguageFamily(speech.language);
+    const embedded = findSubtitleTranslations(ep, speech.startS, speech.endS);
+    const hasEmbeddedTranslation = requestedFamily === 'pt'
+      ? !!embedded?.pt
+      : requestedFamily === 'en'
+        ? !!embedded?.en
+        : false;
+    const isLatinTarget = requestedFamily !== null && !['ja', 'ko', 'zh'].includes(requestedFamily);
+    if (isLatinTarget && hasJapaneseKana && !hasEmbeddedTranslation) return null;
+    // Se a pessoa pediu um idioma específico, não exibe silenciosamente a fala original
+    // quando ela está em outro idioma ou quando não foi possível identificar o idioma de origem.
+    if (requestedFamily && requestedFamily !== sourceFamily && !hasEmbeddedTranslation) return null;
+  }
   return speech.text;
 }
 
@@ -920,7 +963,6 @@ interface VoiceBlock {
   preDrop: boolean;
 }
 
-const DUCK_DB = -16;
 /** Referência aproximada de voz em dB RMS (percentil 90), não LUFS. */
 const VOICE_REF_DB = -18;
 /** Correção conservadora para diferenças entre episódios; limita boost/cut para reduzir risco de clipping. */
@@ -1049,17 +1091,13 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     if (placed < extraWanted && lines.length > 0) warnings.push(`Só coube ${placed + blocks.filter((b) => b.preDrop).length} de ${totalVoice} falas: faltou trecho calmo na música ou fala marcante na luta escolhida.`);
   }
   blocks.sort((a, b) => a.atS - b.atS);
-  // a música abaixa durante cada fala e volta depois (no drop, rampa curta para o golpe entrar forte)
+  // Mantém o ducking estável entre falas próximas; no drop, libera rapidamente para o impacto.
   if (blocks.length && generatedVoiceAndMusicAreAudible(project, musicTrack, voice)) {
-    const kf: { atUs: number; value: number; easing: 'linear' }[] = [];
-    for (const b of blocks) {
-      const a = b.atS;
-      const end = b.preDrop ? dropT! : b.atS + b.len;
-      kf.push({ atUs: us(Math.max(0, a - 0.35)), value: 0, easing: 'linear' }, { atUs: us(a), value: DUCK_DB, easing: 'linear' });
-      if (b.preDrop) kf.push({ atUs: us(end - 0.06), value: DUCK_DB, easing: 'linear' }, { atUs: us(end), value: 0, easing: 'linear' });
-      else kf.push({ atUs: us(end), value: DUCK_DB, easing: 'linear' }, { atUs: us(end + 0.4), value: 0, easing: 'linear' });
-    }
-    musicClip.keyframes['audio.gainDb'] = kf;
+    musicClip.keyframes['audio.gainDb'] = buildSpeechDuckingKeyframes(blocks.map((block) => ({
+      startS: block.atS,
+      endS: block.preDrop ? dropT! : block.atS + block.len,
+      ...(block.preDrop ? { forceRelease: true, releaseS: 0.12 } : {}),
+    })));
     musicClip.audio.duckingMode = 'manual';
   }
   // ---------------------------------------------------------------- estilo discurso: as falas são a espinha
@@ -1070,7 +1108,18 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       .filter((e) => e.hasAudio && !exclude.has(e.assetId) && hasRequestedSpeechAudio(e, lang))
       .flatMap((ep) => ep.analysis.speech.map((s) => ({ ep, s })))
       .filter((x) => x.s.endS - x.s.startS >= 0.8 && x.s.endS - x.s.startS <= 6)
-      .sort((x, y) => scoreSpeechCandidate(y.s) - scoreSpeechCandidate(x.s) || x.s.startS - y.s.startS);
+      // No discurso, falas em planos calmos/reação têm prioridade; cenas de combate
+      // continuam elegíveis, mas deixam de vencer apenas por terem gritos mais intensos.
+      .sort((x, y) => {
+        const visualContext = (ep: EpisodeInput, speech: SpeechSegment) => {
+          const shot = ep.analysis.shots.find((candidate) => speech.startS < candidate.endS && speech.endS > candidate.startS);
+          const tags = shot?.tags ?? [];
+          return tags.includes('calma') ? 0.25 : tags.includes('ação') || tags.includes('impacto') ? -0.2 : 0;
+        };
+        return (scoreSpeechCandidate(y.s) + visualContext(y.ep, y.s))
+          - (scoreSpeechCandidate(x.s) + visualContext(x.ep, x.s))
+          || x.s.startS - y.s.startS;
+      });
     let t = 0;
     const chosen: typeof lines = [];
     for (const l of lines) {
@@ -1098,17 +1147,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       t += len + 0.35;
     }
     if (speechIntervals.length && generatedVoiceAndMusicAreAudible(project, musicTrack, voice)) {
-      const keyframes: Keyframe[] = [];
-      for (const interval of speechIntervals) {
-        const duckStartS = Math.max(0, interval.startS - 0.1);
-        if (interval.startS > 0) keyframes.push({ atUs: us(duckStartS), value: 0, easing: 'linear' });
-        keyframes.push(
-          { atUs: us(interval.startS), value: DUCK_DB, easing: 'linear' },
-          { atUs: us(interval.endS), value: DUCK_DB, easing: 'linear' },
-          { atUs: us(interval.endS + 0.25), value: 0, easing: 'linear' },
-        );
-      }
-      musicClip.keyframes['audio.gainDb'] = keyframes;
+      musicClip.keyframes['audio.gainDb'] = buildSpeechDuckingKeyframes(speechIntervals);
       musicClip.audio.duckingMode = 'manual';
     }
     cmds.push({ type: 'clip.add', clip: musicClip });

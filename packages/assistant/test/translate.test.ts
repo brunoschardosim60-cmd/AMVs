@@ -61,6 +61,17 @@ describe('tradução de legendas', () => {
     expect(r.translations.slice(20)).toEqual(['T boa', 'T boa2']);
   });
 
+  it('rejeita resposta em japonês quando o destino é português e tenta corrigir', async () => {
+    const m = fake((_u, call) => call === 1
+      ? JSON.stringify(['私は諦めない'])
+      : JSON.stringify(['Eu não vou desistir']));
+    const r = await translateLines(cfg, null, m.f, ['諦めない'], { target: 'português brasileiro', source: 'japonês' });
+    expect(m.calls).toHaveLength(2);
+    expect(m.calls[1]!.user).toMatch(/sistema de escrita incompatível/);
+    expect(r.translations).toEqual(['Eu não vou desistir']);
+    expect(r.failed).toBe(0);
+  });
+
   it('linha cheia que volta vazia conta como erro (modelo engoliu a fala)', async () => {
     const m = fake(() => '["", "ok"]');
     const r = await translateLines(cfg, null, m.f, ['fala', 'outra'], { target: 'en' });

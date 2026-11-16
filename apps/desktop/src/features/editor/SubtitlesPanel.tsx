@@ -2,7 +2,7 @@ import { decodeSubtitleBytes, parseSubtitles, pickAudioStreamByLanguage, toSrt }
 import { joinPath } from '@amv/media';
 import { clipEndUs, type Clip } from '@amv/project';
 import { translateLines } from '@amv/assistant';
-import { alignUntimedLyrics, applyTranslation, cuesForClip, langLabel, LOOKS, originalText, placeCues, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
+import { alignUntimedLyrics, hasJapaneseOrCjkScript, applyTranslation, cuesForClip, langLabel, LOOKS, originalText, placeCues, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
 import { AlertTriangle, Download, FileText, Film, Languages, Mic, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
@@ -291,7 +291,26 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     setSpeechProgress({ stage: 'extracting', progress: 0, duration: (lyricsAsset.probe?.durationUs ?? 0) / 1e6 });
     try {
       const transcript = await transcribeAsset(lyricsAsset, audioIndex, controller);
-      const words = transcript.segments.flatMap((segment) => segment.words ?? []);
+      const detectedLanguage = transcript.language?.trim().toLowerCase();
+      const lyricsUseJapaneseScript = hasJapaneseOrCjkScript(untimedLyrics.text);
+      if (['ja', 'jpn', 'japanese'].includes(detectedLanguage ?? '') && !lyricsUseJapaneseScript) {
+        toast({
+          tone: 'warn',
+          title: 'Idioma da letra não corresponde ao reconhecimento',
+          body: 'O áudio foi reconhecido como japonês, mas o texto colado usa alfabeto latino. Isso pode ser uma tradução ou uma romanização; a correspondência palavra a palavra não é confiável nesse caso. Importe uma letra compatível com o reconhecimento ou um LRC/SRT já temporizado; depois traduza preservando os tempos.',
+        });
+        return;
+      }
+      const words = transcript.segments.flatMap((segment) => segment.words ?? [])
+        .filter((word) => word.text.trim() && Number.isFinite(word.start) && Number.isFinite(word.end) && word.end > word.start);
+      if (!words.length) {
+        toast({
+          tone: 'warn',
+          title: 'Sem tempos por palavra',
+          body: 'A transcrição terminou, mas o modelo não forneceu tempos por palavra. O alinhamento automático precisa desses tempos. Use um LRC/SRT sincronizado ou tente um trecho mais limpo e um modelo maior.',
+        });
+        return;
+      }
       const aligned = alignUntimedLyrics(untimedLyrics.text, words);
       if (!aligned.cues.length) {
         toast({ tone: 'warn', title: 'Nenhum verso alinhado', body: 'A transcrição não encontrou palavras suficientemente parecidas. Tente escolher outro idioma ou um modelo maior.' });
