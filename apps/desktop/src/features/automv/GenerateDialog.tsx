@@ -955,6 +955,10 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             es: 'espanhol',
             fr: 'francês',
             ja: 'japonês',
+            de: 'alemão',
+            it: 'italiano',
+            ko: 'coreano',
+            zh: 'chinês',
           };
           setGenerationStep(`Traduzindo as falas para ${targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage}...`);
           setGenerationProgress(34);
@@ -2076,6 +2080,10 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                     <option value="es">Espanhol</option>
                     <option value="fr">Francês</option>
                     <option value="ja">Japonês</option>
+                    <option value="de">Alemão</option>
+                    <option value="it">Italiano</option>
+                    <option value="ko">Coreano</option>
+                    <option value="zh">Chinês</option>
                     <option value="original">Idioma original</option>
                   </select>
                 </label>
