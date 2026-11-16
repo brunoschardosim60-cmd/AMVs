@@ -845,7 +845,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         for (const episodeInput of directorInputs) {
           const asset = selectedEpisodes.find((item) => item.id === episodeInput.assetId);
           const streams = asset?.probe?.audio ?? [];
-          const audioIndex = pickAudioStreamByLanguage(streams, voiceLang) ?? streams[0]?.index;
+          const audioIndex = pickAudioStreamByLanguage(streams, voiceLang)
+            ?? (voiceLang === 'pt' && streams.length > 1 ? undefined : streams[0]?.index);
           if (!asset || audioIndex === undefined) {
             automaticSpeechWarnings.push(`Não encontrei uma faixa de áudio para reconhecer as falas de ${episodeInput.name}.`);
             completed++;
