@@ -296,8 +296,8 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
       if (['ja', 'jpn', 'japanese'].includes(detectedLanguage ?? '') && !lyricsUseJapaneseScript) {
         toast({
           tone: 'warn',
-          title: 'A letra colada parece estar traduzida',
-          body: 'O áudio foi reconhecido como japonês, mas o texto usa alfabeto latino (por exemplo, uma tradução em português). Para sincronizar corretamente, importe primeiro a letra no idioma cantado; depois traduza os versos mantendo os tempos.',
+          title: 'Idioma da letra não corresponde ao reconhecimento',
+          body: 'O áudio foi reconhecido como japonês, mas o texto colado usa alfabeto latino. Isso pode ser uma tradução ou uma romanização; a correspondência palavra a palavra não é confiável nesse caso. Importe uma letra compatível com o reconhecimento ou um LRC/SRT já temporizado; depois traduza preservando os tempos.',
         });
         return;
       }
