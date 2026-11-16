@@ -291,6 +291,16 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     setSpeechProgress({ stage: 'extracting', progress: 0, duration: (lyricsAsset.probe?.durationUs ?? 0) / 1e6 });
     try {
       const transcript = await transcribeAsset(lyricsAsset, audioIndex, controller);
+      const detectedLanguage = transcript.language?.trim().toLowerCase();
+      const lyricsUseJapaneseScript = /[\\u3040-\\u30ff\\u3400-\\u9fff]/.test(untimedLyrics.text);
+      if (['ja', 'jpn', 'japanese'].includes(detectedLanguage ?? '') && !lyricsUseJapaneseScript) {
+        toast({
+          tone: 'warn',
+          title: 'A letra colada parece estar traduzida',
+          body: 'O áudio foi reconhecido como japonês, mas o texto usa alfabeto latino (por exemplo, uma tradução em português). Para sincronizar corretamente, importe primeiro a letra no idioma cantado; depois traduza os versos mantendo os tempos.',
+        });
+        return;
+      }
       const words = transcript.segments.flatMap((segment) => segment.words ?? []);
       const aligned = alignUntimedLyrics(untimedLyrics.text, words);
       if (!aligned.cues.length) {
