@@ -663,9 +663,16 @@ describe('outros estilos', () => {
     expect(on('V1')[0]!.timelineStartUs).toBe(0);
     expect(on('Vozes')[0]!.timelineStartUs).toBe(0);
     expect(evaluateKeyframes(on('Música')[0]!.keyframes['audio.gainDb'], 0, 0)).toBe(-16);
+    // O intervalo de 350 ms entre falas não pode fazer a música voltar ao volume cheio.
     expect(evaluateKeyframes(
       on('Música')[0]!.keyframes['audio.gainDb'],
       clipEndUs(on('Vozes')[0]!) + 250_000,
+      0,
+    )).toBe(-16);
+    // A música só recupera depois do fim do bloco contínuo de falas e da rampa de saída.
+    expect(evaluateKeyframes(
+      on('Música')[0]!.keyframes['audio.gainDb'],
+      9_050_000,
       0,
     )).toBe(0);
     expect(on('V1').every((c) => c.effects.some((e) => e.effect === 'color' && e.params.saturation === 0))).toBe(true);
