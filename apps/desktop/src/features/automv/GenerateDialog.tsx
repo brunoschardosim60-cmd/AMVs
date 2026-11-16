@@ -530,7 +530,10 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       const connection = await platform.analyzer.start();
       return await platform.analyzer.transcribe(connection, { path: audioPath, model: 'small' }, {
         signal: controller.signal,
-        onProgress: (job) => onProgress?.('Reconhecendo palavras', job.progress),
+        onProgress: (job) => onProgress?.(
+          'Reconhecendo palavras',
+          Math.min(1, Math.max(0, job.progress / Math.max(1, job.duration || duration))),
+        ),
       });
     } finally {
       if (partialPath && await platform.fs.exists(partialPath)) {
