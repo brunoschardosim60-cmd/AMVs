@@ -621,9 +621,24 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     setLyricsSyncProgress({ stage: 'Preparando áudio da música', progress: 0 });
     try {
       const transcript = await transcribeAudioAsset(selectedMusic, audioIndex, controller, (stage, progress) => setLyricsSyncProgress({ stage, progress }));
+      const audioInfo = selectedMusic.probe?.audio.find((stream) => stream.index === audioIndex);
+      const sourceLanguage = speechLanguageName(transcript.language ?? audioInfo?.language ?? audioInfo?.title);
+      const lyricsUseJapaneseScript = /[\u3040-\u30ff\u3400-\u9fff]/.test(text);
+      if (sourceLanguage === 'japonês' && !lyricsUseJapaneseScript) {
+        toast({
+          tone: 'warn',
+          title: 'Idioma da letra não corresponde ao reconhecimento',
+          body: 'O áudio foi reconhecido como japonês, mas o texto colado usa alfabeto latino. Isso pode ser uma tradução ou uma romanização; a correspondência palavra a palavra não é confiável. Sincronize uma letra compatível com o reconhecimento ou importe LRC/SRT temporizado; depois traduza preservando os tempos.',
+        });
+        return;
+      }
       const words = transcript.segments.flatMap((segment) => segment.words ?? []).filter((word) => word.text.trim() && word.end > word.start);
       if (!words.length) {
-        toast({ tone: 'warn', title: 'Não consegui reconhecer as palavras cantadas', body: 'O modelo não devolveu tempos por palavra. Tente um trecho mais limpo ou use um .LRC/.SRT sincronizado.' });
+        toast({
+          tone: 'warn',
+          title: 'Sem tempos por palavra',
+          body: 'A transcrição terminou, mas o modelo não forneceu tempos por palavra. O alinhamento automático precisa desses tempos. Use um LRC/SRT sincronizado ou tente um trecho mais limpo e um modelo maior.',
+        });
         return;
       }
       const aligned = alignUntimedLyrics(text, words);
