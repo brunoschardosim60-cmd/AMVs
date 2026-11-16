@@ -933,16 +933,24 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           .flatMap((episodeInput) => episodeInput.analysis.speech.map((speech) => ({ episodeInput, speech })))
           .filter(({ episodeInput, speech }) => {
             const length = speech.endS - speech.startS;
-            const durationFits = selectedStyle === 'discurso' ? length >= 0.8 && length <= 6 : length >= 0.6 && length <= 4;
+            const durationFits = selectedStyle === 'discurso'
+              ? length >= 0.8 && length <= 6
+              : length >= 0.6 && length <= 4;
             if (!durationFits || !speech.text?.trim()) return false;
+            if (!episodeInput.hasAudio || excluded.includes(episodeInput.assetId)) return false;
+            const streams = episodeInput.audioStreams ?? [];
+            if (voiceLang === 'pt' && streams.length >= 2 && pickAudioStreamByLanguage(streams, 'pt') === null) return false;
             if (editorialFootagePlan.mode !== 'fight' || selectedStyle === 'discurso') return true;
-            return pool.some((entry) => entry.ep.assetId === episodeInput.assetId
-              && speech.startS >= entry.seq.startS - 15 && speech.endS <= entry.seq.endS + 5)
-              || pool.some((entry) => entry.ep.assetId === episodeInput.assetId);
+            const nearChosenFight = pool.some((entry) => entry.ep.assetId === episodeInput.assetId
+              && speech.startS >= entry.seq.startS - 15 && speech.endS <= entry.seq.endS + 5);
+            const fallbackFromChosenFightEpisode = pool.some((entry) => entry.ep.assetId === episodeInput.assetId);
+            return nearChosenFight || fallbackFromChosenFightEpisode;
           })
           .sort((left, right) => scoreSpeechCandidate(right.speech) - scoreSpeechCandidate(left.speech)
             || left.speech.startS - right.speech.startS)
-          .slice(0, selectedStyle === 'discurso' ? 60 : Math.max(30, voiceMoments * 6));
+          .slice(0, selectedStyle === 'discurso'
+            ? Math.ceil(duration / 1.15) + 2
+            : Math.max(30, voiceMoments * 6));
         if (speechCandidates.length) {
           try {
             const settings = await loadAiSettings(platform!);
