@@ -857,8 +857,9 @@ function speechTranslation(ep: EpisodeInput, speech: SpeechSegment, opts: Genera
 }
 
 function speechCaptionText(ep: EpisodeInput, speech: SpeechSegment, lang: 'original' | 'pt', opts: GenerateOptions): string | null {
+  if (!speechCaptionMatchesAudio(ep, speech, lang)) return null;
   if (speechTranslation(ep, speech, opts)) return speech.text?.trim() || null;
-  return speechCaptionMatchesAudio(ep, speech, lang) ? speech.text : null;
+  return speech.text;
 }
 
 function addCaptionPhrases(
