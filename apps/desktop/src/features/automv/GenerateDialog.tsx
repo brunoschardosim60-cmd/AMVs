@@ -2177,7 +2177,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                   <option value={4}>4</option>
                 </select>
               </label>
-              {(voiceMoments > 0 || selectedStyle === 'discurso') && <p className="text-2xs text-muted">A música abaixa sozinha durante cada fala e volta depois.</p>}
+              {(voiceMoments > 0 || selectedStyle === 'discurso') && <p className="text-2xs text-muted">A música abaixa antes da fala, permanece baixa nas pausas curtas e retorna suavemente quando a fala termina.</p>}
               {hasTwoAudio && voiceMoments > 0 && (
                 <label className="flex items-center gap-2">
                   Áudio da fala
