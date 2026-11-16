@@ -201,3 +201,22 @@ def test_segmentation_jobs_validam_semente_intervalo_e_cancelamento(tmp_path, mo
             break
         time.sleep(0.01)
     assert response.json()["status"] == "cancelled"
+
+def test_jobs_finalizados_tem_retencao_limitada_sem_remover_jobs_ativos():
+    jobs = {}
+    for index in range(30):
+        job = server.SpeechJob()
+        job.status = "completed"
+        job.finished_at = float(index + 1)
+        jobs[str(index)] = job
+
+    active = server.SpeechJob()
+    active.status = "running"
+    jobs["active"] = active
+
+    server.prune_completed_jobs(jobs, keep=20)
+
+    assert "active" in jobs
+    assert len(jobs) == 21
+    assert all(str(index) not in jobs for index in range(10))
+    assert all(str(index) in jobs for index in range(10, 30))
