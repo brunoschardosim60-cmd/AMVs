@@ -269,6 +269,7 @@ def create_app(token: str) -> FastAPI:
             except SegmentationCancelled:
                 with job.lock:
                     job.status = "cancelled"
+                    job.finished_at = time.monotonic()
             except Exception as exc:
                 with job.lock:
                     job.error = f"falha no isolamento do personagem: {exc}"
