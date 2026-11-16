@@ -781,7 +781,12 @@ function textClip(
   const transObj: Record<string, string> | undefined = typeof translation === 'string'
     ? { pt: translation }
     : (translation as Record<string, string> | null | undefined) ?? undefined;
-  const translationEntry = Object.entries(transObj ?? {}).find(([, value]) => !!value?.trim());
+  // Preferência histórica por português e inglês quando há mais de uma tradução;
+  // traduções automáticas novas normalmente contêm somente o idioma de destino.
+  const preferredTranslation = ['pt', 'pt-BR', 'en']
+    .map((language) => [language, transObj?.[language]] as const)
+    .find((entry) => !!entry[1]?.trim());
+  const translationEntry = preferredTranslation ?? Object.entries(transObj ?? {}).find(([, value]) => !!value?.trim());
   const translationLanguage = translationEntry?.[0];
   const chosenTranslation = translationEntry?.[1];
   const displayText = chosenTranslation && chosenTranslation !== text ? chosenTranslation : text;
