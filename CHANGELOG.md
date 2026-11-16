@@ -1,5 +1,15 @@
 # Novidades
 
+## 0.6.24
+
+**Evita travamentos indefinidos na geração da forma de onda.**
+
+- Limita a decodificação ao tempo de duração informado para o arquivo, evitando processar caudas de áudio fora da timeline.
+- Detecta quando o FFmpeg deixa de enviar PCM por 90 segundos, encerra somente o job da forma de onda e permite que a importação continue.
+- Corrige uma condição de corrida no cancelamento do sidecar durante sua inicialização.
+
+## 0.6.23
+
 ## 0.6.23
 
 **Letras digitadas e legendas automáticas traduzidas no Gerar AMV.**

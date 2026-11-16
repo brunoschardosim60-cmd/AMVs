@@ -15,6 +15,7 @@ import {
   audioProxyArgs,
   proxyArgs,
   proxyFps,
+  waveformPcmArgs,
   type ProgressUpdate,
 } from '../src/index.js';
 import type { ProbeInfo } from '@amv/project';
@@ -84,6 +85,14 @@ describe('argumentos', () => {
 
   it('proxy de áudio padrão usa a primeira faixa do arquivo', () => {
     expect(audioProxyArgs('episode.mkv', 'default.m4a', null).join(' ')).toContain('-map 0:a:0');
+  });
+
+  it('waveform escolhe a faixa pedida e limita a duração ao arquivo', () => {
+    const args = waveformPcmArgs('episode.mkv', 3, 12_345_000);
+    expect(args).toContain('0:3');
+    const limit = args.indexOf('-t');
+    expect(args[limit + 1]).toBe('12.345000');
+    expect(args.at(-1)).toBe('pipe:1');
   });
 
   it('VFR e plano de miniaturas', () => {

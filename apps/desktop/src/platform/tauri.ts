@@ -47,14 +47,33 @@ const tauriRunner: ProcessRunner = {
       options.onStderr?.(text);
     });
     return new Promise<RunResult>((resolve, reject) => {
-      cmd.on('close', ({ code }) => resolve({ code, stdout, stderr }));
-      cmd.on('error', (e) => reject(new Error(String(e))));
+      let closed = false;
+      let abortHandler: (() => void) | undefined;
+      const cleanup = () => {
+        if (abortHandler) options.signal?.removeEventListener('abort', abortHandler);
+      };
+      cmd.on('close', ({ code }) => {
+        closed = true;
+        cleanup();
+        resolve({ code, stdout, stderr });
+      });
+      cmd.on('error', (e) => {
+        cleanup();
+        reject(new Error(String(e)));
+      });
       cmd
         .spawn()
         .then((child) => {
-          options.signal?.addEventListener('abort', () => void child.kill(), { once: true });
+          if (closed) return;
+          abortHandler = () => void child.kill();
+          // O watchdog pode disparar enquanto o sidecar ainda está iniciando.
+          if (options.signal?.aborted) abortHandler();
+          else options.signal?.addEventListener('abort', abortHandler, { once: true });
         })
-        .catch((e) => reject(new Error(`não foi possível iniciar o ${tool}: ${e}`)));
+        .catch((e) => {
+          cleanup();
+          reject(new Error(`não foi possível iniciar o ${tool}: ${e}`));
+        });
     });
   },
 };

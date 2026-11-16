@@ -125,12 +125,14 @@ export function thumbStripArgs(input: string, output: string, plan: ThumbStripPl
 export const WAVEFORM_RATE = 8000;
 
 /** Decodifica o áudio para PCM mono 16-bit no stdout, para calcular picos sem arquivo temporário. */
-export function waveformPcmArgs(input: string, streamIndex: number | null = null): string[] {
+export function waveformPcmArgs(input: string, streamIndex: number | null = null, durationUs?: number): string[] {
   return [
     '-hide_banner', '-nostdin', '-loglevel', 'error',
     '-i', input,
     '-map', streamIndex === null ? '0:a:0' : `0:${streamIndex}`,
-    '-vn', '-ac', '1', '-ar', String(WAVEFORM_RATE),
+    '-vn',
+    ...(durationUs !== undefined && Number.isFinite(durationUs) && durationUs > 0 ? ['-t', (durationUs / 1e6).toFixed(6)] : []),
+    '-ac', '1', '-ar', String(WAVEFORM_RATE),
     '-f', 's16le', '-acodec', 'pcm_s16le',
     'pipe:1',
   ];
