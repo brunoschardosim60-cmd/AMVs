@@ -310,19 +310,27 @@ def update_segmentation_progress(job: SegmentationJob, done: float, total: float
         job.progress = max(job.progress, min(1.0, done / total if total > 0 else 0.0))
 
 
-def free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
+def bind_local_socket() -> socket.socket:
+    """Reserva a porta até o Uvicorn assumir o mesmo socket, sem janela de corrida."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(2048)
+        return listener
+    except Exception:
+        listener.close()
+        raise
 
 
 def main() -> None:
     import uvicorn
 
     token = secrets.token_urlsafe(32)
-    port = free_port()
-    print(json.dumps({"event": "ready", "port": port, "token": token}), flush=True)
-    uvicorn.run(create_app(token), host="127.0.0.1", port=port, log_level="warning")
+    with bind_local_socket() as listener:
+        port = int(listener.getsockname()[1])
+        print(json.dumps({"event": "ready", "port": port, "token": token}), flush=True)
+        config = uvicorn.Config(create_app(token), host="127.0.0.1", port=port, log_level="warning")
+        uvicorn.Server(config).run(sockets=[listener])
 
 
 if __name__ == "__main__":
