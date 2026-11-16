@@ -9,6 +9,7 @@ import { loadCreativeProfiles, saveCreativeProfiles } from '../../core/creativeP
 import { getAnalysisReadiness } from './analysis-readiness';
 import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2, Zap } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { SpeechTranscript } from '../../platform/types';
 import type { ProjectSession } from '../../core/session';
 import { useApp, useLibraryVersion, useSessionVersion } from '../../store';
 import { displayTitle, recommend, STYLE_THEME } from '@amv/music';
@@ -503,8 +504,35 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     await platform.fs.mkdir(cacheDir);
     const cacheKey = (asset.hash || asset.id).replace(/[^a-zA-Z0-9_-]/g, '_');
     const audioPath = joinPath(cacheDir, `${cacheKey}-stream-${audioIndex}.wav`);
+    const transcriptPath = joinPath(cacheDir, `${cacheKey}-stream-${audioIndex}-small-v1.json`);
     let partialPath: string | null = null;
     try {
+      if (await platform.fs.exists(transcriptPath)) {
+        try {
+          const cached = JSON.parse(new TextDecoder().decode(await platform.fs.readFile(transcriptPath))) as SpeechTranscript;
+          const valid = !!cached
+            && typeof cached.duration === 'number'
+            && Array.isArray(cached.segments)
+            && cached.segments.every((segment) =>
+              Number.isFinite(segment.start)
+              && Number.isFinite(segment.end)
+              && typeof segment.text === 'string'
+              && Array.isArray(segment.words)
+              && segment.words.every((word) =>
+                Number.isFinite(word.start) && Number.isFinite(word.end) && typeof word.text === 'string',
+              ),
+            );
+          if (valid) {
+            if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
+            onProgress?.('Transcrição em cache', 1);
+            return cached;
+          }
+          await platform.fs.remove(transcriptPath);
+        } catch (error) {
+          if ((error as Error).name === 'AbortError') throw error;
+          try { await platform.fs.remove(transcriptPath); } catch {}
+        }
+      }
       if (!(await platform.fs.exists(audioPath)) || (await platform.fs.size(audioPath)) <= 44) {
         partialPath = `${audioPath}.partial`;
         if (await platform.fs.exists(partialPath)) await platform.fs.remove(partialPath);
@@ -532,13 +560,23 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       }
       if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
       const connection = await platform.analyzer.start();
-      return await platform.analyzer.transcribe(connection, { path: audioPath, model: 'small' }, {
+      const transcript = await platform.analyzer.transcribe(connection, { path: audioPath, model: 'small' }, {
         signal: controller.signal,
         onProgress: (job) => onProgress?.(
           'Reconhecendo palavras',
           Math.min(1, Math.max(0, job.progress / Math.max(1, job.duration || duration))),
         ),
       });
+      if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
+      const transcriptPartialPath = `${transcriptPath}.partial`;
+      try {
+        await platform.fs.writeFile(transcriptPartialPath, new TextEncoder().encode(JSON.stringify(transcript)));
+        await platform.fs.rename(transcriptPartialPath, transcriptPath);
+      } catch (cacheError) {
+        try { if (await platform.fs.exists(transcriptPartialPath)) await platform.fs.remove(transcriptPartialPath); } catch {}
+        console.warn('Não foi possível guardar a transcrição em cache:', cacheError);
+      }
+      return transcript;
     } finally {
       if (partialPath && await platform.fs.exists(partialPath)) {
         try { await platform.fs.remove(partialPath); } catch (error) { console.warn('Não foi possível limpar o áudio temporário:', error); }
