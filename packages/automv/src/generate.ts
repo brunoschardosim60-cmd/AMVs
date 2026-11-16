@@ -864,6 +864,21 @@ function speechTranslation(ep: EpisodeInput, speech: SpeechSegment, opts: Genera
 function speechCaptionText(ep: EpisodeInput, speech: SpeechSegment, lang: 'original' | 'pt', opts: GenerateOptions): string | null {
   if (!speechCaptionMatchesAudio(ep, speech, lang)) return null;
   if (speechTranslation(ep, speech, opts)) return speech.text?.trim() || null;
+
+  // Se a pessoa pediu um idioma específico, não exibe silenciosamente a fala original
+  // quando ela está em outro idioma e a tradução falhou.
+  const requestedLanguage = opts.speechTranslationLanguage;
+  if (requestedLanguage && requestedLanguage !== 'original') {
+    const requestedFamily = languageFamily(requestedLanguage);
+    const sourceFamily = languageFamily(speech.language);
+    const embedded = findSubtitleTranslations(ep, speech.startS, speech.endS);
+    const hasEmbeddedTranslation = requestedFamily === 'pt'
+      ? !!embedded?.pt
+      : requestedFamily === 'en'
+        ? !!embedded?.en
+        : false;
+    if (requestedFamily && sourceFamily && requestedFamily !== sourceFamily && !hasEmbeddedTranslation) return null;
+  }
   return speech.text;
 }
 
