@@ -861,23 +861,44 @@ function speechTranslation(ep: EpisodeInput, speech: SpeechSegment, opts: Genera
   return { [opts.speechTranslationLanguage ?? 'pt']: translated };
 }
 
+type CaptionLanguageFamily = 'ja' | 'pt' | 'en' | 'es' | 'fr' | 'de' | 'it' | 'ko' | 'zh';
+
+function captionLanguageFamily(value: string | null | undefined): CaptionLanguageFamily | null {
+  const normalized = (value ?? '').trim().toLowerCase().replace(/_/g, '-');
+  const aliases: Record<CaptionLanguageFamily, string[]> = {
+    ja: ['ja', 'jpn', 'jp', 'japanese', 'japonês', 'japones'],
+    pt: ['pt', 'por', 'pob', 'ptb', 'pt-br', 'português', 'portugues', 'português brasileiro'],
+    en: ['en', 'eng', 'english', 'inglês', 'ingles'],
+    es: ['es', 'spa', 'spanish', 'espanhol'],
+    fr: ['fr', 'fra', 'fre', 'french', 'francês', 'frances'],
+    de: ['de', 'deu', 'ger', 'german', 'alemão', 'alemao'],
+    it: ['it', 'ita', 'italian', 'italiano'],
+    ko: ['ko', 'kor', 'korean', 'coreano'],
+    zh: ['zh', 'zho', 'chi', 'chinese', 'chinês', 'chines'],
+  };
+  for (const [family, values] of Object.entries(aliases) as [CaptionLanguageFamily, string[]][]) {
+    if (values.includes(normalized)) return family;
+  }
+  return null;
+}
+
 function speechCaptionText(ep: EpisodeInput, speech: SpeechSegment, lang: 'original' | 'pt', opts: GenerateOptions): string | null {
   if (!speechCaptionMatchesAudio(ep, speech, lang)) return null;
   if (speechTranslation(ep, speech, opts)) return speech.text?.trim() || null;
 
   // Se a pessoa pediu um idioma específico, não exibe silenciosamente a fala original
-  // quando ela está em outro idioma e a tradução falhou.
+  // quando ela está em outro idioma ou quando não foi possível identificar o idioma de origem.
   const requestedLanguage = opts.speechTranslationLanguage;
   if (requestedLanguage && requestedLanguage !== 'original') {
-    const requestedFamily = languageFamily(requestedLanguage);
-    const sourceFamily = languageFamily(speech.language);
+    const requestedFamily = captionLanguageFamily(requestedLanguage);
+    const sourceFamily = captionLanguageFamily(speech.language);
     const embedded = findSubtitleTranslations(ep, speech.startS, speech.endS);
     const hasEmbeddedTranslation = requestedFamily === 'pt'
       ? !!embedded?.pt
       : requestedFamily === 'en'
         ? !!embedded?.en
         : false;
-    if (requestedFamily && sourceFamily && requestedFamily !== sourceFamily && !hasEmbeddedTranslation) return null;
+    if (requestedFamily && requestedFamily !== sourceFamily && !hasEmbeddedTranslation) return null;
   }
   return speech.text;
 }
