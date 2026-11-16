@@ -2,7 +2,7 @@ import { decodeSubtitleBytes, parseSubtitles, pickAudioStreamByLanguage, toSrt }
 import { joinPath } from '@amv/media';
 import { clipEndUs, type Clip } from '@amv/project';
 import { translateLines } from '@amv/assistant';
-import { alignUntimedLyrics, applyTranslation, cuesForClip, langLabel, LOOKS, originalText, placeCues, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
+import { alignUntimedLyrics, hasJapaneseOrCjkScript, applyTranslation, cuesForClip, langLabel, LOOKS, originalText, placeCues, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
 import { AlertTriangle, Download, FileText, Film, Languages, Mic, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
@@ -292,7 +292,7 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     try {
       const transcript = await transcribeAsset(lyricsAsset, audioIndex, controller);
       const detectedLanguage = transcript.language?.trim().toLowerCase();
-      const lyricsUseJapaneseScript = /[\u3040-\u30ff\u3400-\u9fff]/.test(untimedLyrics.text);
+      const lyricsUseJapaneseScript = hasJapaneseOrCjkScript(untimedLyrics.text);
       if (['ja', 'jpn', 'japanese'].includes(detectedLanguage ?? '') && !lyricsUseJapaneseScript) {
         toast({
           tone: 'warn',
