@@ -39,7 +39,7 @@ type CueWord = NonNullable<Cue['words']>[number];
 
 /** Identifica kana ou ideogramas CJK; útil para evitar alinhar uma tradução latina ao áudio japonês. */
 export function hasJapaneseOrCjkScript(text: string): boolean {
-  return /[\\u3040-\\u30ff\\u3400-\\u9fff]/u.test(text);
+  return /[\u3040-\u30ff\u3400-\u9fff]/u.test(text);
 }
 
 function lyricTokens(text: string, characters: boolean): string[] {
