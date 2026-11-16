@@ -1070,7 +1070,18 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       .filter((e) => e.hasAudio && !exclude.has(e.assetId) && hasRequestedSpeechAudio(e, lang))
       .flatMap((ep) => ep.analysis.speech.map((s) => ({ ep, s })))
       .filter((x) => x.s.endS - x.s.startS >= 0.8 && x.s.endS - x.s.startS <= 6)
-      .sort((x, y) => scoreSpeechCandidate(y.s) - scoreSpeechCandidate(x.s) || x.s.startS - y.s.startS);
+      // No discurso, falas em planos calmos/reação têm prioridade; cenas de combate
+      // continuam elegíveis, mas deixam de vencer apenas por terem gritos mais intensos.
+      .sort((x, y) => {
+        const visualContext = (ep: EpisodeInput, speech: SpeechSegment) => {
+          const shot = ep.analysis.shots.find((candidate) => speech.startS < candidate.endS && speech.endS > candidate.startS);
+          const tags = shot?.tags ?? [];
+          return tags.includes('calma') ? 0.25 : tags.includes('ação') || tags.includes('impacto') ? -0.2 : 0;
+        };
+        return (scoreSpeechCandidate(y.s) + visualContext(y.ep, y.s))
+          - (scoreSpeechCandidate(x.s) + visualContext(x.ep, x.s))
+          || x.s.startS - y.s.startS;
+      });
     let t = 0;
     const chosen: typeof lines = [];
     for (const l of lines) {
