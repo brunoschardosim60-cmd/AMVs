@@ -932,13 +932,14 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             const length = speech.endS - speech.startS;
             const durationFits = selectedStyle === 'discurso' ? length >= 0.8 && length <= 6 : length >= 0.6 && length <= 4;
             if (!durationFits || !speech.text?.trim()) return false;
-            if (editorialFootagePlan.mode !== 'fight') return true;
+            if (editorialFootagePlan.mode !== 'fight' || selectedStyle === 'discurso') return true;
             return pool.some((entry) => entry.ep.assetId === episodeInput.assetId
-              && speech.startS >= entry.seq.startS - 15 && speech.endS <= entry.seq.endS + 5);
+              && speech.startS >= entry.seq.startS - 15 && speech.endS <= entry.seq.endS + 5)
+              || pool.some((entry) => entry.ep.assetId === episodeInput.assetId);
           })
           .sort((left, right) => scoreSpeechCandidate(right.speech) - scoreSpeechCandidate(left.speech)
             || left.speech.startS - right.speech.startS)
-          .slice(0, selectedStyle === 'discurso' ? 30 : Math.max(12, voiceMoments * 4));
+          .slice(0, selectedStyle === 'discurso' ? 60 : Math.max(30, voiceMoments * 6));
         if (speechCandidates.length) {
           const settings = await loadAiSettings(platform!);
           if (!settings.enabled || !(isLocal(settings) || settings.allowExternal)) {
