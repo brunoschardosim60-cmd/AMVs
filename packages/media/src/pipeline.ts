@@ -195,7 +195,7 @@ export async function computeWaveform(
   };
   signal?.addEventListener('abort', abortFromCaller, { once: true });
   resetIdleTimer();
-  let r;
+  let r: Awaited<ReturnType<ProcessRunner['run']>>;
   try {
     r = await runner.run('ffmpeg', waveformPcmArgs(input, streamIndex, probe.durationUs), {
       signal: processController.signal,
