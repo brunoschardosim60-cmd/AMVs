@@ -944,41 +944,46 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             || left.speech.startS - right.speech.startS)
           .slice(0, selectedStyle === 'discurso' ? 60 : Math.max(30, voiceMoments * 6));
         if (speechCandidates.length) {
-          const settings = await loadAiSettings(platform!);
-          if (!settings.enabled || !(isLocal(settings) || settings.allowExternal)) {
-            automaticSpeechWarnings.push('A IA de tradução está desativada ou sem autorização externa; as falas foram mantidas no idioma original. Ative um modelo no Assistente para traduzi-las automaticamente.');
-          } else {
-          const key = settings.provider.needsKey ? await platform!.secrets.get(secretName(settings.presetId)) : null;
-          const targetLanguage: Record<string, string> = {
-            'pt-BR': 'português brasileiro',
-            en: 'inglês',
-            es: 'espanhol',
-            fr: 'francês',
-            ja: 'japonês',
-            de: 'alemão',
-            it: 'italiano',
-            ko: 'coreano',
-            zh: 'chinês',
-          };
-          setGenerationStep(`Traduzindo as falas para ${targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage}...`);
-          setGenerationProgress(34);
-          const translated = await translateLines(
-            settings.provider,
-            key,
-            platform!.http,
-            speechCandidates.map(({ speech }) => speech.text!),
-            {
-              target: targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage,
-              batchSize: 20,
-              signal: speechController?.signal,
-              onProgress: (done, total) => setGenerationProgress(34 + 4 * done / Math.max(1, total)),
-            },
-          );
-          translated.translations.forEach((value, index) => {
-            const candidate = speechCandidates[index]!;
-            if (value?.trim()) speechTranslations[`${candidate.episodeInput.assetId}@${candidate.speech.startS}`] = value.trim();
-          });
-          if (translated.failed) automaticSpeechWarnings.push(`${translated.failed} fala(s) não conseguiram ser traduzidas; essas aparecem no idioma original.`);
+          try {
+            const settings = await loadAiSettings(platform!);
+            if (!settings.enabled || !(isLocal(settings) || settings.allowExternal)) {
+              automaticSpeechWarnings.push('A IA de tradução está desativada ou sem autorização externa; as falas foram mantidas no idioma original. Ative um modelo no Assistente para traduzi-las automaticamente.');
+            } else {
+              const key = settings.provider.needsKey ? await platform!.secrets.get(secretName(settings.presetId)) : null;
+              const targetLanguage: Record<string, string> = {
+                'pt-BR': 'português brasileiro',
+                en: 'inglês',
+                es: 'espanhol',
+                fr: 'francês',
+                ja: 'japonês',
+                de: 'alemão',
+                it: 'italiano',
+                ko: 'coreano',
+                zh: 'chinês',
+              };
+              setGenerationStep(`Traduzindo as falas para ${targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage}...`);
+              setGenerationProgress(34);
+              const translated = await translateLines(
+                settings.provider,
+                key,
+                platform!.http,
+                speechCandidates.map(({ speech }) => speech.text!),
+                {
+                  target: targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage,
+                  batchSize: 20,
+                  signal: speechController?.signal,
+                  onProgress: (done, total) => setGenerationProgress(34 + 4 * done / Math.max(1, total)),
+                },
+              );
+              translated.translations.forEach((value, index) => {
+                const candidate = speechCandidates[index]!;
+                if (value?.trim()) speechTranslations[`${candidate.episodeInput.assetId}@${candidate.speech.startS}`] = value.trim();
+              });
+              if (translated.failed) automaticSpeechWarnings.push(`${translated.failed} fala(s) não conseguiram ser traduzidas; essas aparecem no idioma original.`);
+            }
+          } catch (error) {
+            if ((error as Error).name === 'AbortError') throw error;
+            automaticSpeechWarnings.push(`Falha na tradução automática: ${(error as Error).message}. As falas não traduzidas aparecem no idioma original.`);
           }
         }
       }
