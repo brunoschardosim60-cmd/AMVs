@@ -17,6 +17,7 @@ import { editorialStyle, styleDef, type EditorialDirection, type StyleDef, type 
 import type { CreativeEmphasis } from './creative-profiles.js';
 import { matchLyricsSemantics } from './lyric-matcher.js';
 import { lyricCueKey } from './lyric-cue-key.js';
+import { buildSpeechDuckingKeyframes } from './speech-ducking.js';
 export { lyricCueKey } from './lyric-cue-key.js';
 
 export interface EpisodeInput {
@@ -1085,17 +1086,13 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     if (placed < extraWanted && lines.length > 0) warnings.push(`Só coube ${placed + blocks.filter((b) => b.preDrop).length} de ${totalVoice} falas: faltou trecho calmo na música ou fala marcante na luta escolhida.`);
   }
   blocks.sort((a, b) => a.atS - b.atS);
-  // a música abaixa durante cada fala e volta depois (no drop, rampa curta para o golpe entrar forte)
+  // Mantém o ducking estável entre falas próximas; no drop, libera rapidamente para o impacto.
   if (blocks.length && generatedVoiceAndMusicAreAudible(project, musicTrack, voice)) {
-    const kf: { atUs: number; value: number; easing: 'linear' }[] = [];
-    for (const b of blocks) {
-      const a = b.atS;
-      const end = b.preDrop ? dropT! : b.atS + b.len;
-      kf.push({ atUs: us(Math.max(0, a - 0.35)), value: 0, easing: 'linear' }, { atUs: us(a), value: DUCK_DB, easing: 'linear' });
-      if (b.preDrop) kf.push({ atUs: us(end - 0.06), value: DUCK_DB, easing: 'linear' }, { atUs: us(end), value: 0, easing: 'linear' });
-      else kf.push({ atUs: us(end), value: DUCK_DB, easing: 'linear' }, { atUs: us(end + 0.4), value: 0, easing: 'linear' });
-    }
-    musicClip.keyframes['audio.gainDb'] = kf;
+    musicClip.keyframes['audio.gainDb'] = buildSpeechDuckingKeyframes(blocks.map((block) => ({
+      startS: block.atS,
+      endS: block.preDrop ? dropT! : block.atS + block.len,
+      ...(block.preDrop ? { forceRelease: true, releaseS: 0.12 } : {}),
+    })));
     musicClip.audio.duckingMode = 'manual';
   }
   // ---------------------------------------------------------------- estilo discurso: as falas são a espinha
@@ -1145,17 +1142,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       t += len + 0.35;
     }
     if (speechIntervals.length && generatedVoiceAndMusicAreAudible(project, musicTrack, voice)) {
-      const keyframes: Keyframe[] = [];
-      for (const interval of speechIntervals) {
-        const duckStartS = Math.max(0, interval.startS - 0.1);
-        if (interval.startS > 0) keyframes.push({ atUs: us(duckStartS), value: 0, easing: 'linear' });
-        keyframes.push(
-          { atUs: us(interval.startS), value: DUCK_DB, easing: 'linear' },
-          { atUs: us(interval.endS), value: DUCK_DB, easing: 'linear' },
-          { atUs: us(interval.endS + 0.25), value: 0, easing: 'linear' },
-        );
-      }
-      musicClip.keyframes['audio.gainDb'] = keyframes;
+      musicClip.keyframes['audio.gainDb'] = buildSpeechDuckingKeyframes(speechIntervals);
       musicClip.audio.duckingMode = 'manual';
     }
     cmds.push({ type: 'clip.add', clip: musicClip });
