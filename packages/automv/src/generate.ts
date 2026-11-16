@@ -52,6 +52,10 @@ export interface GenerateOptions {
   lyrics?: Cue[];
   /** Correspondências semânticas de letra/cena aprovadas na análise visual opcional. */
   lyricSceneMatches?: Record<string, Record<string, { score: number; reason: string }>>;
+  /** Traduções automáticas das falas selecionadas, indexadas por `${assetId}@${startS}`. */
+  speechTranslations?: Record<string, string>;
+  /** Idioma das traduções automáticas das falas (ex.: pt-BR, en, es). */
+  speechTranslationLanguage?: string;
   useSpeech: boolean;
   useEffects: boolean;
   showText: boolean;
@@ -774,8 +778,17 @@ function textClip(
   const sizeMultiplier = 1 + (isClimaxImpact ? 0.35 : 0.25) * Math.max(0, Math.min(1, impact));
   const baseSize = word ? 0.105 : isLyrics ? 0.09 : (impact < 0.45 ? 0.056 : 0.065);
   const glowIntensity = isClimaxImpact ? Math.round(12 + 16 * Math.max(0, Math.min(1, impact))) : 0;
-  const transObj = typeof translation === 'string' ? { pt: translation } : (translation as { pt?: string; en?: string } | null | undefined);
-  const chosenTranslation = transObj?.pt ?? transObj?.en;
+  const transObj: Record<string, string> | undefined = typeof translation === 'string'
+    ? { pt: translation }
+    : (translation as Record<string, string> | null | undefined) ?? undefined;
+  // Preferência histórica por português e inglês quando há mais de uma tradução;
+  // traduções automáticas novas normalmente contêm somente o idioma de destino.
+  const preferredTranslation = ['pt', 'pt-BR', 'en']
+    .map((language) => [language, transObj?.[language]] as const)
+    .find((entry) => !!entry[1]?.trim());
+  const translationEntry = preferredTranslation ?? Object.entries(transObj ?? {}).find(([, value]) => !!value?.trim());
+  const translationLanguage = translationEntry?.[0];
+  const chosenTranslation = translationEntry?.[1];
   const displayText = chosenTranslation && chosenTranslation !== text ? chosenTranslation : text;
 
   return baseClip(trackId, null, startS, durS, 0, reason, {
@@ -813,11 +826,8 @@ function textClip(
         ? {
             textSource: chosenTranslation && chosenTranslation !== text ? ('translation' as const) : ('original' as const),
             original: text,
-            lang: transObj.pt ? 'pt' : 'en',
-            translations: {
-              ...(transObj.pt ? { pt: transObj.pt } : {}),
-              ...(transObj.en ? { en: transObj.en } : {}),
-            },
+            lang: translationLanguage ?? 'pt',
+            translations: transObj ?? {},
           }
         : {}),
     }),
@@ -825,6 +835,7 @@ function textClip(
 }
 
 export interface SubtitleTranslations {
+  [language: string]: string | undefined;
   pt?: string;
   en?: string;
 }
@@ -842,6 +853,18 @@ export function findSubtitleTranslations(ep: EpisodeInput, startS: number, endS:
     }
   }
   return Object.keys(translations).length > 0 ? translations : null;
+}
+
+function speechTranslation(ep: EpisodeInput, speech: SpeechSegment, opts: GenerateOptions): SubtitleTranslations | null {
+  const translated = opts.speechTranslations?.[`${ep.assetId}@${speech.startS}`]?.trim();
+  if (!translated) return null;
+  return { [opts.speechTranslationLanguage ?? 'pt']: translated };
+}
+
+function speechCaptionText(ep: EpisodeInput, speech: SpeechSegment, lang: 'original' | 'pt', opts: GenerateOptions): string | null {
+  if (!speechCaptionMatchesAudio(ep, speech, lang)) return null;
+  if (speechTranslation(ep, speech, opts)) return speech.text?.trim() || null;
+  return speech.text;
 }
 
 function addCaptionPhrases(
@@ -1064,11 +1087,11 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const len = s.endS - s.startS;
       const startS = t;
       speechIntervals.push({ startS, endS: startS + len });
-      const sourceText = speechCaptionMatchesAudio(ep, s, lang) ? s.text : null;
+      const sourceText = speechCaptionText(ep, s, lang, opts);
       const reason = `Fala ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}" ` : ''}de ${ep.name} ${fmt(s.startS)} (impacto ${s.impact.toFixed(2)})`;
       cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, t, len + 0.35, s.startS, reason, { effects: [...gradeFx(style.grade)] }) });
       cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: voiceGainDb(2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
-      const subtitleTranslations = findSubtitleTranslations(ep, s.startS, s.endS);
+      const subtitleTranslations = speechTranslation(ep, s, opts) ?? findSubtitleTranslations(ep, s.startS, s.endS);
       if (opts.showText && text && sourceText) addCaptionPhrases(cmds, text.id, t, len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations);
       used.add(`${ep.assetId}@${s.startS}`);
       clipsMade++;
@@ -1886,8 +1909,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   // ---------------------------------------------------------------- falas + imagem do personagem
   for (const b of blocks) {
     const { ep, s } = b;
-    const sourceText = speechCaptionMatchesAudio(ep, s, lang) ? s.text : null;
-    const subtitleTranslations = findSubtitleTranslations(ep, s.startS, s.endS);
+    const sourceText = speechCaptionText(ep, s, lang, opts);
+    const subtitleTranslations = speechTranslation(ep, s, opts) ?? findSubtitleTranslations(ep, s.startS, s.endS);
     const reason = b.preDrop
       ? `Fala marcante antes do drop: ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada durante a fala`
       : `Fala intercalada: ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada`;

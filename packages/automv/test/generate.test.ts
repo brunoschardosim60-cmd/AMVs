@@ -790,6 +790,36 @@ describe('melhorias avançadas de AMV', () => {
     expect(speechCaption?.text?.glowIntensity).toBeGreaterThan(0);
   });
 
+  it('exibe a tradução automática da fala no idioma solicitado e preserva o original', () => {
+    const p = project();
+    const ep = episode('ep1', 30, 3);
+    ep.analysis.speech = [
+      { startS: 21, endS: 23.2, kind: 'fala', confidence: 0.9, text: 'I will never give up!', language: 'en', impact: 0.9 },
+    ];
+    const result = generateAmv(p, music(), [ep], {
+      ...base,
+      durationS: 60,
+      musicStartS: 16,
+      useSpeech: true,
+      showText: true,
+      voiceMoments: 1,
+      speechTranslations: { 'ep1@21': 'Eu nunca vou desistir!' },
+      speechTranslationLanguage: 'pt-BR',
+    });
+    const textTrackId = p.tracks.find((track) => track.kind === 'text')!.id;
+    const caption = result.commands.find((command) =>
+      command.type === 'clip.add'
+        && command.clip.trackId === textTrackId
+        && command.clip.reason === 'Legenda da fala',
+    );
+    expect(caption?.type).toBe('clip.add');
+    if (caption?.type !== 'clip.add') throw new Error('Legenda traduzida não foi criada.');
+    expect(caption.clip.text?.text).toBe('Eu nunca vou desistir!');
+    expect(caption.clip.text?.original).toBe('I will never give up!');
+    expect(caption.clip.text?.translations['pt-BR']).toBe('Eu nunca vou desistir!');
+    expect(caption.clip.text?.lang).toBe('pt-BR');
+  });
+
   it('aplica efeito de separação RGB (glitch) no drop com impacto visual', () => {
     const p = project();
     const ep = episode('ep1', 30, 3);

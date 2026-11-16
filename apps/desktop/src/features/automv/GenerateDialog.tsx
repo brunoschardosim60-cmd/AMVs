@@ -1,11 +1,15 @@
-import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type CameraMotionType, type Cue, type SceneEmotion } from '@amv/analysis';
-import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, planNarrative, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
+import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type CameraMotionType, type Cue, type SceneEmotion, type SpeechSegment } from '@amv/analysis';
+import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, planNarrative, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, scoreSpeechCandidate, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
 import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
+import { translateLines } from '@amv/assistant';
+import { joinPath } from '@amv/media';
+import { alignUntimedLyrics } from '@amv/subtitles';
 import { loadCreativeProfiles, saveCreativeProfiles } from '../../core/creativeProfiles';
 import { getAnalysisReadiness } from './analysis-readiness';
 import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2, Zap } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { SpeechTranscript } from '../../platform/types';
 import type { ProjectSession } from '../../core/session';
 import { useApp, useLibraryVersion, useSessionVersion } from '../../store';
 import { displayTitle, recommend, STYLE_THEME } from '@amv/music';
@@ -98,7 +102,12 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [musicStart, setMusicStart] = useState<number | null>(null);
   const [useEffects, setUseEffects] = useState(true);
   const [showText, setShowText] = useState(true);
+  const [speechCaptionLanguage, setSpeechCaptionLanguage] = useState('pt-BR');
   const [lyrics, setLyrics] = useState<{ name: string; cues: Cue[] } | null>(null);
+  const [lyricDraft, setLyricDraft] = useState('');
+  const [lyricsSyncing, setLyricsSyncing] = useState(false);
+  const [lyricsSyncProgress, setLyricsSyncProgress] = useState<{ stage: string; progress: number } | null>(null);
+  const transcriptionAbort = useRef<AbortController | null>(null);
   const [matchLyrics, setMatchLyrics] = useState(false);
   const [lyricSceneMatches, setLyricSceneMatches] = useState<NonNullable<GenerateOptions['lyricSceneMatches']>>({});
   const [seed, setSeed] = useState(1);
@@ -152,6 +161,15 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   }, [platform, toast]);
 
   const music = session.assetRuntime(musicId).music;
+  useEffect(() => {
+    transcriptionAbort.current?.abort();
+    setLyrics(null);
+    setLyricSceneMatches({});
+  }, [musicId]);
+
+  useEffect(() => () => {
+    transcriptionAbort.current?.abort();
+  }, []);
   const ready = episodes.filter((e) => epIds.includes(e.id) && session.assetRuntime(e.id).episode);
   const selectedEpisodes = episodes.filter((episode) => epIds.includes(episode.id));
   const selectedMusic = musics.find((asset) => asset.id === musicId);
@@ -473,6 +491,148 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     setLyricSceneMatches({});
   };
 
+  const transcribeAudioAsset = async (
+    asset: Project['assets'][number],
+    audioIndex: number,
+    controller: AbortController,
+    onProgress?: (stage: string, progress: number) => void,
+  ) => {
+    if (!platform) throw new Error('Plataforma local indisponível.');
+    if (asset.status === 'missing') throw new Error(`O arquivo ${asset.name} está ausente. Relocalize-o antes de transcrever.`);
+    const duration = (asset.probe?.durationUs ?? 0) / S;
+    const cacheDir = joinPath(await platform.cacheDir(), 'transcription');
+    await platform.fs.mkdir(cacheDir);
+    const cacheKey = (asset.hash || asset.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const audioPath = joinPath(cacheDir, `${cacheKey}-stream-${audioIndex}.wav`);
+    const transcriptPath = joinPath(cacheDir, `${cacheKey}-stream-${audioIndex}-small-v1.json`);
+    let partialPath: string | null = null;
+    try {
+      if (await platform.fs.exists(transcriptPath)) {
+        try {
+          const cached = JSON.parse(new TextDecoder().decode(await platform.fs.readFile(transcriptPath))) as SpeechTranscript;
+          const valid = !!cached
+            && typeof cached.duration === 'number'
+            && Array.isArray(cached.segments)
+            && cached.segments.every((segment) =>
+              Number.isFinite(segment.start)
+              && Number.isFinite(segment.end)
+              && typeof segment.text === 'string'
+              && Array.isArray(segment.words)
+              && segment.words.every((word) =>
+                Number.isFinite(word.start) && Number.isFinite(word.end) && typeof word.text === 'string',
+              ),
+            );
+          if (valid) {
+            if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
+            onProgress?.('Transcrição em cache', 1);
+            return cached;
+          }
+          await platform.fs.remove(transcriptPath);
+        } catch (error) {
+          if ((error as Error).name === 'AbortError') throw error;
+          try { await platform.fs.remove(transcriptPath); } catch {}
+        }
+      }
+      if (!(await platform.fs.exists(audioPath)) || (await platform.fs.size(audioPath)) <= 44) {
+        partialPath = `${audioPath}.partial`;
+        if (await platform.fs.exists(partialPath)) await platform.fs.remove(partialPath);
+        onProgress?.('Extraindo áudio', 0);
+        let progressOutput = '';
+        const extracted = await platform.runner.run(
+          'ffmpeg',
+          ['-y', '-hide_banner', '-v', 'error', '-i', asset.path, '-map', `0:${audioIndex}`, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-progress', 'pipe:1', '-nostats', '-f', 'wav', partialPath],
+          {
+            signal: controller.signal,
+            onStdout: (chunk) => {
+              progressOutput = (progressOutput + chunk).slice(-4096);
+              for (const line of progressOutput.split(/\r?\n/)) {
+                const match = /^out_time_us=(\d+)/.exec(line);
+                if (match) onProgress?.('Extraindo áudio', Math.min(1, Number(match[1]) / 1e6 / Math.max(1, duration)));
+              }
+            },
+          },
+        );
+        if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
+        if (extracted.code !== 0) throw new Error(extracted.stderr.trim() || `FFmpeg encerrou com código ${extracted.code}.`);
+        if (!(await platform.fs.exists(partialPath)) || (await platform.fs.size(partialPath)) <= 44) throw new Error('FFmpeg não gerou um WAV válido para transcrição.');
+        await platform.fs.rename(partialPath, audioPath);
+        partialPath = null;
+      }
+      if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
+      const connection = await platform.analyzer.start();
+      const transcript = await platform.analyzer.transcribe(connection, { path: audioPath, model: 'small' }, {
+        signal: controller.signal,
+        onProgress: (job) => onProgress?.(
+          'Reconhecendo palavras',
+          Math.min(1, Math.max(0, job.progress / Math.max(1, job.duration || duration))),
+        ),
+      });
+      if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
+      const transcriptPartialPath = `${transcriptPath}.partial`;
+      let transcriptCached = false;
+      try {
+        await platform.fs.writeFile(transcriptPartialPath, new TextEncoder().encode(JSON.stringify(transcript)));
+        await platform.fs.rename(transcriptPartialPath, transcriptPath);
+        transcriptCached = true;
+      } catch (cacheError) {
+        try { if (await platform.fs.exists(transcriptPartialPath)) await platform.fs.remove(transcriptPartialPath); } catch {}
+        console.warn('Não foi possível guardar a transcrição em cache:', cacheError);
+      }
+      // O WAV mono pode ser grande; depois de salvar a transcrição, o áudio temporário não é mais necessário.
+      if (transcriptCached) {
+        try { if (await platform.fs.exists(audioPath)) await platform.fs.remove(audioPath); } catch (cleanupError) {
+          console.warn('Não foi possível limpar o WAV temporário da transcrição:', cleanupError);
+        }
+      }
+      return transcript;
+    } finally {
+      if (partialPath && await platform.fs.exists(partialPath)) {
+        try { await platform.fs.remove(partialPath); } catch (error) { console.warn('Não foi possível limpar o áudio temporário:', error); }
+      }
+    }
+  };
+
+  const syncWrittenLyrics = async () => {
+    const text = lyricDraft.trim();
+    if (!platform || !selectedMusic || !text || lyricsSyncing) return;
+    const audioIndex = selectedMusic.probe?.audio[0]?.index;
+    if (audioIndex === undefined) {
+      toast({ tone: 'error', title: 'A música não tem áudio disponível', body: 'Escolha outro arquivo de música ou confira se ele ainda existe.' });
+      return;
+    }
+    const controller = new AbortController();
+    transcriptionAbort.current = controller;
+    setLyrics(null);
+    setLyricsSyncing(true);
+    setLyricsSyncProgress({ stage: 'Preparando áudio da música', progress: 0 });
+    try {
+      const transcript = await transcribeAudioAsset(selectedMusic, audioIndex, controller, (stage, progress) => setLyricsSyncProgress({ stage, progress }));
+      const words = transcript.segments.flatMap((segment) => segment.words ?? []).filter((word) => word.text.trim() && word.end > word.start);
+      if (!words.length) {
+        toast({ tone: 'warn', title: 'Não consegui reconhecer as palavras cantadas', body: 'O modelo não devolveu tempos por palavra. Tente um trecho mais limpo ou use um .LRC/.SRT sincronizado.' });
+        return;
+      }
+      const aligned = alignUntimedLyrics(text, words);
+      if (!aligned.cues.length) {
+        toast({ tone: 'warn', title: 'Não encontrei correspondências suficientes', body: 'A letra pode estar diferente do áudio reconhecido. Confira se o texto é da mesma versão e idioma da música.' });
+        return;
+      }
+      setLyrics({ name: 'Letra escrita e sincronizada', cues: aligned.cues });
+      setLyricSceneMatches({});
+      toast({
+        tone: aligned.unmatched || aligned.uncertain ? 'warn' : 'ok',
+        title: `${aligned.matched} linhas sincronizadas`,
+        body: `${aligned.uncertain} com tempo incerto e ${aligned.unmatched} não encontradas. As linhas sem correspondência não serão inventadas; revise o resultado antes de gerar.`,
+      });
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') toast({ tone: 'error', title: 'Não consegui sincronizar a letra', body: (error as Error).message });
+    } finally {
+      transcriptionAbort.current = null;
+      setLyricsSyncing(false);
+      setLyricsSyncProgress(null);
+    }
+  };
+
   const applyCreativeProfile = (profile: CreativeProfile) => {
     setActiveProfileId(profile.id);
     setProfileNameDraft(profile.name);
@@ -725,7 +885,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         return {
           assetId: episode.id,
           name: episode.name,
-          analysis: runtime.episode!,
+          analysis: { ...runtime.episode!, speech: [...runtime.episode!.speech], subtitles: [...runtime.episode!.subtitles] },
           hasAudio: (episode.probe?.audio.length ?? 0) > 0,
           sourceFps: episode.probe?.video?.avgFps ?? episode.probe?.video?.fps ?? null,
           variableFrameRate: episode.probe?.video?.vfr ?? false,
@@ -734,20 +894,74 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         };
       });
 
-      setGenerationStep('Preparando recursos e evidências da montagem...');
-      setGenerationProgress(30);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      if (useSfx) {
-        try {
-          sfxAssets = await session.ensureSfx();
-        } catch (e) {
-          sfxError = (e as Error).message;
+      const automaticSpeechWarnings: string[] = [];
+      const speechTranslations: Record<string, string> = {};
+      const wantsSpeech = voiceMoments > 0 || selectedStyle === 'discurso';
+      const speechController = wantsSpeech ? new AbortController() : null;
+      if (speechController) {
+        transcriptionAbort.current = speechController;
+        let completed = 0;
+        for (const episodeInput of directorInputs) {
+          const asset = selectedEpisodes.find((item) => item.id === episodeInput.assetId);
+          const streams = asset?.probe?.audio ?? [];
+          const audioIndex = pickAudioStreamByLanguage(streams, voiceLang)
+            ?? (voiceLang === 'pt' && streams.length > 1 ? undefined : streams[0]?.index);
+          if (!asset || audioIndex === undefined) {
+            automaticSpeechWarnings.push(`Não encontrei uma faixa de áudio para reconhecer as falas de ${episodeInput.name}.`);
+            completed++;
+            continue;
+          }
+          setGenerationStep(`Entendendo as falas do anime · ${episodeInput.name}`);
+          setGenerationProgress(27 + (completed / Math.max(1, directorInputs.length)) * 5);
+          try {
+            const transcript = await transcribeAudioAsset(asset, audioIndex, speechController!, (stage, progress) => {
+              setGenerationStep(`${stage} · ${episodeInput.name}`);
+              setGenerationProgress(27 + ((completed + progress) / Math.max(1, directorInputs.length)) * 5);
+            });
+            const existing = episodeInput.analysis.speech;
+            const spoken = transcript.segments
+              .map((segment) => ({ ...segment, text: segment.text.replace(/\s+/g, ' ').trim() }))
+              .filter((segment) => segment.text.length >= 3 && segment.end - segment.start >= 0.45 && segment.end > segment.start);
+            const consumed = new Set<number>();
+            const recognized: SpeechSegment[] = spoken.map((segment) => {
+              let bestIndex = -1;
+              let bestOverlap = 0;
+              existing.forEach((speech, index) => {
+                const overlap = Math.max(0, Math.min(speech.endS, segment.end) - Math.max(speech.startS, segment.start));
+                const shorter = Math.max(0.1, Math.min(speech.endS - speech.startS, segment.end - segment.start));
+                const ratio = overlap / shorter;
+                if (ratio > bestOverlap) { bestOverlap = ratio; bestIndex = index; }
+              });
+              const previous = bestOverlap >= 0.2 && bestIndex >= 0 ? existing[bestIndex] : undefined;
+              if (previous) consumed.add(bestIndex);
+              const sourceLanguage = transcript.language
+                ?? streams.find((stream) => stream.index === audioIndex)?.language
+                ?? streams.find((stream) => stream.index === audioIndex)?.title
+                ?? previous?.language
+                ?? null;
+              return {
+                startS: segment.start,
+                endS: segment.end,
+                kind: previous?.kind ?? 'fala',
+                // O endpoint não fornece confiança por segmento; mantém o valor heurístico conservador.
+                confidence: Math.max(previous?.confidence ?? 0, 0.55),
+                text: segment.text,
+                language: sourceLanguage,
+                impact: Math.max(previous?.impact ?? 0, impactScore(segment.text)),
+                ...(previous?.loudnessDb !== undefined ? { loudnessDb: previous.loudnessDb } : {}),
+              };
+            });
+            const untouched = existing.filter((_, index) => !consumed.has(index));
+            episodeInput.analysis.speech = [...untouched, ...recognized].sort((left, right) => left.startS - right.startS);
+            if (!recognized.length) automaticSpeechWarnings.push(`O reconhecimento automático não encontrou falas claras em ${episodeInput.name}; usei apenas os textos existentes.`);
+          } catch (error) {
+            if ((error as Error).name === 'AbortError') throw error;
+            automaticSpeechWarnings.push(`Não consegui transcrever ${episodeInput.name}: ${(error as Error).message}`);
+          }
+          completed++;
         }
       }
 
-      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches: effectiveLyricSceneMatches, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
-      const m = musics.find((a) => a.id === musicId)!;
       const annotationExclusions = session.project.sceneAnnotations
         .filter((annotation) => annotation.excludedFromAuto)
         .map((annotation) => annotation.assetId + '@' + annotation.sceneKey);
@@ -762,6 +976,90 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         characters,
         editorialDirection,
       }, music);
+
+      if (showText && wantsSpeech && speechCaptionLanguage !== 'original') {
+        const pool = editorialFootagePlan.pool;
+        const speechCandidates = directorInputs
+          .flatMap((episodeInput) => episodeInput.analysis.speech.map((speech) => ({ episodeInput, speech })))
+          .filter(({ episodeInput, speech }) => {
+            const length = speech.endS - speech.startS;
+            const durationFits = selectedStyle === 'discurso'
+              ? length >= 0.8 && length <= 6
+              : length >= 0.6 && length <= 4;
+            if (!durationFits || !speech.text?.trim()) return false;
+            if (!episodeInput.hasAudio || excluded.includes(episodeInput.assetId)) return false;
+            const streams = episodeInput.audioStreams ?? [];
+            if (voiceLang === 'pt' && streams.length >= 2 && pickAudioStreamByLanguage(streams, 'pt') === null) return false;
+            if (editorialFootagePlan.mode !== 'fight' || selectedStyle === 'discurso') return true;
+            const nearChosenFight = pool.some((entry) => entry.ep.assetId === episodeInput.assetId
+              && speech.startS >= entry.seq.startS - 15 && speech.endS <= entry.seq.endS + 5);
+            const fallbackFromChosenFightEpisode = pool.some((entry) => entry.ep.assetId === episodeInput.assetId);
+            return nearChosenFight || fallbackFromChosenFightEpisode;
+          })
+          .sort((left, right) => scoreSpeechCandidate(right.speech) - scoreSpeechCandidate(left.speech)
+            || left.speech.startS - right.speech.startS)
+          .slice(0, selectedStyle === 'discurso'
+            ? Math.ceil(duration / 1.15) + 2
+            : Math.max(30, voiceMoments * 6));
+        if (speechCandidates.length) {
+          try {
+            const settings = await loadAiSettings(platform!);
+            if (!settings.enabled || !(isLocal(settings) || settings.allowExternal)) {
+              automaticSpeechWarnings.push('A IA de tradução está desativada ou sem autorização externa; as falas foram mantidas no idioma original. Ative um modelo no Assistente para traduzi-las automaticamente.');
+            } else {
+              const key = settings.provider.needsKey ? await platform!.secrets.get(secretName(settings.presetId)) : null;
+              const targetLanguage: Record<string, string> = {
+                'pt-BR': 'português brasileiro',
+                en: 'inglês',
+                es: 'espanhol',
+                fr: 'francês',
+                ja: 'japonês',
+                de: 'alemão',
+                it: 'italiano',
+                ko: 'coreano',
+                zh: 'chinês',
+              };
+              setGenerationStep(`Traduzindo as falas para ${targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage}...`);
+              setGenerationProgress(34);
+              const translated = await translateLines(
+                settings.provider,
+                key,
+                platform!.http,
+                speechCandidates.map(({ speech }) => speech.text!),
+                {
+                  target: targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage,
+                  batchSize: 20,
+                  signal: speechController?.signal,
+                  onProgress: (done, total) => setGenerationProgress(34 + 4 * done / Math.max(1, total)),
+                },
+              );
+              translated.translations.forEach((value, index) => {
+                const candidate = speechCandidates[index]!;
+                if (value?.trim()) speechTranslations[`${candidate.episodeInput.assetId}@${candidate.speech.startS}`] = value.trim();
+              });
+              if (translated.failed) automaticSpeechWarnings.push(`${translated.failed} fala(s) não conseguiram ser traduzidas; essas aparecem no idioma original.`);
+            }
+          } catch (error) {
+            if ((error as Error).name === 'AbortError') throw error;
+            automaticSpeechWarnings.push(`Falha na tradução automática: ${(error as Error).message}. As falas não traduzidas aparecem no idioma original.`);
+          }
+        }
+      }
+
+      setGenerationStep('Preparando recursos e evidências da montagem...');
+      setGenerationProgress(38);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      if (useSfx) {
+        try {
+          sfxAssets = await session.ensureSfx();
+        } catch (e) {
+          sfxError = (e as Error).message;
+        }
+      }
+
+      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches: effectiveLyricSceneMatches, speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
+      const m = musics.find((a) => a.id === musicId)!;
       const suggestedEditorialRange = chosenStart !== null
         ? null
         : editorialFootagePlan.mode === 'fight'
@@ -786,6 +1084,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       setGenerationProgress(38);
       await new Promise((resolve) => setTimeout(resolve, 0));
       const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, directorInputs, opts);
+      r.warnings.push(...automaticSpeechWarnings);
 
       setGenerationStep('Construindo storyboard e revisando a montagem...');
       setGenerationProgress(72);
@@ -877,9 +1176,14 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         },
       });
     } catch (e) {
-      toast({ tone: 'error', title: 'Não deu para gerar', body: (e as Error).message });
+      if ((e as Error).name === 'AbortError') {
+        toast({ tone: 'info', title: 'Geração cancelada', body: 'A montagem não foi aplicada.' });
+      } else {
+        toast({ tone: 'error', title: 'Não deu para gerar', body: (e as Error).message });
+      }
     } finally {
       visionAbort.current = null;
+      transcriptionAbort.current = null;
       setBusy(false);
       setGenerationStep(null);
       setGenerationProgress(0);
@@ -1224,10 +1528,10 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               Comparar alternativas ({localizedCandidates.length})
             </Button>
           )}
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
             Cancelar
           </Button>
-          <Button variant="primary" icon={<Wand2 size={15} />} disabled={!music || ready.length === 0 || !analysisReadiness.canGenerate || busy || (localizedRange !== undefined && localizedRange.clipIds.length === 0)} onClick={() => void generate(seed)}>
+          <Button variant="primary" icon={<Wand2 size={15} />} disabled={!music || ready.length === 0 || !analysisReadiness.canGenerate || busy || lyricsSyncing || (localizedRange !== undefined && localizedRange.clipIds.length === 0)} onClick={() => void generate(seed)}>
             {localizedRange ? 'Gerar alternativa' : 'Gerar e revisar'}
           </Button>
         </>
@@ -1250,9 +1554,21 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           <p className="mt-2 text-2xs text-muted">As etapas verificam apenas sinais disponíveis; o que não tem evidência aparece como pendente de avaliação.</p>
           {(generationStep.startsWith('Analisando cenas localmente')
             || generationStep.startsWith('Análise semântica profunda')
-            || generationStep.startsWith('Preparando análise semântica')) && (
-            <Button size="sm" variant="ghost" className="mt-3" onClick={() => visionAbort.current?.abort()}>
-              Cancelar análise de cenas
+            || generationStep.startsWith('Preparando análise semântica')
+            || generationStep.startsWith('Entendendo as falas do anime')
+            || generationStep.startsWith('Extraindo áudio')
+            || generationStep.startsWith('Reconhecendo palavras')
+            || generationStep.startsWith('Traduzindo as falas')) && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="mt-3"
+              onClick={() => {
+                visionAbort.current?.abort();
+                transcriptionAbort.current?.abort();
+              }}
+            >
+              Cancelar etapa
             </Button>
           )}
         </div>
@@ -1813,7 +2129,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                   <option value={4}>4</option>
                 </select>
               </label>
-              {voiceMoments > 0 && <p className="text-2xs text-muted">A música abaixa sozinha durante cada fala e volta depois.</p>}
+              {(voiceMoments > 0 || selectedStyle === 'discurso') && <p className="text-2xs text-muted">A música abaixa sozinha durante cada fala e volta depois.</p>}
               {hasTwoAudio && voiceMoments > 0 && (
                 <label className="flex items-center gap-2">
                   Áudio da fala
@@ -1826,6 +2142,24 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               {hasTwoAudio && voiceMoments > 0 && (
                 <p className="text-2xs text-muted">Seus episódios têm 2 faixas de áudio (idiomas). Elas são do anime, não da música.{noOriginal ? ' Em algum episódio não achei a faixa desse idioma: usei a padrão.' : ''}</p>
               )}
+              {(voiceMoments > 0 || selectedStyle === 'discurso') && (
+                <label className="flex items-center gap-2">
+                  Idioma das legendas das falas
+                  <select className="h-7 rounded-control border border-line bg-base px-1.5 text-xs" value={speechCaptionLanguage} onChange={(e) => setSpeechCaptionLanguage(e.target.value)}>
+                    <option value="pt-BR">Português (Brasil)</option>
+                    <option value="en">Inglês</option>
+                    <option value="es">Espanhol</option>
+                    <option value="fr">Francês</option>
+                    <option value="ja">Japonês</option>
+                    <option value="de">Alemão</option>
+                    <option value="it">Italiano</option>
+                    <option value="ko">Coreano</option>
+                    <option value="zh">Chinês</option>
+                    <option value="original">Idioma original</option>
+                  </select>
+                </label>
+              )}
+              {(voiceMoments > 0 || selectedStyle === 'discurso') && <p className="text-2xs text-muted">O app transcreve o áudio localmente e traduz as frases escolhidas pelo modelo configurado no Assistente.</p>}
               <label className="flex items-center gap-2" title="Subida até o drop, impacto no drop, golpes nas pancadas e whoosh nos cortes. Gerados pelo app, sem direitos autorais.">
                 <input type="checkbox" className="accent-violet" checked={useSfx} onChange={(e) => setUseSfx(e.target.checked)} /> Efeitos sonoros (impacto, subida, whoosh)
               </label>
@@ -1838,12 +2172,30 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               </label>
             </div>
 
-            <div>
-              <p className="mb-1 text-xs font-medium text-ink-soft">Letra da música (opcional)</p>
-              <Button size="sm" onClick={pickLyrics}>
-                {lyrics ? lyrics.name : 'Escolher .lrc / .srt'}
-              </Button>
-              <p className="mt-1 text-2xs text-muted">Use letra sincronizada; para exibir em português, selecione um arquivo já traduzido. O app não busca nem traduz letras automaticamente.</p>
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-ink-soft">Letra da música</p>
+              <textarea
+                disabled={lyricsSyncing}
+                className="min-h-24 w-full resize-y rounded-control border border-line bg-base p-2 text-xs text-ink placeholder:text-faint"
+                value={lyricDraft}
+                onChange={(event) => {
+                  setLyricDraft(event.target.value);
+                  setLyrics(null);
+                  setLyricSceneMatches({});
+                }}
+                placeholder="Cole ou escreva a letra aqui, uma linha por verso..."
+                rows={5}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" disabled={!lyricDraft.trim() || lyricsSyncing || !selectedMusic} onClick={() => void syncWrittenLyrics()}>
+                  {lyricsSyncing ? `${lyricsSyncProgress?.stage ?? 'Sincronizando'} · ${Math.round((lyricsSyncProgress?.progress ?? 0) * 100)}%` : 'Sincronizar texto com a música'}
+                </Button>
+                {lyricsSyncing && <Button size="sm" variant="ghost" onClick={() => transcriptionAbort.current?.abort()}>Cancelar</Button>}
+                <Button size="sm" variant="ghost" disabled={lyricsSyncing} onClick={pickLyrics}>Importar .LRC / .SRT</Button>
+                {lyrics && <span className="text-2xs text-muted">Ativa: {lyrics.name} · {lyrics.cues.length} linhas</span>}
+              </div>
+              {lyricDraft.trim() && !lyrics && !lyricsSyncing && <p className="text-2xs text-ink-soft">O texto ainda não foi sincronizado. Sincronize antes de gerar para as linhas aparecerem no vídeo.</p>}
+              <p className="text-2xs text-muted">O Whisper reconhece as palavras cantadas e alinha cada verso no áudio. Na primeira utilização, o modelo pode baixar os pesos necessários; depois a transcrição roda localmente. Linhas sem correspondência não recebem um tempo inventado.</p>
             </div>
           </div>
         </div>
