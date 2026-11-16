@@ -1019,7 +1019,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           try {
             const settings = await loadAiSettings(platform!);
             if (!settings.enabled || !(isLocal(settings) || settings.allowExternal)) {
-              automaticSpeechWarnings.push('A tradução automática está desativada ou sem autorização externa. Legendas sem tradução no idioma escolhido serão omitidas para não mostrar texto no idioma errado; o áudio original permanece. Ative um modelo no Assistente para traduzir as falas.');
+              automaticSpeechWarnings.push('A tradução automática está desativada ou sem autorização externa. Falas em idioma diferente do escolhido não terão legenda até serem traduzidas; o áudio original permanece. Ative um modelo no Assistente para traduzir as falas.');
             } else {
               const key = settings.provider.needsKey ? await platform!.secrets.get(secretName(settings.presetId)) : null;
               const targetLanguage: Record<string, string> = {
@@ -1070,11 +1070,11 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                 });
                 failedCount += translated.failed;
               }
-              if (failedCount) automaticSpeechWarnings.push(`${failedCount} fala(s) não puderam ser traduzidas com segurança para ${target}; as legendas dessas falas serão omitidas, mas o áudio original permanece. Confira a configuração do modelo de IA.`);
+              if (failedCount) automaticSpeechWarnings.push(`${failedCount} fala(s) não puderam ser traduzidas com segurança para ${target}; se o idioma original for diferente ou desconhecido, a legenda será omitida. Se já estiver no idioma escolhido, o texto original poderá ser mantido. O áudio original permanece. Confira a configuração do modelo de IA.`);
             }
           } catch (error) {
             if ((error as Error).name === 'AbortError') throw error;
-            automaticSpeechWarnings.push(`Falha na tradução automática: ${(error as Error).message}. As legendas sem tradução serão omitidas; o áudio original permanece.`);
+            automaticSpeechWarnings.push(`Falha na tradução automática: ${(error as Error).message}. Falas em idioma diferente ou desconhecido não terão legenda traduzida; o texto original será mantido apenas quando corresponder ao idioma escolhido. O áudio original permanece.`);
           }
         }
       }
