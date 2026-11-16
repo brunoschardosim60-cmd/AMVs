@@ -131,6 +131,27 @@ describe('trecho da música', () => {
       }
     });
   });
+  it('não exibe fala japonesa como legenda quando português foi pedido e a tradução falhou', () => {
+    const p = project();
+    const ep = episode('ep1', 150, 3);
+    ep.analysis.speech = [
+      { startS: 21, endS: 23.2, kind: 'fala', confidence: 0.9, text: '諦めない', language: 'ja', impact: 0.7 },
+    ];
+    const result = generateAmv(p, music(), [ep], {
+      ...base,
+      style: 'discurso',
+      voiceLang: 'original',
+      speechTranslationLanguage: 'pt-BR',
+      durationS: 15,
+      musicStartS: 0,
+    });
+    const textTrackId = p.tracks.find((track) => track.kind === 'text')!.id;
+    const captions = result.commands.filter((command) =>
+      command.type === 'clip.add' && command.clip.trackId === textTrackId,
+    );
+    expect(captions).toHaveLength(0);
+  });
+
   describe('preservação de color grading', () => {
     it('mantém a correção manual das cenas ao regenerar a mesma região', () => {
       const p = project();
