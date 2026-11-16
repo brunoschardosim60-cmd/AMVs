@@ -152,6 +152,42 @@ describe('trecho da música', () => {
     expect(captions).toHaveLength(0);
   });
 
+  it('não exibe texto japonês quando o reconhecimento o classificou incorretamente como português', () => {
+    const p = project();
+    const ep = episode('ep1', 150, 3);
+    ep.analysis.speech = [
+      { startS: 21, endS: 23.2, kind: 'fala', confidence: 0.9, text: 'やっぱりナハと副団長、闇団長に似てますね', language: 'pt', impact: 0.7 },
+    ];
+    const result = generateAmv(p, music(), [ep], {
+      ...base,
+      style: 'discurso',
+      voiceLang: 'original',
+      speechTranslationLanguage: 'pt-BR',
+      durationS: 15,
+      musicStartS: 0,
+    });
+    const textTrackId = p.tracks.find((track) => track.kind === 'text')!.id;
+    const captions = result.commands.filter((command) =>
+      command.type === 'clip.add' && command.clip.trackId === textTrackId,
+    );
+    expect(captions).toHaveLength(0);
+
+    const translated = generateAmv(p, music(), [ep], {
+      ...base,
+      style: 'discurso',
+      voiceLang: 'original',
+      speechTranslationLanguage: 'pt-BR',
+      speechTranslations: { 'ep1@21': 'O senhor parece o Capitão Yami!' },
+      durationS: 15,
+      musicStartS: 0,
+    });
+    const translatedCaptions = translated.commands.filter((command) =>
+      command.type === 'clip.add' && command.clip.trackId === textTrackId,
+    );
+    expect(translatedCaptions).toHaveLength(1);
+    expect(translatedCaptions[0]?.type === 'clip.add' ? translatedCaptions[0].clip.text?.text : '').toBe('O senhor parece o Capitão Yami!');
+  });
+
   it('não exibe fala japonesa como legenda quando espanhol foi pedido e a tradução falhou', () => {
     const p = project();
     const ep = episode('ep1', 150, 3);
