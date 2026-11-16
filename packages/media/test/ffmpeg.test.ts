@@ -174,17 +174,22 @@ describe('miniaturas e waveform', () => {
     loud.forEach((t, i) => expect(t).toBeCloseTo(i * 0.5, 1));
   });
 
-  it('interrompe waveform se FFmpeg deixar de enviar áudio', async () => {
+  it('interrompe waveform quando chegam bytes, mas o áudio não avança 5 s', async () => {
     const { probe } = await probeFile(runner, f('click_120bpm.wav'));
-    const stalled: ProcessRunner = {
+    const trickling: ProcessRunner = {
       run: (_tool, _args, options = {}) => new Promise((resolve) => {
-        const onAbort = () => resolve({ code: null, stdout: '', stderr: 'cancelado pelo watchdog' });
+        const emitTinyChunk = () => options.onStdoutBytes?.(new Uint8Array([0, 0]));
+        const interval = setInterval(emitTinyChunk, 5);
+        const onAbort = () => {
+          clearInterval(interval);
+          resolve({ code: null, stdout: '', stderr: 'cancelado pelo watchdog' });
+        };
         if (options.signal?.aborted) onAbort();
         else options.signal?.addEventListener('abort', onAbort, { once: true });
       }),
     };
-    await expect(computeWaveform(stalled, f('click_120bpm.wav'), probe, () => undefined, undefined, null, 10))
-      .rejects.toThrow(/sem enviar áudio/);
+    await expect(computeWaveform(trickling, f('click_120bpm.wav'), probe, () => undefined, undefined, null, 50))
+      .rejects.toThrow(/não avançou 5 s de áudio/);
   });
 });
 

@@ -166,8 +166,18 @@ export async function makeThumbStrip(
 
 /** 10 ms por bucket no nível mais detalhado. */
 export const WAVEFORM_BASE_BUCKET = WAVEFORM_RATE / 100;
-/** PCM deve continuar chegando enquanto o FFmpeg decodifica; sem dados por 90 s, encerra o job. */
-export const WAVEFORM_IDLE_TIMEOUT_MS = 90_000;
+/** O FFmpeg precisa avançar ao menos 5 s de áudio dentro deste intervalo. */
+export const WAVEFORM_STALL_TIMEOUT_MS = 90_000;
+
+function formatWaveformTime(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${m}:${String(s).padStart(2, '0')}`;
+}
 
 export async function computeWaveform(
   runner: ProcessRunner,
@@ -176,49 +186,56 @@ export async function computeWaveform(
   report: Reporter,
   signal?: AbortSignal,
   streamIndex: number | null = null,
-  idleTimeoutMs = WAVEFORM_IDLE_TIMEOUT_MS,
+  stallTimeoutMs = WAVEFORM_STALL_TIMEOUT_MS,
 ): Promise<Waveform> {
   const acc = new PeakAccumulator(WAVEFORM_BASE_BUCKET);
   const totalSamples = Math.max(1, (probe.durationUs / 1e6) * WAVEFORM_RATE);
   let lastReport = 0;
   if (signal?.aborted) throw new CancelledError();
   const processController = new AbortController();
-  let idleTimedOut = false;
-  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let stalled = false;
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
   const abortFromCaller = () => processController.abort();
-  const resetIdleTimer = () => {
-    if (idleTimer !== undefined) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
-      idleTimedOut = true;
+  const resetStallTimer = () => {
+    if (stallTimer !== undefined) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      stalled = true;
       processController.abort();
-    }, Math.max(1, idleTimeoutMs));
+    }, Math.max(1, stallTimeoutMs));
   };
   signal?.addEventListener('abort', abortFromCaller, { once: true });
-  resetIdleTimer();
+  resetStallTimer();
   let r: Awaited<ReturnType<ProcessRunner['run']>>;
   try {
     r = await runner.run('ffmpeg', waveformPcmArgs(input, streamIndex, probe.durationUs), {
       signal: processController.signal,
       onStdoutBytes: (chunk) => {
-        if (!processController.signal.aborted) resetIdleTimer();
         acc.push(chunk);
-        if (acc.totalSamples - lastReport > WAVEFORM_RATE * 5) {
+        // Não basta receber bytes: o watchdog só é renovado quando o áudio decodificado
+        // avança pelo menos 5 s. Isso detecta um pipe que continua vivo, mas não progride.
+        if (acc.totalSamples - lastReport >= WAVEFORM_RATE * 5 && !processController.signal.aborted) {
           lastReport = acc.totalSamples;
-          report(Math.min(0.99, acc.totalSamples / totalSamples), 'decodificando áudio');
+          resetStallTimer();
+          const processedS = acc.totalSamples / WAVEFORM_RATE;
+          report(
+            Math.min(0.99, acc.totalSamples / totalSamples),
+            `áudio ${formatWaveformTime(processedS)} / ${formatWaveformTime(probe.durationUs / 1e6)}`,
+          );
         }
       },
     });
   } finally {
-    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    if (stallTimer !== undefined) clearTimeout(stallTimer);
     signal?.removeEventListener('abort', abortFromCaller);
   }
   if (signal?.aborted) throw new CancelledError();
-  if (idleTimedOut) {
-    throw new Error(`o FFmpeg ficou ${Math.round(idleTimeoutMs / 1000)} s sem enviar áudio; a geração da forma de onda foi interrompida para não bloquear a importação`);
+  if (stalled) {
+    throw new Error(`o FFmpeg não avançou 5 s de áudio em ${Math.round(stallTimeoutMs / 1000)} s; a geração da forma de onda foi interrompida para não bloquear a importação`);
   }
   if (r.code !== 0) throw new ToolError('ffmpeg', r.code, r.stderr);
   const { mins, maxs } = acc.finish();
-  report(1);
+  if (acc.totalSamples === 0) throw new Error('o FFmpeg terminou sem fornecer áudio para a forma de onda');
+  report(1, 'forma de onda concluída');
   return {
     sampleRate: WAVEFORM_RATE,
     durationUs: Math.round((acc.totalSamples * 1e6) / WAVEFORM_RATE),

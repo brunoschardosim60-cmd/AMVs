@@ -1,5 +1,13 @@
 # Novidades
 
+## 0.6.25
+
+**Detecta travamento da forma de onda mesmo quando o FFmpeg continua enviando pequenos blocos de dados.**
+
+- O watchdog agora exige avanço real de pelo menos 5 segundos de áudio em até 90 segundos, em vez de reiniciar com qualquer byte recebido.
+- Mostra o tempo de áudio decodificado na lista de tarefas para diferenciar progresso lento de travamento.
+- Informa erro específico quando o FFmpeg não avança e interrompe somente a geração da forma de onda.
+
 ## 0.6.24
 
 **Evita travamentos indefinidos na geração da forma de onda.**
@@ -7,8 +15,6 @@
 - Limita a decodificação ao tempo de duração informado para o arquivo, evitando processar caudas de áudio fora da timeline.
 - Detecta quando o FFmpeg deixa de enviar PCM por 90 segundos, encerra somente o job da forma de onda e permite que a importação continue.
 - Corrige uma condição de corrida no cancelamento do sidecar durante sua inicialização.
-
-## 0.6.23
 
 ## 0.6.23
 
