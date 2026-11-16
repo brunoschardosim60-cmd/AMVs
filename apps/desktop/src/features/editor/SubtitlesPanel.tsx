@@ -301,7 +301,16 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
         });
         return;
       }
-      const words = transcript.segments.flatMap((segment) => segment.words ?? []);
+      const words = transcript.segments.flatMap((segment) => segment.words ?? [])
+        .filter((word) => word.text.trim() && Number.isFinite(word.start) && Number.isFinite(word.end) && word.end > word.start);
+      if (!words.length) {
+        toast({
+          tone: 'warn',
+          title: 'Sem tempos por palavra',
+          body: 'A transcrição terminou, mas o modelo não forneceu tempos por palavra. O alinhamento automático precisa desses tempos. Use um LRC/SRT sincronizado ou tente um trecho mais limpo e um modelo maior.',
+        });
+        return;
+      }
       const aligned = alignUntimedLyrics(untimedLyrics.text, words);
       if (!aligned.cues.length) {
         toast({ tone: 'warn', title: 'Nenhum verso alinhado', body: 'A transcrição não encontrou palavras suficientemente parecidas. Tente escolher outro idioma ou um modelo maior.' });
