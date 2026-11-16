@@ -1,4 +1,4 @@
-import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, pickAudioStreamByLanguage, type CameraMotionType, type Cue, type SceneEmotion, type SpeechSegment } from '@amv/analysis';
+import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type CameraMotionType, type Cue, type SceneEmotion, type SpeechSegment } from '@amv/analysis';
 import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, planNarrative, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, scoreSpeechCandidate, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
 import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
