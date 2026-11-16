@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyCommand, clipEndUs, createProject, findOverlaps, type Asset, type Clip, type Project } from '@amv/project';
-import { alignUntimedLyrics, applyTranslation, editSubtitleTextManually, langLabel, originalText, restoreOriginals, selectSubtitleTextVariant, SUBTITLE_LANGS, cuesForClip, normalizeCues, placeCues, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, toLrc, toVtt, trackCues } from '../src/index.js';
+import { alignUntimedLyrics, hasJapaneseOrCjkScript, applyTranslation, editSubtitleTextManually, langLabel, originalText, restoreOriginals, selectSubtitleTextVariant, SUBTITLE_LANGS, cuesForClip, normalizeCues, placeCues, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, toLrc, toVtt, trackCues } from '../src/index.js';
 
 const S = 1_000_000;
 function project(): Project {
@@ -272,5 +272,14 @@ describe('idioma das legendas', () => {
     expect(SUBTITLE_LANGS.map((l) => l.code)).toEqual(expect.arrayContaining(['pt-BR', 'en', 'es', 'ja']));
     expect(langLabel('en')).toBe('Inglês');
     expect(langLabel('xx')).toBe('xx');
+  });
+});
+
+describe('detecção de escrita para alinhamento de letra', () => {
+  it('distingue texto japonês/CJK de tradução ou romanização em alfabeto latino', () => {
+    expect(hasJapaneseOrCjkScript('諦めない')).toBe(true);
+    expect(hasJapaneseOrCjkScript('我爱你')).toBe(true);
+    expect(hasJapaneseOrCjkScript('Eu não vou desistir')).toBe(false);
+    expect(hasJapaneseOrCjkScript('Aishiteru')).toBe(false);
   });
 });
