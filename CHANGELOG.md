@@ -1,5 +1,15 @@
 # Novidades
 
+## 0.6.23
+
+**Letras digitadas e legendas automáticas traduzidas no Gerar AMV.**
+
+- Permite escrever ou colar a letra diretamente no gerador e sincronizar os versos com a música por meio de transcrição local; os arquivos .LRC e .SRT continuam compatíveis.
+- Usa os tempos reconhecidos para alinhar as linhas. Trechos que não correspondem à transcrição são sinalizados, sem inventar marcações de tempo.
+- Transcreve localmente as falas das faixas de áudio dos episódios e permite manter o idioma original ou traduzir para português (Brasil), inglês, espanhol, francês, japonês, alemão, italiano, coreano e chinês.
+- Preserva o texto original junto da tradução e evita exibir legendas incompatíveis com a faixa de áudio selecionada.
+- Armazena transcrições em cache para reduzir reconhecimentos repetidos e remove arquivos WAV temporários após salvar o resultado.
+
 ## 0.6.22
 
 **Direção editorial e seleção de cenas mais consistentes no Auto AMV.**
