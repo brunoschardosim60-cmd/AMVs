@@ -58,7 +58,7 @@ describe('direção criativa do Auto AMV', () => {
       direction,
     });
 
-    expect(brief.title).toBe('Combate épico');
+    expect(brief.title).toBe('Combate cinematográfico');
     expect(brief.objective).toContain('expectativa');
     expect(brief.preferences.durationS).toBe(4);
     expect(brief.preferences.organizationMode).toBe('narrative');
