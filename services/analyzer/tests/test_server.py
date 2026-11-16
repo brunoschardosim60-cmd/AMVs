@@ -3,7 +3,7 @@ import time
 from fastapi.testclient import TestClient
 
 from amv_analyzer import server
-from amv_analyzer.server import create_app, free_port, module_status
+from amv_analyzer.server import bind_local_socket, create_app, module_status
 
 
 def test_exige_token():
@@ -31,8 +31,12 @@ def test_modulo_segmentacao_exige_checkpoint(monkeypatch, tmp_path):
     assert "sam2.1_hiera_tiny.pt" in status["reason"]
 
 
-def test_porta_livre_local():
-    assert 1024 < free_port() < 65536
+def test_porta_local_permanece_reservada():
+    with bind_local_socket() as listener:
+        host, port = listener.getsockname()
+        assert host == "127.0.0.1"
+        assert 1024 < port < 65536
+        assert listener.getsockopt(server.socket.SOL_SOCKET, server.socket.SO_ACCEPTCONN) == 1
 
 
 def test_transcribe_job_exposes_progress_and_result(tmp_path, monkeypatch):
