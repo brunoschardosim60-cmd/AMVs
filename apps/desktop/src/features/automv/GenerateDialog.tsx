@@ -1531,7 +1531,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           <Button variant="ghost" disabled={busy} onClick={onClose}>
             Cancelar
           </Button>
-          <Button variant="primary" icon={<Wand2 size={15} />} disabled={!music || ready.length === 0 || !analysisReadiness.canGenerate || busy || (localizedRange !== undefined && localizedRange.clipIds.length === 0)} onClick={() => void generate(seed)}>
+          <Button variant="primary" icon={<Wand2 size={15} />} disabled={!music || ready.length === 0 || !analysisReadiness.canGenerate || busy || lyricsSyncing || (localizedRange !== undefined && localizedRange.clipIds.length === 0)} onClick={() => void generate(seed)}>
             {localizedRange ? 'Gerar alternativa' : 'Gerar e revisar'}
           </Button>
         </>
@@ -2194,6 +2194,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                 <Button size="sm" variant="ghost" disabled={lyricsSyncing} onClick={pickLyrics}>Importar .LRC / .SRT</Button>
                 {lyrics && <span className="text-2xs text-muted">Ativa: {lyrics.name} · {lyrics.cues.length} linhas</span>}
               </div>
+              {lyricDraft.trim() && !lyrics && !lyricsSyncing && <p className="text-2xs text-warning">O texto ainda não foi sincronizado. Sincronize antes de gerar para as linhas aparecerem no vídeo.</p>}
               <p className="text-2xs text-muted">O Whisper reconhece as palavras cantadas e alinha cada verso no áudio. Na primeira utilização, o modelo pode baixar os pesos necessários; depois a transcrição roda localmente. Linhas sem correspondência não recebem um tempo inventado.</p>
             </div>
           </div>
