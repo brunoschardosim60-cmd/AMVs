@@ -55,9 +55,9 @@ export function parseTranslationArray(text: string, n: number): string[] | null 
 function hasUnexpectedWritingSystem(text: string, target: string): boolean {
   const latinTarget = /^(pt|pt-br|portugu|brazil|en|english|ingl|es|espan|spanish|fr|french|fran|de|german|alem|it|ital)/i.test(target.trim());
   if (!latinTarget) return false;
-  const letters = Array.from(text.matchAll(/\\p{L}/gu)).length;
+  const letters = Array.from(text.matchAll(/\p{L}/gu)).length;
   if (!letters) return true;
-  const nonLatin = Array.from(text.matchAll(/[\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}\\p{Script=Cyrillic}\\p{Script=Arabic}\\p{Script=Hebrew}\\p{Script=Thai}]/gu)).length;
+  const nonLatin = Array.from(text.matchAll(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Cyrillic}\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Thai}]/gu)).length;
   return nonLatin >= 2 && nonLatin / letters > 0.2;
 }
 
