@@ -2109,6 +2109,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             <div className="space-y-2">
               <p className="text-xs font-medium text-ink-soft">Letra da música</p>
               <textarea
+                disabled={lyricsSyncing}
                 className="min-h-24 w-full resize-y rounded-control border border-line bg-base p-2 text-xs text-ink placeholder:text-faint"
                 value={lyricDraft}
                 onChange={(event) => {
@@ -2124,7 +2125,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                   {lyricsSyncing ? `${lyricsSyncProgress?.stage ?? 'Sincronizando'} · ${Math.round((lyricsSyncProgress?.progress ?? 0) * 100)}%` : 'Sincronizar texto com a música'}
                 </Button>
                 {lyricsSyncing && <Button size="sm" variant="ghost" onClick={() => transcriptionAbort.current?.abort()}>Cancelar</Button>}
-                <Button size="sm" variant="ghost" onClick={pickLyrics}>Importar .LRC / .SRT</Button>
+                <Button size="sm" variant="ghost" disabled={lyricsSyncing} onClick={pickLyrics}>Importar .LRC / .SRT</Button>
                 {lyrics && <span className="text-2xs text-muted">Ativa: {lyrics.name} · {lyrics.cues.length} linhas</span>}
               </div>
               <p className="text-2xs text-muted">O Whisper reconhece as palavras cantadas e alinha cada verso no áudio. Linhas que não baterem com a transcrição ficam de fora, em vez de receberem um tempo inventado.</p>
