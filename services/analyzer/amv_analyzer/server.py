@@ -11,6 +11,7 @@ import secrets
 import socket
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,8 @@ class SegmentationJob:
         self.progress = 0.0
         self.result: dict[str, Any] | None = None
         self.error: str | None = None
+        self.created_at = time.monotonic()
+        self.finished_at: float | None = None
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -96,6 +99,21 @@ class SpeechJob:
             }
 
 
+
+def prune_completed_jobs(jobs: dict[str, SpeechJob | SegmentationJob], keep: int = 25) -> None:
+    """Mantém resultados recentes para polling sem acumular transcrições na memória indefinidamente."""
+    terminal = {"completed", "failed", "cancelled"}
+    finished: list[tuple[float, str]] = []
+    for job_id, job in list(jobs.items()):
+        with job.lock:
+            if job.status in terminal:
+                finished.append((job.finished_at or job.created_at, job_id))
+    finished.sort()
+    expired = finished[:-max(0, keep)] if keep > 0 else finished
+    for _, job_id in expired:
+        jobs.pop(job_id, None)
+
+
 def module_status() -> dict[str, dict[str, object]]:
     out: dict[str, dict[str, object]] = {}
     for name, package in MODULES.items():
@@ -121,7 +139,7 @@ def create_app(token: str) -> FastAPI:
     segmentation_jobs_lock = threading.Lock()
 
     def auth(authorization: str | None = Header(default=None)) -> None:
-        if authorization != f"Bearer {token}":
+        if not isinstance(authorization, str) or not secrets.compare_digest(authorization, f"Bearer {token}"):
             raise HTTPException(status_code=401, detail="token inválido")
 
     @app.get("/health", dependencies=[Depends(auth)])
@@ -150,6 +168,7 @@ def create_app(token: str) -> FastAPI:
         job_id = uuid.uuid4().hex
         job = SpeechJob()
         with jobs_lock:
+            prune_completed_jobs(jobs)
             jobs[job_id] = job
 
         def run() -> None:
@@ -168,17 +187,21 @@ def create_app(token: str) -> FastAPI:
                 with job.lock:
                     job.result = result
                     job.status = "completed"
+                    job.finished_at = time.monotonic()
             except TranscriptionCancelled:
                 with job.lock:
                     job.status = "cancelled"
+                    job.finished_at = time.monotonic()
             except RuntimeError as exc:
                 with job.lock:
                     job.error = str(exc)
                     job.status = "failed"
+                    job.finished_at = time.monotonic()
             except Exception as exc:
                 with job.lock:
                     job.error = f"falha na transcrição: {exc}"
                     job.status = "failed"
+                    job.finished_at = time.monotonic()
 
         threading.Thread(target=run, name=f"speech-{job_id[:8]}", daemon=True).start()
         return {"job_id": job_id}
@@ -217,6 +240,7 @@ def create_app(token: str) -> FastAPI:
         job_id = uuid.uuid4().hex
         job = SegmentationJob()
         with segmentation_jobs_lock:
+            prune_completed_jobs(segmentation_jobs)
             segmentation_jobs[job_id] = job
 
         def run() -> None:
@@ -241,6 +265,7 @@ def create_app(token: str) -> FastAPI:
                     job.result = result
                     job.progress = 1.0
                     job.status = "completed"
+                    job.finished_at = time.monotonic()
             except SegmentationCancelled:
                 with job.lock:
                     job.status = "cancelled"
@@ -248,6 +273,7 @@ def create_app(token: str) -> FastAPI:
                 with job.lock:
                     job.error = f"falha no isolamento do personagem: {exc}"
                     job.status = "failed"
+                    job.finished_at = time.monotonic()
 
         threading.Thread(target=run, name=f"segmentation-{job_id[:8]}", daemon=True).start()
         return {"job_id": job_id}
