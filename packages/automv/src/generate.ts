@@ -887,8 +887,10 @@ function speechCaptionText(ep: EpisodeInput, speech: SpeechSegment, lang: 'origi
   if (!speechCaptionMatchesAudio(ep, speech, lang)) return null;
   if (speechTranslation(ep, speech, opts)) return speech.text?.trim() || null;
 
-  // Se a pessoa pediu um idioma específico, não exibe silenciosamente a fala original
-  // quando ela está em outro idioma ou quando não foi possível identificar o idioma de origem.
+  // O idioma detectado pelo Whisper pode falhar em falas curtas. Kana japonês é uma
+  // evidência direta de que o texto não é português/inglês/espanhol etc., mesmo que
+  // o metadado da transcrição tenha classificado o trecho como idioma latino.
+  const hasJapaneseKana = !!speech.text && /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(speech.text);
   const requestedLanguage = opts.speechTranslationLanguage;
   if (requestedLanguage && requestedLanguage !== 'original') {
     const requestedFamily = captionLanguageFamily(requestedLanguage);
@@ -899,6 +901,10 @@ function speechCaptionText(ep: EpisodeInput, speech: SpeechSegment, lang: 'origi
       : requestedFamily === 'en'
         ? !!embedded?.en
         : false;
+    const isLatinTarget = requestedFamily !== null && !['ja', 'ko', 'zh'].includes(requestedFamily);
+    if (isLatinTarget && hasJapaneseKana && !hasEmbeddedTranslation) return null;
+    // Se a pessoa pediu um idioma específico, não exibe silenciosamente a fala original
+    // quando ela está em outro idioma ou quando não foi possível identificar o idioma de origem.
     if (requestedFamily && requestedFamily !== sourceFamily && !hasEmbeddedTranslation) return null;
   }
   return speech.text;
