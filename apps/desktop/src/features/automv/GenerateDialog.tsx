@@ -4,7 +4,7 @@ import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVisi
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { translateLines } from '@amv/assistant';
 import { joinPath } from '@amv/media';
-import { alignUntimedLyrics } from '@amv/subtitles';
+import { alignUntimedLyrics, hasJapaneseOrCjkScript } from '@amv/subtitles';
 import { loadCreativeProfiles, saveCreativeProfiles } from '../../core/creativeProfiles';
 import { getAnalysisReadiness } from './analysis-readiness';
 import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2, Zap } from 'lucide-react';
@@ -623,7 +623,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       const transcript = await transcribeAudioAsset(selectedMusic, audioIndex, controller, (stage, progress) => setLyricsSyncProgress({ stage, progress }));
       const audioInfo = selectedMusic.probe?.audio.find((stream) => stream.index === audioIndex);
       const sourceLanguage = speechLanguageName(transcript.language ?? audioInfo?.language ?? audioInfo?.title);
-      const lyricsUseJapaneseScript = /[\u3040-\u30ff\u3400-\u9fff]/.test(text);
+      const lyricsUseJapaneseScript = hasJapaneseOrCjkScript(text);
       if (sourceLanguage === 'japonês' && !lyricsUseJapaneseScript) {
         toast({
           tone: 'warn',
