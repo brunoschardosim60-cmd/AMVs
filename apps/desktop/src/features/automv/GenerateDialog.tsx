@@ -18,6 +18,16 @@ import { RegenerationCompare } from './RegenerationCompare';
 import { SceneSuggestions } from './SceneSuggestions';
 import { useEditor } from '../editor/editorStore';
 import { getPlayer } from '../editor/Preview';
+import { TextLookSample } from '../editor/SubtitlesPanel';
+
+const TYPOGRAPHY_PREVIEW_PILLS: { id: LyricTypographyStyle; label: string; sample: string }[] = [
+  { id: 'anime-impact', label: 'Anime · impacto', sample: 'IMPACTO' },
+  { id: 'anime-neon', label: 'Anime · neon', sample: 'NEON' },
+  { id: 'anime-gold-epic', label: 'Anime · ouro épico', sample: 'ÉPICO' },
+  { id: 'anime-manga', label: 'Anime · mangá', sample: 'MANGÁ' },
+  { id: 'lyrics-cinematic', label: 'Letras cinematográficas', sample: 'CINEMA' },
+  { id: 'anime-dialogue', label: 'Anime · diálogo', sample: 'DIÁLOGO' },
+];
 
 const ICONS: Record<StyleId, typeof Flame> = { hype: Flame, rapido: Zap, superacao: Sparkles, letra: Type, discurso: Mic, emocional: Heart };
 const INTENSITY = ['Suave', 'Moderada', 'Intensa', 'Extrema'] as const;
@@ -73,6 +83,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [localizedEndS, setLocalizedEndS] = useState((localizedRange?.endUs ?? 0) / S);
   const [voiceMoments, setVoiceMoments] = useState(2);
   const [voiceLang, setVoiceLang] = useState<'original' | 'pt'>('original');
+  const [speechVisualMode, setSpeechVisualMode] = useState<'voiceover' | 'hybrid' | 'scene'>('voiceover');
   const [focus, setFocus] = useState<'fight' | 'mix'>('fight');
   const [organizationMode, setOrganizationMode] = useState<OrganizationMode>('narrative');
   const [editorialDirection, setEditorialDirection] = useState<EditorialDirection>('balanced');
@@ -1205,7 +1216,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         effectiveLyricSceneMatches = { ...effectiveLyricSceneMatches };
         for (const [scene, cues] of Object.entries(suggestedMatches)) effectiveLyricSceneMatches[scene] = { ...(effectiveLyricSceneMatches[scene] ?? {}), ...cues };
       }
-      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: resolvedLyrics, lyricSceneMatches: effectiveLyricSceneMatches, lyricStyle, lyricDisplayMode: musicDriveMode === 'lyric-kinetic' ? 'kinetic-words' : 'rhythmic-phrases', speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, showSpeechCaptions, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
+      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: resolvedLyrics, lyricSceneMatches: effectiveLyricSceneMatches, lyricStyle, lyricDisplayMode: musicDriveMode === 'lyric-kinetic' ? 'kinetic-words' : 'rhythmic-phrases', speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, speechVisualMode, useEffects, showText, showSpeechCaptions, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
       const m = musics.find((a) => a.id === musicId)!;
       const suggestedEditorialRange = chosenStart !== null
         ? null
@@ -2008,6 +2019,42 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                   <option value="anime-dialogue">Discreto (base da tela)</option>
                 </select>
               </label>
+              <div className="space-y-1.5 rounded-control border border-line-soft bg-[#07090e] p-2">
+                <div className="flex items-center justify-between text-[10px] text-faint">
+                  <span>Como fica na tela</span>
+                  <span className="text-muted">{TYPOGRAPHY_PREVIEW_PILLS.find((p) => p.id === lyricStyle)?.label ?? lyricStyle}</span>
+                </div>
+                <div className="grid min-h-12 place-items-center overflow-hidden rounded bg-[radial-gradient(circle_at_center,rgba(90,60,180,0.18),transparent_72%)] px-2 py-2 text-center">
+                  <TextLookSample
+                    look={lyricStyle}
+                    sample={
+                      (lyrics?.cues.find((c) => c.text.trim())?.text
+                        ?? lyricDraft.split(/\r?\n/).find((l) => l.trim() && !l.trim().startsWith('['))
+                        ?? 'MEU PODER É NUNCA DESISTIR!')
+                        .replace(/^\[[^\]]+\]\s*/g, '')
+                        .trim()
+                        .slice(0, 42)
+                    }
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  {TYPOGRAPHY_PREVIEW_PILLS.map((pill) => {
+                    const active = lyricStyle === pill.id;
+                    return (
+                      <button
+                        key={pill.id}
+                        type="button"
+                        onClick={() => setLyricStyle(pill.id)}
+                        title={pill.label}
+                        className={`flex flex-col items-center justify-center rounded border px-1.5 py-1 transition-colors ${active ? 'border-violet bg-violet/20 ring-1 ring-violet/60' : 'border-line-soft bg-base/70 hover:border-line hover:bg-raised'}`}
+                      >
+                        <TextLookSample look={pill.id} sample={pill.sample} compact fontSizePx={11} />
+                        <span className="mt-0.5 max-w-full truncate text-[9px] text-muted">{pill.label.replace(/^Anime · /, '')}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
 
             {recs.length > 0 && (
@@ -2290,7 +2337,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             </div>
 
             <div className="space-y-2 text-xs">
-              <p className="font-medium text-ink-soft">Falas & Efeitos</p>
+              <p className="font-medium text-ink-soft">Falas &amp; Efeitos</p>
               <label className="flex items-center justify-between gap-2">
                 <span>Falas de anime</span>
                 <select className="h-7 rounded-control border border-line bg-base px-1.5 text-xs" value={voiceMoments} onChange={(e) => setVoiceMoments(Number(e.target.value))}>
@@ -2299,8 +2346,20 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                   <option value={2}>2</option>
                   <option value={3}>3</option>
                   <option value={4}>4</option>
+                  <option value={5}>5</option>
+                  <option value={6}>6</option>
                 </select>
               </label>
+              {voiceMoments > 0 && selectedStyle !== 'discurso' && (
+                <label className="flex items-center justify-between gap-2">
+                  <span>Modo das falas</span>
+                  <select className="h-7 min-w-0 max-w-[205px] rounded-control border border-line bg-base px-1.5 text-xs" value={speechVisualMode} onChange={(e) => setSpeechVisualMode(e.target.value as 'voiceover' | 'hybrid' | 'scene')}>
+                    <option value="voiceover">Narração sobre cenas de ação (estilo Edit)</option>
+                    <option value="hybrid">Misto (cena no drop + narração na ação)</option>
+                    <option value="scene">Mostrar cena original da fala</option>
+                  </select>
+                </label>
+              )}
               {hasTwoAudio && voiceMoments > 0 && (
                 <label className="flex items-center justify-between gap-2">
                   <span>Áudio da fala</span>

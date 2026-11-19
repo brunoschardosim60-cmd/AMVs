@@ -111,6 +111,8 @@ export interface GenerateOptions {
   lyricStyle?: LyricTypographyStyle;
   /** Exibição das letras na tela: explosão cinética (1-2 palavras no centro) ou versos rítmicos. */
   lyricDisplayMode?: 'kinetic-words' | 'rhythmic-phrases';
+  /** Como as falas interagem com o vídeo: 'voiceover' mantém os cortes de ação na batida em V1 enquanto a voz narra por cima; 'hybrid' mostra a cena da fala só antes do drop e narra nas demais; 'scene' mostra o vídeo original da fala em V1. */
+  speechVisualMode?: 'voiceover' | 'hybrid' | 'scene';
 }
 
 export interface GenerateResult {
@@ -850,6 +852,7 @@ function textClip(
   preset: LyricTypographyStyle | 'dialogue-dramatic' = kind === 'word' ? 'lyrics-cinematic' : 'dialogue-dramatic',
   translation?: SubtitleTranslations | string | null,
   useEffects = true,
+  kineticSpeechWords = false,
 ): Clip {
   const word = kind === 'word';
   const startUs = Math.round(startS * 1e6);
@@ -937,16 +940,22 @@ function textClip(
         : 'Manrope Variable';
 
   const renderedText = uppercase ? displayText.toUpperCase() : displayText;
-  const effectiveWordTimings = displayText === text
-    ? wordTimings
-    : wordTimings.length > 0 && !word
-      ? buildProportionalWordTimings(renderedText, durUs, wordTimings[0]?.source ?? 'estimated')
-      : [];
+  const effectiveWordTimings = kineticSpeechWords && !word && wordTimings.length === 0
+    ? buildProportionalWordTimings(renderedText, durUs, 'estimated')
+    : displayText === text
+      ? wordTimings
+      : (wordTimings.length > 0 || kineticSpeechWords) && !word
+        ? buildProportionalWordTimings(renderedText, durUs, wordTimings[0]?.source ?? 'estimated')
+        : [];
 
-  const textScaleKeyframes: Keyframe[] | undefined = useEffects && ((word && durUs >= 140_000) || (isLyrics && isClimaxImpact && durUs >= 400_000))
+  const textScaleKeyframes: Keyframe[] | undefined = useEffects && (
+    (word && durUs >= 140_000)
+    || (isLyrics && isClimaxImpact && durUs >= 400_000)
+    || (kineticSpeechWords && preset !== 'anime-dialogue' && durUs >= 220_000)
+  )
     ? [
-        { atUs: 0, value: word ? 1.28 : 1.12, easing: 'ease-out' },
-        { atUs: Math.min(durUs, word ? 120_000 : 180_000), value: 1, easing: 'ease-in-out' },
+        { atUs: 0, value: word ? 1.28 : kineticSpeechWords ? 1.2 : 1.12, easing: 'ease-out' },
+        { atUs: Math.min(durUs, word ? 120_000 : kineticSpeechWords ? 160_000 : 180_000), value: 1, easing: 'ease-in-out' },
         { atUs: durUs, value: 1, easing: 'linear' },
       ]
     : undefined;
@@ -974,6 +983,7 @@ function textClip(
       padding: Math.round(H * 0.025),
       highlightColor,
       highlightScale: isClimaxImpact ? 1.25 : 1.18,
+      wordAnimation: kineticSpeechWords ? (preset === 'anime-dialogue' ? 'highlight' : 'pop') : 'highlight',
       fillStyle: useGradient ? 'linear-gradient' : 'solid',
       gradientStartColor,
       gradientEndColor,
@@ -1041,11 +1051,12 @@ function addCaptionPhrases(
   translations?: SubtitleTranslations | string | null,
   preset: LyricTypographyStyle | 'dialogue-dramatic' = 'dialogue-dramatic',
   useEffects = true,
+  kineticSpeechWords = false,
 ): void {
   if (!text.trim() || durationS <= 0) return;
   commands.push({
     type: 'clip.add',
-    clip: textClip(trackId, startS, durationS, text, height, 'line', reason, false, impact, undefined, preset, translations, useEffects),
+    clip: textClip(trackId, startS, durationS, text, height, 'line', reason, false, impact, undefined, preset, translations, useEffects, kineticSpeechWords),
   });
 }
 
@@ -1215,10 +1226,12 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     audio: { gainDb: 0, fadeInUs: range[0] > 0.5 ? us(0.3) : 0, fadeOutUs: us(fadeOut), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null },
   });
 
-  // ---------------------------------------------------------------- falas (antes do drop e intercaladas)
+  // ---------------------------------------------------------------- falas (antes do drop e intercaladas / narração sobre cortes)
   const blocks: VoiceBlock[] = [];
+  const speechVisualMode = opts.speechVisualMode ?? 'scene';
+  const showSpeechVideo = (b: VoiceBlock) => speechVisualMode === 'voiceover' ? false : speechVisualMode === 'hybrid' ? b.preDrop : true;
   const wantVoice = opts.useSpeech && voice && opts.style !== 'discurso';
-  const totalVoice = wantVoice ? Math.max(0, Math.min(5, Math.round(opts.voiceMoments ?? (style.speechBeforeDrop ? 1 : 0)))) : 0;
+  const totalVoice = wantVoice ? Math.max(0, Math.min(6, Math.round(opts.voiceMoments ?? (style.speechBeforeDrop ? 1 : 0)))) : 0;
   if (wantVoice && totalVoice > 0 && style.speechBeforeDrop && dropT !== null) {
     const acceptSpeech = (ep: EpisodeInput, speech: SpeechSegment) =>
       hasRequestedSpeechAudio(ep, lang) && speechMatchesWanted(ep, speech);
@@ -1243,7 +1256,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       .filter(({ sp }) => sp.endS - sp.startS >= 0.8 && sp.endS - sp.startS <= 4)
       .filter(({ ep, sp }) => !taken.has(`${ep.assetId}@${sp.startS}`))
       .sort((a, b) => scoreSpeechCandidate(b.sp) - scoreSpeechCandidate(a.sp) || a.sp.startS - b.sp.startS);
-    // onde cabe: começa num compasso, trecho calmo da música (ou o menos intenso disponível), afastado das outras falas e do drop
+    // onde cabe: começa num compasso, trecho calmo (ou ao longo da ação em modo voiceover/hybrid), afastado das outras falas e do drop
     const quiet = (a: number, b: number) => {
       let sum = 0;
       let n = 0;
@@ -1253,28 +1266,32 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       }
       return n ? sum / n : 1;
     };
-    const free = (a: number, b: number) => blocks.every((x) => b <= x.from - VOICE_GAP_S || a >= x.to + VOICE_GAP_S) && (dropT === null || b <= dropT - 0.5 || a >= dropT + 1.5);
-    const limit = blocks[0] ? blocks[0].atS : D;
-    const downs = m.downbeats.map((d) => d + beatOffsetS - range[0]).filter((t) => t >= 1.5 && t <= D - 3);
-    const fallbackGrid = downs.length >= 2 ? downs : Array.from({ length: Math.max(1, Math.floor((D - 4.5) / 2)) }, (_, idx) => 1.5 + idx * 2);
+    const free = (a: number, b: number) => blocks.every((x) => b <= x.from - VOICE_GAP_S || a >= x.to + VOICE_GAP_S) && (dropT === null || b <= dropT - 0.5 || a >= dropT + 1.2);
+    const allowPostDropSpeech = speechVisualMode !== 'scene';
+    const limit = allowPostDropSpeech ? Math.max(1.5, D - 0.6) : (blocks[0] ? blocks[0].atS : D);
+    const downs = m.downbeats.map((d) => d + beatOffsetS - range[0]).filter((t) => t >= 1.5 && t <= D - (allowPostDropSpeech ? 1.2 : 3));
+    const fallbackGrid = downs.length >= 2
+      ? downs
+      : Array.from({ length: Math.max(1, Math.floor((D - (allowPostDropSpeech ? 2.5 : 4.5)) / 2)) }, (_, idx) => 1.5 + idx * 2);
     let placed = 0;
     for (const { ep, sp } of lines) {
       if (placed >= extraWanted) break;
       const len = sp.endS - sp.startS;
       const ideal = (limit * (placed + 1)) / (extraWanted + 1);
-      const validSlots = fallbackGrid.filter((t) => t + len <= limit - VOICE_GAP_S && free(t, t + len));
+      const slotLimit = allowPostDropSpeech ? limit : limit - VOICE_GAP_S;
+      const validSlots = fallbackGrid.filter((t) => t + len <= slotLimit && free(t, t + len));
       if (!validSlots.length) continue;
       const calmFits = validSlots.filter((t) => quiet(t, t + len) < 0.6).sort((a, b) => Math.abs(a - ideal) - Math.abs(b - ideal));
-      // Se a música for muito energética e não houver trecho < 0.6, encaixa no ponto mais calmo disponível
-      // para não ignorar o número de falas pedido pelo usuário.
-      const pickedAt = calmFits[0]
-        ?? [...validSlots].sort((a, b) => quiet(a, a + len) - quiet(b, b + len) || Math.abs(a - ideal) - Math.abs(b - ideal))[0];
+      // Em voiceover/hybrid encaixa inclusive na ação pós-drop (ducking abaixa a música); em scene prioriza trechos calmos pré-drop.
+      const pickedAt = allowPostDropSpeech
+        ? [...validSlots].sort((a, b) => Math.abs(a - ideal) - Math.abs(b - ideal))[0]
+        : (calmFits[0] ?? [...validSlots].sort((a, b) => quiet(a, a + len) - quiet(b, b + len) || Math.abs(a - ideal) - Math.abs(b - ideal))[0]);
       if (pickedAt === undefined) continue;
       blocks.push({ ep, s: sp, atS: pickedAt, len, from: pickedAt, to: pickedAt + len, preDrop: false });
       placed++;
     }
     // sem nenhuma fala disponível o aviso de "nenhuma fala marcante" já cobre; só avisa se havia falas e não coube
-    if (placed < extraWanted && lines.length > 0) warnings.push(`Só coube ${placed + blocks.filter((b) => b.preDrop).length} de ${totalVoice} falas: faltou trecho calmo na música ou fala marcante na luta escolhida.`);
+    if (placed < extraWanted && lines.length > 0) warnings.push(`Só coube ${placed + blocks.filter((b) => b.preDrop).length} de ${totalVoice} falas: faltou trecho livre na música ou fala marcante na luta escolhida.`);
   }
   blocks.sort((a, b) => a.atS - b.atS);
   // a música abaixa durante cada fala e só volta quando há respiro real (evita gangorra em pausas curtas)
@@ -1400,8 +1417,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const { lowI, highI } = plan.fit;
   const boost = 0; // já embutido em plan.fit
 
-  // a imagem de cada fala é de quem fala: tira os cortes que encostam nela (sem deixar fresta)
-  for (const b of blocks) {
+  // a imagem de cada fala só substitui V1 quando `showSpeechVideo(b)` estiver ativo (em voiceover, V1 segue nos cortes musicais)
+  const visualBlocks = blocks.filter(showSpeechVideo);
+  for (const b of visualBlocks) {
     for (const sl of slots) {
       if (sl.startS < b.from && sl.endS > b.from && b.from - sl.startS < 0.2) b.from = sl.startS;
       if (sl.startS < b.to && sl.endS > b.to && sl.endS - b.to < 0.2) b.to = sl.endS;
@@ -1412,7 +1430,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const visualSlots: Slot[] = [];
   for (const sl of slots) {
     let pieces: Slot[] = [sl];
-    for (const b of blocks) {
+    for (const b of visualBlocks) {
       pieces = pieces.flatMap((pc) => {
         if (b.to <= pc.startS + 0.01 || b.from >= pc.endS - 0.01) return [pc];
         const out: Slot[] = [];
@@ -2159,42 +2177,45 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     return kept.length;
   }
 
-  // ---------------------------------------------------------------- falas + imagem do personagem
+  // ---------------------------------------------------------------- falas + imagem (ou narração por cima dos cortes musicais)
   for (const b of blocks) {
     const { ep, s } = b;
     const sourceText = speechCaptionText(ep, s, lang, opts);
     const subtitleTranslations = speechTranslation(ep, s, opts);
+    const visualSpeech = showSpeechVideo(b);
     const reason = b.preDrop
       ? `Fala marcante antes do drop: ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada durante a fala`
-      : `Fala intercalada: ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada`;
-    const lead = b.atS - b.from;
-    const voiceDurS = Math.max(0.05, b.to - b.from);
-    const voicePunchScale = opts.useEffects ? 1.06 : 1;
-    const voiceClip = baseClip(v1.id, ep.assetId, b.from, voiceDurS, Math.max(0, s.startS - lead), reason, {
-      effects: opts.useEffects ? gradeFx(style.grade) : [],
-      audio: selectedVideoAudio(streamFor(ep), -60),
-      transform: {
-        x: 0,
-        y: 0,
-        scale: voicePunchScale,
-        rotation: 0,
-        opacity: 1,
-        crop: { left: 0, top: 0, right: 0, bottom: 0 },
-      },
-    });
-    if (opts.useEffects && voiceDurS >= 0.6) {
-      voiceClip.keyframes['transform.scale'] = [
-        { atUs: 0, value: voicePunchScale, easing: 'ease-in-out' },
-        { atUs: us(voiceDurS), value: Math.round(voicePunchScale * 1.05 * 1000) / 1000, easing: 'linear' },
-      ];
+      : `${visualSpeech ? 'Fala intercalada' : 'Narração sobre cortes de ação'}: ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada`;
+    if (visualSpeech) {
+      const lead = b.atS - b.from;
+      const voiceDurS = Math.max(0.05, b.to - b.from);
+      const voicePunchScale = opts.useEffects ? 1.06 : 1;
+      const voiceClip = baseClip(v1.id, ep.assetId, b.from, voiceDurS, Math.max(0, s.startS - lead), reason, {
+        effects: opts.useEffects ? gradeFx(style.grade) : [],
+        audio: selectedVideoAudio(streamFor(ep), -60),
+        transform: {
+          x: 0,
+          y: 0,
+          scale: voicePunchScale,
+          rotation: 0,
+          opacity: 1,
+          crop: { left: 0, top: 0, right: 0, bottom: 0 },
+        },
+      });
+      if (opts.useEffects && voiceDurS >= 0.6) {
+        voiceClip.keyframes['transform.scale'] = [
+          { atUs: 0, value: voicePunchScale, easing: 'ease-in-out' },
+          { atUs: us(voiceDurS), value: Math.round(voicePunchScale * 1.05 * 1000) / 1000, easing: 'linear' },
+        ];
+      }
+      cmds.push({ type: 'clip.add', clip: voiceClip });
     }
-    cmds.push({ type: 'clip.add', clip: voiceClip });
     cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: voiceGainDb(b.preDrop ? 3 : 2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
-    const speechPreset = opts.lyricStyle === 'anime-dialogue' || !opts.lyrics?.length && opts.lyricStyle && opts.lyricStyle !== 'lyrics-cinematic'
+    const speechPreset = opts.lyricStyle && opts.lyricStyle !== 'lyrics-cinematic'
       ? opts.lyricStyle
       : 'dialogue-dramatic';
-    if (opts.showText && opts.showSpeechCaptions !== false && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset, opts.useEffects);
-    clipsMade++;
+    if (opts.showText && opts.showSpeechCaptions !== false && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset, opts.useEffects, true);
+    if (visualSpeech) clipsMade++;
   }
 
   // Sung timing is authoritative: decorative impacts must not erase or delay the lyrics.

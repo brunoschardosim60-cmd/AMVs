@@ -145,6 +145,7 @@ export function EditorView({ session }: { session: ProjectSession }) {
   const bind = useEditor((s) => s.bind);
   const selection = useEditor((s) => s.selection);
   const select = useEditor((s) => s.select);
+  const inspectorOpenSeq = useEditor((s) => s.inspectorOpenSeq);
   // altura inicial: cabem todas as trilhas (sem esconder "Efeitos" atrás de rolagem), até ~56% da janela
   const [timelineH, setTimelineH] = useState(() => {
     const need = project.tracks.reduce((a, t) => a + TRACK_H[t.kind], 0) + 76; // + barra de ferramentas e régua
@@ -179,6 +180,11 @@ export function EditorView({ session }: { session: ProjectSession }) {
   }, []);
 
   useEffect(() => bind(project.id), [bind, project.id]);
+  useEffect(() => {
+    if (inspectorOpenSeq <= 0) return;
+    setShowInspector(true);
+    if (window.innerWidth <= 1100) setShowMedia(false);
+  }, [inspectorOpenSeq]);
   useShortcutsOnce(session);
 
   // seleção nunca aponta para clipe que sumiu (undo, exclusão)

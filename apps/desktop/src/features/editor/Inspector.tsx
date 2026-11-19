@@ -1,14 +1,190 @@
 import { clipEndUs, colorGradingPreset, COLOR_GRADING_PRESETS, defaultParams, isSfxAsset, EFFECTS, evaluateKeyframes, fillScale, formatTimecode, newId, param, removeKeyframeAt, sourceDurationUs, SPEED_PRESETS, speedAt, speedFactorAt, speedKeyframesForPreset, TRANSITIONS, trimClip, upsertKeyframe, type Clip, type Command, type EffectId, type Keyframe, type Project, type TextWordTiming } from '@amv/project';
-import { Eye, EyeOff, Pause, Play, Plus, RotateCcw, SkipForward, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Languages, Pause, Pencil, Play, Plus, RotateCcw, SkipForward, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { editSubtitleTextManually, langLabel, LOOKS, restyleSubtitles, selectSubtitleTextVariant } from '@amv/subtitles';
+import { applyTranslation, editSubtitleTextManually, langLabel, LOOKS, originalText, restyleSubtitles, selectSubtitleTextVariant } from '@amv/subtitles';
 import type { ProjectSession } from '../../core/session';
+import { translateTextsAuto } from '../../core/transcription';
+import type { Platform } from '../../platform/types';
 import { useApp } from '../../store';
 import { IconButton } from '../../ui/controls';
 import { AssetDetail } from '../project/AssetDetail';
 import { useEditor } from './editorStore';
+import { ClipRangePreview } from './MomentsPanel';
 import { TEXT_ANIMATIONS_IN, TEXT_ANIMATIONS_OUT } from './textLayer';
 import { wordPreviewEnded, type WordPreviewRange } from './wordPreview';
+
+export const LOCAL_FONT_FAMILIES = [
+  'Manrope Variable',
+  'Arial',
+  'Arial Black',
+  'Bahnschrift',
+  'Calibri',
+  'Cambria',
+  'Cinzel',
+  'Consolas',
+  'Georgia',
+  'Impact',
+  'Segoe UI',
+  'Tahoma',
+  'Times New Roman',
+  'Trebuchet MS',
+  'Verdana',
+];
+
+export type FramingPresetId = 'normal' | 'highlight' | 'close' | 'cinemascope' | 'manga' | 'punch' | 'zoom';
+
+export const FRAMING_PRESETS: { id: FramingPresetId; label: string; shortLabel: string; accent?: boolean; span2?: boolean }[] = [
+  { id: 'normal', label: 'Normal', shortLabel: 'Normal' },
+  { id: 'highlight', label: 'Destaque (1,16×)', shortLabel: 'Destaque' },
+  { id: 'close', label: 'Close (1,32×)', shortLabel: 'Close 1,32×' },
+  { id: 'cinemascope', label: 'Cinemascope', shortLabel: 'Cinemascope' },
+  { id: 'manga', label: 'Painel Mangá', shortLabel: 'Mangá' },
+  { id: 'punch', label: 'Punch no corte', shortLabel: 'Punch', accent: true },
+  { id: 'zoom', label: 'Zoom dramático progressivo (1,0× → 1,14×)', shortLabel: 'Zoom +', accent: true, span2: true },
+];
+
+/** Monta rótulo e patch para os presets rápidos de enquadramento e movimento. */
+export function applyFramingPreset(clip: Clip, presetId: FramingPresetId): { label: string; patch: Partial<Clip> } {
+  const tr = clip.transform;
+  const baseScale = tr.scale || 1;
+  switch (presetId) {
+    case 'normal':
+      return {
+        label: 'Resetar enquadramento',
+        patch: {
+          mask: 'none',
+          transform: { ...tr, x: 0, y: 0, scale: 1, rotation: 0, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
+          keyframes: { ...clip.keyframes, 'transform.scale': [] },
+        },
+      };
+    case 'highlight':
+      return {
+        label: 'Destaque personagem (1,16×)',
+        patch: { transform: { ...tr, scale: 1.16, crop: { left: 0, top: 0, right: 0, bottom: 0 } } },
+      };
+    case 'close':
+      return {
+        label: 'Close dramático (1,32×)',
+        patch: { transform: { ...tr, scale: 1.32, crop: { left: 0, top: 0, right: 0, bottom: 0 } } },
+      };
+    case 'cinemascope':
+      return {
+        label: 'Recorte Cinemascope',
+        patch: { transform: { ...tr, crop: { left: 0, top: 0.12, right: 0, bottom: 0.12 } } },
+      };
+    case 'manga':
+      return {
+        label: 'Recorte Painel Mangá',
+        patch: { transform: { ...tr, scale: 1.12, crop: { left: 0.18, top: 0.04, right: 0.18, bottom: 0.04 } } },
+      };
+    case 'punch': {
+      const decayUs = Math.min(240_000, Math.round(clip.durationUs * 0.45));
+      return {
+        label: 'Punch de impacto no corte',
+        patch: {
+          keyframes: {
+            ...clip.keyframes,
+            'transform.scale': [
+              { atUs: 0, value: Math.round(baseScale * 1.16 * 1000) / 1000, easing: 'ease-out' },
+              { atUs: Math.max(1, decayUs), value: baseScale, easing: 'ease-in-out' },
+              { atUs: clip.durationUs, value: baseScale, easing: 'linear' },
+            ],
+          },
+        },
+      };
+    }
+    case 'zoom':
+      return {
+        label: 'Zoom dramático progressivo',
+        patch: {
+          keyframes: {
+            ...clip.keyframes,
+            'transform.scale': [
+              { atUs: 0, value: baseScale, easing: 'ease-in-out' },
+              { atUs: clip.durationUs, value: Math.round(baseScale * 1.14 * 1000) / 1000, easing: 'linear' },
+            ],
+          },
+        },
+      };
+  }
+}
+
+/** Ajusta entrada/saída na origem sem colidir com o clipe vizinho na mesma trilha. */
+export function clipSourceRangePatch(project: Project, clip: Clip, inS: number, outS: number): { label: string; patch: Partial<Clip> } {
+  const S = 1_000_000;
+  const srcMax = sourceDurationUs(project, clip);
+  const cappedMax = srcMax ?? Infinity;
+  const minGap = 200_000;
+  const sourceInUs = Math.min(Math.max(0, Math.round(inS * S)), Math.max(0, cappedMax - minGap));
+  let sourceOutUs = Math.min(cappedMax, Math.max(sourceInUs + minGap, Math.round(outS * S)));
+  const neighbors = project.clips.filter((item) => item.trackId === clip.trackId && item.id !== clip.id);
+  const nextStart = Math.min(Infinity, ...neighbors.filter((item) => item.timelineStartUs >= clipEndUs(clip)).map((item) => item.timelineStartUs));
+  const speed = Math.max(0.1, clip.speed || 1);
+  const desiredDurUs = Math.max(100_000, Math.round((sourceOutUs - sourceInUs) / speed));
+  const maxSlotDurUs = nextStart === Infinity ? Infinity : Math.max(clip.durationUs, nextStart - clip.timelineStartUs);
+  const durationUs = Math.min(desiredDurUs, maxSlotDurUs);
+  if (durationUs < desiredDurUs) {
+    sourceOutUs = Math.min(cappedMax, sourceInUs + Math.max(minGap, Math.round(durationUs * speed)));
+  }
+  return { label: 'Ajustar trecho da cena', patch: { sourceInUs, sourceOutUs, durationUs } };
+}
+
+/** Troca a cena de um clipe mantendo a posição e duração sincronizada na timeline. */
+export function clipSceneShotPatch(
+  project: Project,
+  clip: Clip,
+  shot: { startS: number; endS: number; line?: string | null },
+): Partial<Clip> {
+  const S = 1_000_000;
+  const srcMax = sourceDurationUs(project, clip);
+  const cappedMax = srcMax ?? Infinity;
+  const minGap = 200_000;
+  const sourceInUs = Math.min(Math.max(0, Math.round(shot.startS * S)), Math.max(0, cappedMax - minGap));
+  const targetSpanUs = Math.max(minGap, Math.round(clip.durationUs * (clip.speed || 1)));
+  let sourceOutUs = Math.min(cappedMax, sourceInUs + targetSpanUs);
+  let speedPatch: { speed?: number; keyframes?: Clip['keyframes'] } = {};
+  if (sourceOutUs - sourceInUs < targetSpanUs * 0.85) {
+    const shotOut = Math.min(cappedMax, Math.max(sourceInUs + minGap, Math.round(shot.endS * S)));
+    sourceOutUs = shotOut;
+    const fittedSpeed = Math.max(0.25, Math.min(4, (sourceOutUs - sourceInUs) / Math.max(1, clip.durationUs)));
+    const keyframes = { ...clip.keyframes };
+    delete keyframes.speed;
+    speedPatch = { speed: Math.round(fittedSpeed * 100) / 100, keyframes };
+  }
+  return {
+    sourceInUs,
+    sourceOutUs,
+    ...speedPatch,
+    reason: shot.line ? `Cena escolhida · "${shot.line}"` : 'Cena escolhida manualmente',
+  };
+}
+
+/** Traduz um ou vários clipes de texto/legenda para Português (Brasil) mantendo estilo/caixa. */
+export async function translateTextClipsToPt(
+  session: ProjectSession,
+  clips: Clip[],
+  platform: Platform,
+  label = 'Traduzir para PT-BR',
+): Promise<{ translated: number; failed: number }> {
+  const target = clips.filter((clip): clip is Clip & { text: NonNullable<Clip['text']> } => !!clip.text && clip.text.text.trim().length > 0);
+  if (!target.length) return { translated: 0, failed: 0 };
+  const result = await translateTextsAuto(
+    platform,
+    target.map(originalText),
+    'Português (Brasil)',
+    { batchSize: 20 },
+  );
+  const adjusted = result.translations.map((value, idx) => {
+    const trimmed = value?.trim();
+    if (!trimmed) return null;
+    const currentText = target[idx]!.text.text;
+    const isAllCaps = currentText === currentText.toUpperCase() && /[A-Z]/.test(currentText);
+    return isAllCaps ? trimmed.toUpperCase() : trimmed;
+  });
+  const commands = applyTranslation(target, adjusted, 'pt-BR');
+  if (commands.length) session.history.transaction(label, commands);
+  return { translated: commands.length, failed: result.failed };
+}
 
 /** Campo numérico que só grava ao confirmar (Enter/sair do campo) — um passo de desfazer por edição. */
 function NumField({
@@ -204,19 +380,88 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
     });
   };
   const isEditorialCut = clip.transitionIn?.transition === 'match_cut' || clip.transitionIn?.transition === 'cut_on_action';
+  const openFullClipEditor = () => useEditor.getState().setEditingClipId(clip.id);
+  const audioSection = track.kind === 'audio' ? (
+    <Section title="Áudio" onReset={() => patch('Redefinir áudio', { audio: { ...clip.audio, gainDb: 0, fadeInUs: 0, fadeOutUs: 0 } })}>
+      <NumField label="Volume" suffix="dB" value={clip.audio.gainDb} min={-60} max={12} step={1} digits={1} onCommit={(v) => patch('Volume', { audio: { ...clip.audio, gainDb: v } })} />
+      <NumField label="Entrada suave" suffix="s" value={clip.audio.fadeInUs / S} min={0} max={clip.durationUs / S} step={0.1} digits={2} onCommit={(v) => patch('Entrada suave', { audio: { ...clip.audio, fadeInUs: Math.round(v * S) } })} />
+      <NumField label="Saída suave" suffix="s" value={clip.audio.fadeOutUs / S} min={0} max={clip.durationUs / S} step={0.1} digits={2} onCommit={(v) => patch('Saída suave', { audio: { ...clip.audio, fadeOutUs: Math.round(v * S) } })} />
+      {asset?.probe && asset.probe.audio.length > 1 && (
+        <label className="grid grid-cols-[1fr_150px] items-center gap-2 py-1 text-xs">
+          <span className="text-muted">Faixa de áudio</span>
+          <select
+            className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink"
+            value={clip.audio.streamIndex ?? ''}
+            onChange={(e) => patch('Faixa de áudio', { audio: { ...clip.audio, streamIndex: e.target.value === '' ? null : Number(e.target.value) } })}
+          >
+            <option value="">1ª faixa</option>
+            {asset.probe.audio.map((a, i) => (
+              <option key={a.index} value={a.index}>
+                {i + 1}ª — {a.language ?? a.codec}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <p className="mt-1 text-2xs text-muted">O preview aplica ganho acima de 0 dB com compressão de pico. A seleção de faixa de áudio ainda só vale na exportação; o preview usa a faixa incluída no proxy.</p>
+    </Section>
+  ) : null;
 
   return (
     <div className="text-sm">
       <div className="border-b border-line-soft px-4 py-3">
-        <p className="truncate font-semibold">{clip.text?.text ?? clip.label ?? asset?.name}</p>
-        <p className="tnum mt-0.5 text-xs text-muted">
-          {track.name} · {formatTimecode(clip.timelineStartUs, fps)} → {formatTimecode(clipEndUs(clip), fps)}
-        </p>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-semibold">{clip.text?.text ?? clip.label ?? asset?.name}</p>
+            <p className="tnum mt-0.5 text-xs text-muted">
+              {track.name} · {formatTimecode(clip.timelineStartUs, fps)} → {formatTimecode(clipEndUs(clip), fps)}
+            </p>
+          </div>
+          {!track.locked && (
+            <button
+              type="button"
+              onClick={openFullClipEditor}
+              title="Abrir janela ampliada de modificação deste clipe"
+              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-control border border-violet/45 bg-violet/15 px-2 text-2xs font-medium text-ink hover:bg-violet/25"
+            >
+              <Pencil size={11} />
+              Modificar
+            </button>
+          )}
+        </div>
         {clip.origin === 'ai' && clip.reason && <p className="mt-2 rounded-md bg-violet/10 px-2 py-1.5 text-xs text-ink-soft">IA: {clip.reason}</p>}
         {track.locked && <p className="mt-2 text-xs text-warn">Trilha travada: destrave para editar.</p>}
       </div>
 
+      {track.kind === 'video' && asset?.kind === 'video' && (
+        <div className="space-y-2 border-b border-line-soft px-4 py-3">
+          <ClipRangePreview
+            session={session}
+            asset={asset}
+            startS={clip.sourceInUs / S}
+            endS={clip.sourceOutUs / S}
+            title={clip.label ?? asset.name}
+            onAdjustRange={track.locked ? undefined : (next) => {
+              const { label, patch: p } = clipSourceRangePatch(project, clip, next.inS, next.outS);
+              patch(label, p);
+            }}
+          />
+          {!track.locked && (
+            <button
+              type="button"
+              onClick={openFullClipEditor}
+              className="flex h-7 w-full items-center justify-center gap-1.5 rounded-control border border-violet/40 bg-violet/10 px-2 text-xs font-medium text-ink-soft hover:bg-violet/20 hover:text-ink"
+            >
+              <Pencil size={12} />
+              Trocar cena / Ampliar editor
+            </button>
+          )}
+        </div>
+      )}
+
       <fieldset disabled={track.locked}>
+        {clip.text && <TextSection clip={clip} patch={patch} session={session} />}
+        {audioSection}
         <Section title="Tempo">
           <NumField label="Início na timeline" suffix="s" value={clip.timelineStartUs / S} min={0} step={0.1} digits={3} onCommit={(v) => run('Mover clipe', [{ type: 'clip.update', clipId: clip.id, patch: { timelineStartUs: Math.round(v * S) } }])} />
           <NumField label="Duração" suffix="s" value={clip.durationUs / S} min={0.001} step={0.1} digits={3} onCommit={(v) => { try { run('Alterar duração', trimClip(project, clip.id, 'end', clip.timelineStartUs + Math.round(v * S))); } catch (e) { toast({ tone: 'warn', title: (e as Error).message }); } }} />
@@ -417,91 +662,19 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
             <div className="mb-2 space-y-1">
               <span className="block text-2xs font-medium text-muted">Enquadramento &amp; recorte rápido</span>
               <div className="grid grid-cols-2 gap-1">
-                <button
-                  type="button"
-                  className="rounded-control border border-line bg-base px-2 py-1 text-left text-2xs text-ink-soft hover:border-violet/50 hover:text-ink"
-                  onClick={() => patch('Resetar enquadramento', {
-                    mask: 'none',
-                    transform: { ...tr, x: 0, y: 0, scale: 1, rotation: 0, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
-                    keyframes: { ...clip.keyframes, 'transform.scale': [] },
-                  })}
-                >
-                  Normal
-                </button>
-                <button
-                  type="button"
-                  className="rounded-control border border-line bg-base px-2 py-1 text-left text-2xs text-ink-soft hover:border-violet/50 hover:text-ink"
-                  onClick={() => patch('Destaque personagem (1,16×)', {
-                    transform: { ...tr, scale: 1.16, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
-                  })}
-                >
-                  Destaque (1,16×)
-                </button>
-                <button
-                  type="button"
-                  className="rounded-control border border-line bg-base px-2 py-1 text-left text-2xs text-ink-soft hover:border-violet/50 hover:text-ink"
-                  onClick={() => patch('Close dramático (1,32×)', {
-                    transform: { ...tr, scale: 1.32, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
-                  })}
-                >
-                  Close (1,32×)
-                </button>
-                <button
-                  type="button"
-                  className="rounded-control border border-line bg-base px-2 py-1 text-left text-2xs text-ink-soft hover:border-violet/50 hover:text-ink"
-                  onClick={() => patch('Recorte Cinemascope', {
-                    transform: { ...tr, crop: { left: 0, top: 0.12, right: 0, bottom: 0.12 } },
-                  })}
-                >
-                  Cinemascope
-                </button>
-                <button
-                  type="button"
-                  className="rounded-control border border-line bg-base px-2 py-1 text-left text-2xs text-ink-soft hover:border-violet/50 hover:text-ink"
-                  onClick={() => patch('Recorte Painel Mangá', {
-                    transform: { ...tr, scale: 1.12, crop: { left: 0.18, top: 0.04, right: 0.18, bottom: 0.04 } },
-                  })}
-                >
-                  Painel Mangá
-                </button>
-                <button
-                  type="button"
-                  className="rounded-control border border-violet/40 bg-violet/10 px-2 py-1 text-left text-2xs text-ink-soft hover:bg-violet/20 hover:text-ink"
-                  onClick={() => {
-                    const baseScale = tr.scale || 1;
-                    const decayUs = Math.min(240_000, Math.round(clip.durationUs * 0.45));
-                    patch('Punch de impacto no corte', {
-                      keyframes: {
-                        ...clip.keyframes,
-                        'transform.scale': [
-                          { atUs: 0, value: Math.round(baseScale * 1.16 * 1000) / 1000, easing: 'ease-out' },
-                          { atUs: Math.max(1, decayUs), value: baseScale, easing: 'ease-in-out' },
-                          { atUs: clip.durationUs, value: baseScale, easing: 'linear' },
-                        ],
-                      },
-                    });
-                  }}
-                >
-                  Punch no corte
-                </button>
-                <button
-                  type="button"
-                  className="col-span-2 rounded-control border border-violet/40 bg-violet/10 px-2 py-1 text-left text-2xs text-ink-soft hover:bg-violet/20 hover:text-ink"
-                  onClick={() => {
-                    const baseScale = tr.scale || 1;
-                    patch('Zoom dramático progressivo', {
-                      keyframes: {
-                        ...clip.keyframes,
-                        'transform.scale': [
-                          { atUs: 0, value: baseScale, easing: 'ease-in-out' },
-                          { atUs: clip.durationUs, value: Math.round(baseScale * 1.14 * 1000) / 1000, easing: 'linear' },
-                        ],
-                      },
-                    });
-                  }}
-                >
-                  Zoom dramático progressivo (1,0× → 1,14×)
-                </button>
+                {FRAMING_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className={`rounded-control border px-2 py-1 text-left text-2xs text-ink-soft hover:text-ink ${preset.accent ? 'border-violet/40 bg-violet/10 hover:bg-violet/20' : 'border-line bg-base hover:border-violet/50'} ${preset.span2 ? 'col-span-2' : ''}`}
+                    onClick={() => {
+                      const next = applyFramingPreset(clip, preset.id);
+                      patch(next.label, next.patch);
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
               </div>
             </div>
             {(['left', 'top', 'right', 'bottom'] as const).map((side) => (
@@ -519,8 +692,6 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
             ))}
           </Section>
         )}
-
-        {clip.text && <TextSection clip={clip} patch={patch} session={session} />}
 
         {visual && <EffectsSection clip={clip} patch={patch} />}
 
@@ -633,41 +804,18 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
           </Section>
         )}
 
-        {track.kind === 'audio' && (
-          <Section title="Áudio" onReset={() => patch('Redefinir áudio', { audio: { ...clip.audio, gainDb: 0, fadeInUs: 0, fadeOutUs: 0 } })}>
-            <NumField label="Volume" suffix="dB" value={clip.audio.gainDb} min={-60} max={12} step={1} digits={1} onCommit={(v) => patch('Volume', { audio: { ...clip.audio, gainDb: v } })} />
-            <NumField label="Entrada suave" suffix="s" value={clip.audio.fadeInUs / S} min={0} max={clip.durationUs / S} step={0.1} digits={2} onCommit={(v) => patch('Entrada suave', { audio: { ...clip.audio, fadeInUs: Math.round(v * S) } })} />
-            <NumField label="Saída suave" suffix="s" value={clip.audio.fadeOutUs / S} min={0} max={clip.durationUs / S} step={0.1} digits={2} onCommit={(v) => patch('Saída suave', { audio: { ...clip.audio, fadeOutUs: Math.round(v * S) } })} />
-            {asset?.probe && asset.probe.audio.length > 1 && (
-              <label className="grid grid-cols-[1fr_150px] items-center gap-2 py-1 text-xs">
-                <span className="text-muted">Faixa de áudio</span>
-                <select
-                  className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink"
-                  value={clip.audio.streamIndex ?? ''}
-                  onChange={(e) => patch('Faixa de áudio', { audio: { ...clip.audio, streamIndex: e.target.value === '' ? null : Number(e.target.value) } })}
-                >
-                  <option value="">1ª faixa</option>
-                  {asset.probe.audio.map((a, i) => (
-                    <option key={a.index} value={a.index}>
-                      {i + 1}ª — {a.language ?? a.codec}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <p className="mt-1 text-2xs text-muted">O preview aplica ganho acima de 0 dB com compressão de pico. A seleção de faixa de áudio ainda só vale na exportação; o preview usa a faixa incluída no proxy.</p>
-          </Section>
-        )}
       </fieldset>
     </div>
   );
 }
 
 function TextSection({ clip, patch, session }: { clip: Clip; patch: (label: string, p: Partial<Clip>) => void; session: ProjectSession }) {
+  const { platform, toast } = useApp();
   const S = 1_000_000;
   const t = clip.text!;
   const [text, setText] = useState(t.text);
   const [font, setFont] = useState(t.font);
+  const [translating, setTranslating] = useState(false);
   const [wordIndex, setWordIndex] = useState(0);
   const wordPreview = useRef<WordPreviewRange | null>(null);
   const playheadUs = useEditor((state) => state.playheadUs);
@@ -681,6 +829,19 @@ function TextSection({ clip, patch, session }: { clip: Clip; patch: (label: stri
   useEffect(() => setText(t.text), [t.text]);
   useEffect(() => setFont(t.font), [t.font]);
   const set = (label: string, p: Partial<NonNullable<Clip['text']>>) => patch(label, { text: { ...t, ...p } });
+  const translateClip = async () => {
+    if (!platform || translating) return;
+    setTranslating(true);
+    try {
+      const r = await translateTextClipsToPt(session, [clip], platform);
+      if (r.failed && !r.translated) toast({ tone: 'warn', title: 'Não foi possível traduzir agora' });
+      else if (r.translated) toast({ tone: 'ok', title: 'Traduzido para PT-BR' });
+    } catch (e) {
+      toast({ tone: 'error', title: 'Erro ao traduzir', body: (e as Error).message });
+    } finally {
+      setTranslating(false);
+    }
+  };
   useEffect(() => {
     wordPreview.current = null;
     setWordIndex(0);
@@ -724,16 +885,25 @@ function TextSection({ clip, patch, session }: { clip: Clip; patch: (label: stri
   };
   return (
     <Section title="Texto">
-      <label className="mb-2 grid grid-cols-[1fr_150px] items-center gap-2 text-xs">
-        <span className="text-muted">Estilo visual</span>
-        <select aria-label="Estilo visual do texto" value="" className="h-7 min-w-0 rounded-control border border-line bg-base px-1 text-xs text-ink" onChange={(event) => {
+      <div className="mb-2 flex items-center gap-1.5">
+        <select aria-label="Estilo visual do texto" value="" className="h-7 min-w-0 flex-1 rounded-control border border-line bg-base px-1 text-xs text-ink" onChange={(event) => {
           const look = LOOKS.find((item) => item.id === event.target.value);
           if (look) session.history.transaction(`Estilo ${look.label}`, restyleSubtitles(session.project, [clip.id], look.id));
         }}>
-          <option value="">Escolher…</option>
+          <option value="">Estilo visual…</option>
           {LOOKS.map((look) => <option key={look.id} value={look.id}>{look.label}</option>)}
         </select>
-      </label>
+        <button
+          type="button"
+          disabled={!platform || translating}
+          onClick={() => void translateClip()}
+          title="Traduzir este clipe para Português (Brasil)"
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-control border border-violet/40 bg-violet/10 px-2 text-2xs font-medium text-ink-soft hover:bg-violet/20 hover:text-ink disabled:opacity-50"
+        >
+          <Languages size={12} />
+          {translating ? 'Traduzindo…' : 'Traduzir PT-BR'}
+        </button>
+      </div>
       {(Object.keys(t.translations).length > 0 || t.manualText !== null) && (
         <label className="mb-2 grid grid-cols-[1fr_150px] items-center gap-2 text-xs">
           <span className="text-muted">Versão do texto</span>
@@ -763,6 +933,9 @@ function TextSection({ clip, patch, session }: { clip: Clip; patch: (label: stri
         value={text}
         onChange={(e) => setText(e.target.value)}
         onBlur={() => text !== t.text && set('Editar texto', editSubtitleTextManually(t, text))}
+        onKeyDown={(e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') e.currentTarget.blur();
+        }}
         aria-label="Texto"
       />
       {t.original !== undefined && (
@@ -787,7 +960,7 @@ function TextSection({ clip, patch, session }: { clip: Clip; patch: (label: stri
           aria-label="Família tipográfica local"
         />
         <datalist id="amv-local-fonts">
-          {['Manrope Variable', 'Arial', 'Arial Black', 'Bahnschrift', 'Calibri', 'Cambria', 'Consolas', 'Georgia', 'Impact', 'Segoe UI', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana'].map((font) => <option key={font} value={font} />)}
+          {LOCAL_FONT_FAMILIES.map((fontName) => <option key={fontName} value={fontName} />)}
         </datalist>
       </label>
       <p className="mb-1 text-2xs text-faint">Use fontes instaladas no Windows. Preview e exportação rasterizada usam a mesma fonte disponível neste computador.</p>

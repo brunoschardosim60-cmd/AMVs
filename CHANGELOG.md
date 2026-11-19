@@ -1,5 +1,13 @@
 # Novidades
 
+## 0.6.30
+
+**Edição direta na Timeline, falas em narração por cima dos cortes de ação (`voiceover`) e prévia visual ao vivo da tipografia.**
+
+- **Edição Direta pela Timeline:** clicar em qualquer clipe da timeline (`Legendas`, `V1`/`V2`, `Música`) seleciona o clipe, move o playhead para mostrar no Preview, abre automaticamente o painel de **Propriedades** já posicionado na seção principal (`Texto` no topo com botão `Traduzir PT-BR`, `ClipRangePreview` no topo para vídeo e `Áudio` no topo) e exibe a **Barra de Edição Rápida** logo abaixo da barra `Adicionar` (texto editável inline, tradução unitária ou da trilha inteira para PT-BR, estilo, tamanho, posição, corte, velocidade, enquadramento e transição). Duplo clique ou o botão **Modificar** abre o modal completo com `ClipRangePreview`, ajuste livre de entrada/saída e seletor de cenas do episódio (`Usar esta cena`).
+- **Falas em Narração sobre Cortes de Ação (`voiceover` / `hybrid`):** novo seletor **Modo das falas** (`Narração sobre cenas de ação (estilo Edit)`, `Misto (cena no drop + narração na ação)` e `Mostrar cena original da fala`), ampliando o limite para até 6 falas distribuídas antes e depois do drop sobre os cortes rápidos na batida em `V1`, com destaque palavra a palavra sincronizado (`wordAnimation`) e punch de entrada nas legendas das falas.
+- **Prévia Visual Ao Vivo da Tipografia ("Como fica na tela"):** cartão de prévia em tempo real e 6 pílulas visuais clicáveis (`IMPACTO`, `NEON`, `ÉPICO`, `MANGÁ`, `CINEMA`, `DIÁLOGO`) no gerador automático, além de amostra visual ao vivo ao lado do seletor de estilos na aba `Biblioteca > Legendas`.
+
 ## 0.6.29
 
 **Arquitetura Music-First, tipografia cinética explosiva na batida, tradução PT-BR garantida em 5 camadas e prévias completas de Cenas e Falas.**

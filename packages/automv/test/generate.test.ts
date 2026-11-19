@@ -1179,4 +1179,36 @@ describe('integração das melhorias do patch', () => {
     const combined = lyricClips.map((c) => c.text?.text).join(' ');
     expect(combined).toContain('DESISTIR');
   });
+
+  it('speechVisualMode=voiceover narra por cima dos cortes de ação em V1 (antes e depois do drop) com tipografia por palavra', () => {
+    const ep = episode('ep1', 120, 3);
+    ep.analysis.speech = [
+      { startS: 10, endS: 12, kind: 'fala', confidence: 0.9, text: 'Nunca vou recuar agora', language: 'por', impact: 0.92 },
+      { startS: 30, endS: 32, kind: 'grito', confidence: 0.9, text: 'Hora de superar tudo', language: 'por', impact: 0.95 },
+      { startS: 50, endS: 52, kind: 'fala', confidence: 0.9, text: 'Esse é meu limite', language: 'por', impact: 0.88 },
+    ];
+    const p = project();
+    const r = generateAmv(p, music(), [ep], {
+      ...base,
+      durationS: 36,
+      musicStartS: 16, // drop está em 40s (24s do vídeo)
+      useSpeech: true,
+      voiceMoments: 3,
+      speechVisualMode: 'voiceover',
+      showText: true,
+      lyricStyle: 'anime-impact',
+    });
+    expect(r.summary.voices).toBe(3);
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    expect(findOverlaps(out)).toEqual([]);
+    const v1 = out.clips.filter((c) => c.trackId === out.tracks.find((t) => t.name === 'V1')!.id);
+    const voices = out.clips.filter((c) => c.trackId === out.tracks.find((t) => t.name === 'Vozes')!.id).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+    const captions = out.clips.filter((c) => c.trackId === out.tracks.find((t) => t.kind === 'text')!.id);
+    expect(voices).toHaveLength(3);
+    // Nenhuma cena de V1 usa o motivo estático de fala; os cortes seguem a música do início ao fim.
+    expect(v1.some((c) => c.reason?.includes('Fala marcante') || c.reason?.includes('Fala intercalada'))).toBe(false);
+    expect(voices.some((v) => v.timelineStartUs / S >= r.summary.drop!)).toBe(true);
+    expect(captions).toHaveLength(3);
+    expect(captions.every((c) => c.text?.timingPrecision === 'word' && (c.text.wordTimings?.length ?? 0) >= 3 && c.text.wordAnimation === 'pop')).toBe(true);
+  });
 });

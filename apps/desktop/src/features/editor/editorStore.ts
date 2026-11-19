@@ -34,6 +34,10 @@ interface EditorState {
   proposalMarks: { atUs: number; kind: 'add' | 'remove' | 'move' | 'modify' }[];
   /** Projeto a que este estado pertence (troca de projeto zera tudo). */
   projectId: string | null;
+  /** Contador incrementado quando a timeline pede abertura automática do Inspetor. */
+  inspectorOpenSeq: number;
+  /** Clipe aberto no modal de edição rápida pela timeline. */
+  editingClipId: string | null;
 
   bind(projectId: string): void;
   setZoom(z: number): void;
@@ -45,6 +49,8 @@ interface EditorState {
   setSnapping(s: boolean): void;
   setPreviewScale(s: 1 | 0.5 | 0.25): void;
   setAssetDrag(d: AssetDrag | null): void;
+  requestInspector(): void;
+  setEditingClipId(id: string | null): void;
 }
 
 export const ZOOM_MIN = 2;
@@ -64,10 +70,12 @@ export const useEditor = create<EditorState>((set, get) => ({
   assistantDraft: null,
   proposalMarks: [],
   projectId: null,
+  inspectorOpenSeq: 0,
+  editingClipId: null,
 
   bind(projectId) {
     if (get().projectId === projectId) return;
-    set({ projectId, playheadUs: 0, playing: false, selection: [], zoom: 60 });
+    set({ projectId, playheadUs: 0, playing: false, selection: [], zoom: 60, editingClipId: null });
   },
   setZoom(z) {
     set({ zoom: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) });
@@ -96,6 +104,12 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
   setAssetDrag(d) {
     set({ assetDrag: d });
+  },
+  requestInspector() {
+    set((s) => ({ inspectorOpenSeq: s.inspectorOpenSeq + 1 }));
+  },
+  setEditingClipId(id) {
+    set({ editingClipId: id });
   },
 }));
 

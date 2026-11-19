@@ -10,11 +10,13 @@ import {
   insertAsset,
   moveClips,
   projectDurationUs,
+  sourceDurationUs,
   TextContentSchema,
   snapPoints,
   sourceTimeAt,
   speedAt,
   timelineLocalAtSource,
+  TRANSITIONS,
   trimBounds,
   trimClip,
   type Clip,
@@ -23,14 +25,20 @@ import {
   type Project,
   type Track,
 } from '@amv/project';
-import { ChevronDown, ChevronUp, Eye, EyeOff, Layers3, Lock, LockOpen, Magnet, Plus, ScanSearch, Scissors, SlidersHorizontal, Sparkles, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
+import type { ShotTag } from '@amv/analysis';
+import { editSubtitleTextManually, LOOKS, restyleSubtitles, subtitleClips } from '@amv/subtitles';
+import { ChevronDown, ChevronUp, Eye, EyeOff, Languages, Layers3, Lock, LockOpen, Magnet, Pencil, Plus, ScanSearch, Scissors, SlidersHorizontal, Sparkles, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
-import { Button, IconButton } from '../../ui/controls';
+import { Button, Dialog, IconButton } from '../../ui/controls';
 import { nextTextStart } from './textPlacement';
 import { ignoreEditorKey, pxToUs, useEditor, usToPx, ZOOM_MAX, ZOOM_MIN } from './editorStore';
+import { applyFramingPreset, clipSceneShotPatch, clipSourceRangePatch, FRAMING_PRESETS, LOCAL_FONT_FAMILIES, translateTextClipsToPt } from './Inspector';
+import { ClipRangePreview } from './MomentsPanel';
 import { useStrip, useWaveform } from './mediaCache';
+import { getPlayer } from './Preview';
+import { TEXT_ANIMATIONS_IN, TEXT_ANIMATIONS_OUT } from './textLayer';
 import { pickLevel } from '@amv/media';
 import { selectClipsInMarquee } from './timelineSelection';
 import { QualityDialog } from './QualityDialog';
@@ -43,8 +51,17 @@ export const TRACK_H: Record<Track['kind'], number> = { video: 58, audio: 50, te
 const SNAP_PX = 8;
 const EDGE_PX = 6;
 
+const MODAL_SCENE_TAGS: { id: ShotTag; label: string }[] = [
+  { id: 'impacto', label: 'Impacto' },
+  { id: 'ação', label: 'Ação' },
+  { id: 'grito', label: 'Grito' },
+  { id: 'fala', label: 'Fala' },
+  { id: 'calma', label: 'Calma' },
+  { id: 'clarão', label: 'Clarão' },
+];
+
 type Gesture =
-  | { kind: 'move'; ids: string[]; startX: number; startY: number; originTrackIdx: number; deltaUs: number; trackShift: number; snapAt: number | null; moved: boolean }
+  | { kind: 'move'; ids: string[]; clickedId: string; hadMultiSelection: boolean; startX: number; startY: number; originTrackIdx: number; deltaUs: number; trackShift: number; snapAt: number | null; moved: boolean }
   | { kind: 'trim'; id: string; edge: 'start' | 'end'; startX: number; toUs: number; snapAt: number | null }
   | { kind: 'marquee'; startX: number; startY: number; endX: number; endY: number; initialSelection: string[]; moved: boolean }
   | { kind: 'scrub' }
@@ -159,8 +176,8 @@ const Thumbs = memo(function Thumbs({ clip, widthPx, zoom, session, height }: { 
 // --------------------------------------------------------------------------- timeline
 
 export function Timeline({ session, project }: { session: ProjectSession; project: Project }) {
-  const { zoom, setZoom, playheadUs, setPlayhead, selection, select, toggleSelect, snapping, setSnapping, assetDrag, setAssetDrag } = useEditor();
-  const toast = useApp((s) => s.toast);
+  const { zoom, setZoom, playheadUs, setPlayhead, selection, select, toggleSelect, snapping, setSnapping, assetDrag, setAssetDrag, requestInspector, editingClipId, setEditingClipId } = useEditor();
+  const { platform, toast } = useApp();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [gesture, setGesture] = useState<Gesture>(null);
   const [qualityOpen, setQualityOpen] = useState(false);
@@ -281,27 +298,42 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
     const track = tracks.find((t) => t.id === clip.trackId)!;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const offset = e.clientX - rect.left;
-    let ids = selection;
     if (e.shiftKey || e.ctrlKey || e.metaKey) {
       toggleSelect(clip.id);
       return;
     }
-    if (!selection.includes(clip.id)) {
-      ids = [clip.id];
+    const hadMultiSelection = selection.length > 1;
+    const dragBaseIds = selection.includes(clip.id) ? selection : [clip.id];
+    if (!selection.includes(clip.id)) select([clip.id]);
+    if (playheadUs < clip.timelineStartUs || playheadUs >= clipEndUs(clip)) {
+      setPlayhead(clip.timelineStartUs);
+      getPlayer(session).seek(clip.timelineStartUs);
     }
-    const groups = new Set(ids.map((id) => project.clips.find((item) => item.id === id)?.groupId).filter((id): id is string => !!id));
-    const expanded = new Set(ids);
-    for (const grouped of project.clips) if (grouped.groupId && groups.has(grouped.groupId)) expanded.add(grouped.id);
-    ids = [...expanded];
-    if (!selection.includes(clip.id) || ids.length !== selection.length) select(ids);
+    requestInspector();
     if (track.locked) return;
+    const groups = new Set(dragBaseIds.map((id) => project.clips.find((item) => item.id === id)?.groupId).filter((id): id is string => !!id));
+    const expanded = new Set(dragBaseIds);
+    for (const grouped of project.clips) if (grouped.groupId && groups.has(grouped.groupId)) expanded.add(grouped.id);
+    const ids = [...expanded];
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     if (offset <= EDGE_PX && rect.width > EDGE_PX * 3) {
       setGesture({ kind: 'trim', id: clip.id, edge: 'start', startX: e.clientX, toUs: clip.timelineStartUs, snapAt: null });
     } else if (rect.right - e.clientX <= EDGE_PX && rect.width > EDGE_PX * 3) {
       setGesture({ kind: 'trim', id: clip.id, edge: 'end', startX: e.clientX, toUs: clipEndUs(clip), snapAt: null });
     } else {
-      setGesture({ kind: 'move', ids, startX: e.clientX, startY: e.clientY, originTrackIdx: tracks.indexOf(track), deltaUs: 0, trackShift: 0, snapAt: null, moved: false });
+      setGesture({
+        kind: 'move',
+        ids,
+        clickedId: clip.id,
+        hadMultiSelection,
+        startX: e.clientX,
+        startY: e.clientY,
+        originTrackIdx: tracks.indexOf(track),
+        deltaUs: 0,
+        trackShift: 0,
+        snapAt: null,
+        moved: false,
+      });
     }
   };
 
@@ -399,7 +431,13 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
       }
       return;
     }
-    if (!g.moved) return;
+    if (!g.moved) {
+      if (g.hadMultiSelection) {
+        select([g.clickedId]);
+        requestInspector();
+      }
+      return;
+    }
     const targets = moveTargets(g);
     if (!targets) {
       toast({ tone: 'warn', title: 'Clipes só podem ir para trilhas do mesmo tipo' });
@@ -598,6 +636,8 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
   const editableSelection = project.clips.filter((clip) => selection.includes(clip.id) && tracks.some((track) => track.id === clip.trackId && !track.locked));
   const splittable = (selection.length ? editableSelection : project.clips.filter((clip) => tracks.some((track) => track.id === clip.trackId && !track.locked)))
     .filter((clip) => clip.timelineStartUs < playheadUs && clipEndUs(clip) > playheadUs);
+  const selectedClip = selection.length === 1 ? project.clips.find((clip) => clip.id === selection[0]) : undefined;
+  const editingClip = editingClipId ? project.clips.find((clip) => clip.id === editingClipId) : undefined;
 
   return (
     <>
@@ -666,6 +706,20 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
             <Sparkles size={13} /> Melhorar seleção
           </button>
         </div>
+        {selectedClip && (
+          <TimelineQuickEditBar
+            session={session}
+            project={project}
+            clip={selectedClip}
+            platform={platform}
+            run={run}
+            toast={toast}
+            onOpenModal={() => {
+              requestInspector();
+              setEditingClipId(selectedClip.id);
+            }}
+          />
+        )}
       </div>
 
       <div
@@ -783,8 +837,14 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                   tabIndex={-1}
                   aria-pressed={sel}
                   aria-label={`${c.label ?? asset?.name ?? 'clipe'} em ${formatTimecode(c.timelineStartUs, project.settings.fps)}`}
-                  title={`${c.label ?? asset?.name ?? 'Texto'}${c.groupId ? '\nElemento agrupado' : ''}${c.reason ? `\nIA: ${c.reason}` : ''}`}
+                  title={`${c.text ? c.text.text : (c.label ?? asset?.name ?? 'Texto')}${c.groupId ? '\nElemento agrupado' : ''}${c.reason ? `\nIA: ${c.reason}` : ''}\nClique para editar · clique duas vezes para modificar`}
                   onPointerDown={(e) => onClipPointerDown(e, c)}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    select([c.id]);
+                    requestInspector();
+                    if (!t.locked) setEditingClipId(c.id);
+                  }}
                   className={`editor-clip pointer-events-auto absolute overflow-hidden rounded-md border ${trackColor(t)} ${sel ? 'ring-2 ring-azure ring-offset-1 ring-offset-base shadow-lg shadow-azure/10' : ''} ${box.dragging ? 'opacity-80 shadow-lg shadow-black/50' : ''} ${missing ? 'border-dashed border-warn' : ''} ${t.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
                   style={{ left, width, top: trackTops.tops[ti]! + 2, height: h - 4, zIndex: box.dragging ? 5 : 1 }}
                 >
@@ -793,12 +853,28 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                   {keyTimes.map((atUs) => (
                     <span key={atUs} aria-hidden="true" className="pointer-events-none absolute top-1 z-[2] size-1.5 rotate-45 bg-azure shadow-sm" style={{ left: usToPx(atUs, zoom) - 3 }} />
                   ))}
-                  <span className="relative z-[1] block truncate px-1.5 pt-0.5 text-2xs font-medium text-ink drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]">
+                  <span className={`relative z-[1] block truncate px-1.5 pt-0.5 text-2xs font-medium text-ink drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)] ${sel && !t.locked && width >= 44 ? 'pr-6' : ''}`}>
                     {c.origin === 'ai' && <span className="mr-1 text-violet-strong">IA</span>}
                     {c.groupId && <span className="mr-1 text-azure">Grupo</span>}
                     {c.speed !== 1 && <span className="mr-1 text-warn">{c.speed}×</span>}
                     {c.text ? c.text.text : (c.label ?? asset?.name)}
                   </span>
+                  {sel && !t.locked && width >= 44 && (
+                    <button
+                      type="button"
+                      aria-label="Modificar clipe"
+                      title="Modificar clipe (ou clique duas vezes)"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        requestInspector();
+                        setEditingClipId(c.id);
+                      }}
+                      className="absolute top-1 right-1 z-[3] grid size-5 place-items-center rounded bg-black/70 text-ink hover:bg-violet hover:text-white"
+                    >
+                      <Pencil size={10} />
+                    </button>
+                  )}
                   {/* alças de aparar */}
                   {!t.locked && width > EDGE_PX * 3 && (
                     <>
@@ -861,6 +937,915 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
         onClose={() => setRegenerateOpen(false)}
       />
     )}
+    {editingClip && (
+      <TimelineClipModifyModal
+        session={session}
+        project={project}
+        clip={editingClip}
+        platform={platform}
+        run={run}
+        toast={toast}
+        onClose={() => setEditingClipId(null)}
+        onOpenAudioMixer={() => {
+          setEditingClipId(null);
+          setAudioMixerOpen(true);
+        }}
+      />
+    )}
     </>
+  );
+}
+
+// --------------------------------------------------------------------------- helpers de edição direta
+
+function slipSourceUs(project: Project, clip: Clip, deltaUs: number): Partial<Clip> | null {
+  const srcMax = sourceDurationUs(project, clip);
+  const span = Math.max(100_000, clip.sourceOutUs - clip.sourceInUs);
+  const maxStart = srcMax !== null ? Math.max(0, srcMax - span) : Infinity;
+  const nextIn = Math.min(maxStart, Math.max(0, clip.sourceInUs + deltaUs));
+  if (nextIn === clip.sourceInUs) return null;
+  return { sourceInUs: nextIn, sourceOutUs: nextIn + span };
+}
+
+function speedClipPatch(project: Project, clip: Clip, nextSpeed: number): Partial<Clip> {
+  const S = 1_000_000;
+  const srcMax = sourceDurationUs(project, clip);
+  const span = Math.max(100_000, clip.sourceOutUs - clip.sourceInUs);
+  const neighbors = project.clips.filter((item) => item.trackId === clip.trackId && item.id !== clip.id);
+  const nextStart = Math.min(Infinity, ...neighbors.filter((item) => item.timelineStartUs >= clipEndUs(clip)).map((item) => item.timelineStartUs));
+  const maxSlotDur = nextStart === Infinity ? Infinity : Math.max(100_000, nextStart - clip.timelineStartUs);
+  const rawDur = Math.max(100_000, Math.round(span / nextSpeed));
+  const durationUs = Math.min(maxSlotDur, rawDur);
+  const needSourceSpan = Math.max(100_000, Math.round((durationUs * nextSpeed * S) / S));
+  const sourceOutUs = Math.min(srcMax ?? Infinity, clip.sourceInUs + needSourceSpan);
+  const keyframes = { ...clip.keyframes };
+  delete keyframes.speed;
+  return { speed: nextSpeed, durationUs, sourceOutUs, keyframes };
+}
+
+function textPositionPatch(project: Project, clip: Clip, zone: 'top' | 'center' | 'bottom'): Partial<Clip> {
+  const H = project.settings.height;
+  const y = zone === 'top' ? -Math.round(H * 0.34) : zone === 'center' ? 0 : Math.round(H * 0.36);
+  const keyframes = { ...clip.keyframes };
+  delete keyframes['transform.y'];
+  return { transform: { ...clip.transform, y }, keyframes };
+}
+
+function textZoneOf(project: Project, clip: Clip): 'top' | 'center' | 'bottom' {
+  const H = project.settings.height || 1080;
+  if (clip.transform.y <= -H * 0.14) return 'top';
+  if (clip.transform.y >= H * 0.14) return 'bottom';
+  return 'center';
+}
+
+function TimelineQuickEditBar({
+  session,
+  project,
+  clip,
+  platform,
+  run,
+  toast,
+  onOpenModal,
+}: {
+  session: ProjectSession;
+  project: Project;
+  clip: Clip;
+  platform: ReturnType<typeof useApp.getState>['platform'];
+  run: (label: string, cmds: Command[]) => void;
+  toast: ReturnType<typeof useApp.getState>['toast'];
+  onOpenModal: () => void;
+}) {
+  const track = project.tracks.find((t) => t.id === clip.trackId);
+  const locked = !!track?.locked;
+  const [inlineText, setInlineText] = useState(clip.text?.text ?? '');
+  const [translating, setTranslating] = useState(false);
+
+  useEffect(() => {
+    setInlineText(clip.text?.text ?? '');
+  }, [clip.id, clip.text?.text]);
+
+  const patchClip = (label: string, patch: Partial<Clip>) => run(label, [{ type: 'clip.update', clipId: clip.id, patch }]);
+
+  const commitInlineText = () => {
+    if (!clip.text || inlineText === clip.text.text) return;
+    patchClip('Editar texto na timeline', { text: editSubtitleTextManually(clip.text, inlineText) });
+  };
+
+  const handleTranslate = async (allOnTrack: boolean) => {
+    if (!platform || translating) return;
+    setTranslating(true);
+    try {
+      const target = allOnTrack ? subtitleClips(project, clip.trackId) : [clip];
+      const r = await translateTextClipsToPt(session, target, platform, allOnTrack ? 'Traduzir trilha para PT-BR' : 'Traduzir legenda para PT-BR');
+      if (r.failed && !r.translated) toast({ tone: 'warn', title: 'Não foi possível traduzir agora' });
+      else toast({ tone: 'ok', title: `${r.translated} item(ns) traduzido(s) para PT-BR` });
+    } catch (e) {
+      toast({ tone: 'error', title: 'Erro ao traduzir', body: (e as Error).message });
+    } finally {
+      setTranslating(false);
+    }
+  };
+
+  if (clip.text) {
+    const t = clip.text;
+    const zone = textZoneOf(project, clip);
+    return (
+      <div className="flex min-h-9 flex-wrap items-center gap-1.5 border-t border-line-soft bg-raised/60 px-2 py-1 text-2xs">
+        <span className="shrink-0 rounded bg-ok/15 px-1.5 py-0.5 font-semibold text-ok">Texto · {track?.name ?? 'Legendas'}</span>
+        <input
+          type="text"
+          aria-label="Editar texto selecionado na timeline"
+          disabled={locked}
+          value={inlineText}
+          onChange={(e) => setInlineText(e.target.value)}
+          onBlur={commitInlineText}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              commitInlineText();
+              e.currentTarget.blur();
+            } else if (e.key === 'Escape') {
+              setInlineText(t.text);
+              e.currentTarget.blur();
+            }
+          }}
+          className="h-7 min-w-[180px] flex-1 rounded-control border border-line bg-base px-2 text-xs text-ink outline-none focus:border-violet disabled:opacity-50"
+        />
+        <button
+          type="button"
+          disabled={locked || !platform || translating}
+          onClick={() => void handleTranslate(false)}
+          title="Traduzir esta legenda/letra para Português (Brasil)"
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-control border border-violet/40 bg-violet/10 px-2 text-ink-soft hover:bg-violet/20 hover:text-ink disabled:opacity-50"
+        >
+          <Languages size={12} />
+          {translating ? 'Traduzindo…' : 'Traduzir PT-BR'}
+        </button>
+        <button
+          type="button"
+          disabled={locked || !platform || translating}
+          onClick={() => void handleTranslate(true)}
+          title="Traduzir de uma vez todas as legendas/letras desta trilha para Português (Brasil)"
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-control border border-line bg-base px-2 text-ink-soft hover:border-violet/50 hover:text-ink disabled:opacity-50"
+        >
+          <Languages size={12} />
+          Traduzir trilha PT-BR
+        </button>
+        <select
+          aria-label="Estilo rápido do texto"
+          disabled={locked}
+          value=""
+          onChange={(e) => {
+            const look = LOOKS.find((l) => l.id === e.target.value);
+            if (look) run(`Estilo ${look.label}`, restyleSubtitles(project, [clip.id], look.id));
+          }}
+          className="h-7 shrink-0 rounded-control border border-line bg-base px-1.5 text-2xs text-ink disabled:opacity-50"
+        >
+          <option value="">Estilo…</option>
+          {LOOKS.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+        </select>
+        <div className="flex shrink-0 items-center overflow-hidden rounded-control border border-line bg-base">
+          <button type="button" disabled={locked} onClick={() => patchClip('Diminuir fonte', { text: { ...t, size: Math.max(12, Math.round(t.size - 4)) } })} className="h-7 px-2 text-ink-soft hover:bg-raised disabled:opacity-50" title="Diminuir tamanho da fonte">A-</button>
+          <span className="tnum border-x border-line-soft px-1.5 text-muted">{Math.round(t.size)}px</span>
+          <button type="button" disabled={locked} onClick={() => patchClip('Aumentar fonte', { text: { ...t, size: Math.min(360, Math.round(t.size + 4)) } })} className="h-7 px-2 text-ink-soft hover:bg-raised disabled:opacity-50" title="Aumentar tamanho da fonte">A+</button>
+        </div>
+        <div className="flex shrink-0 items-center overflow-hidden rounded-control border border-line bg-base">
+          {([['top', 'Topo'], ['center', 'Centro'], ['bottom', 'Base']] as const).map(([z, lbl]) => (
+            <button
+              key={z}
+              type="button"
+              disabled={locked}
+              onClick={() => patchClip(`Posicionar no ${lbl.toLowerCase()}`, textPositionPatch(project, clip, z))}
+              className={`h-7 px-2 transition-colors disabled:opacity-50 ${zone === z ? 'bg-violet/20 font-semibold text-ink' : 'text-muted hover:bg-raised hover:text-ink'}`}
+            >
+              {lbl}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          disabled={locked}
+          onClick={onOpenModal}
+          className="ml-auto inline-flex h-7 shrink-0 items-center gap-1 rounded-control bg-violet px-2.5 text-2xs font-medium text-white hover:bg-violet-strong disabled:opacity-50"
+        >
+          <Pencil size={11} />
+          Modificar…
+        </button>
+      </div>
+    );
+  }
+
+  if (track?.kind === 'video') {
+    const quickFrames = ['normal', 'highlight', 'close', 'punch'] as const;
+    return (
+      <div className="flex min-h-9 flex-wrap items-center gap-1.5 border-t border-line-soft bg-raised/60 px-2 py-1 text-2xs">
+        <span className="shrink-0 rounded bg-violet/20 px-1.5 py-0.5 font-semibold text-violet-strong">Vídeo · {track.name}</span>
+        <div className="flex shrink-0 items-center overflow-hidden rounded-control border border-line bg-base" title="Deslizar trecho dentro do episódio">
+          <span className="px-1.5 text-muted">Trecho</span>
+          <button
+            type="button"
+            disabled={locked}
+            onClick={() => {
+              const p = slipSourceUs(project, clip, -500_000);
+              if (p) patchClip('Voltar 0,5s no episódio', p);
+              else toast({ tone: 'info', title: 'Já está no início do episódio' });
+            }}
+            className="h-7 border-l border-line-soft px-2 text-ink-soft hover:bg-raised disabled:opacity-50"
+          >
+            -0.5s
+          </button>
+          <button
+            type="button"
+            disabled={locked}
+            onClick={() => {
+              const p = slipSourceUs(project, clip, 500_000);
+              if (p) patchClip('Avançar 0,5s no episódio', p);
+              else toast({ tone: 'info', title: 'Já está no fim do episódio' });
+            }}
+            className="h-7 border-l border-line-soft px-2 text-ink-soft hover:bg-raised disabled:opacity-50"
+          >
+            +0.5s
+          </button>
+        </div>
+        <div className="flex shrink-0 items-center overflow-hidden rounded-control border border-line bg-base" title="Ajustar duração na timeline">
+          <span className="px-1.5 text-muted">Dur</span>
+          <button
+            type="button"
+            disabled={locked}
+            onClick={() => {
+              const targetEnd = Math.max(clip.timelineStartUs + 150_000, clipEndUs(clip) - 250_000);
+              run('Encurtar duração', trimClip(project, clip.id, 'end', targetEnd));
+            }}
+            className="h-7 border-l border-line-soft px-2 text-ink-soft hover:bg-raised disabled:opacity-50"
+          >
+            -0.25s
+          </button>
+          <button
+            type="button"
+            disabled={locked}
+            onClick={() => run('Estender duração', trimClip(project, clip.id, 'end', clipEndUs(clip) + 250_000))}
+            className="h-7 border-l border-line-soft px-2 text-ink-soft hover:bg-raised disabled:opacity-50"
+          >
+            +0.25s
+          </button>
+        </div>
+        <div className="flex shrink-0 items-center overflow-hidden rounded-control border border-line bg-base">
+          {[0.5, 0.75, 1, 1.25, 1.5, 2].map((spd) => (
+            <button
+              key={spd}
+              type="button"
+              disabled={locked}
+              onClick={() => patchClip(`Velocidade ${spd}×`, speedClipPatch(project, clip, spd))}
+              className={`h-7 px-1.5 transition-colors disabled:opacity-50 ${Math.abs(clip.speed - spd) < 0.02 ? 'bg-violet/20 font-semibold text-ink' : 'text-muted hover:bg-raised hover:text-ink'}`}
+            >
+              {spd}×
+            </button>
+          ))}
+        </div>
+        <div className="flex shrink-0 items-center overflow-hidden rounded-control border border-line bg-base">
+          {quickFrames.map((fid) => {
+            const preset = FRAMING_PRESETS.find((x) => x.id === fid)!;
+            return (
+              <button
+                key={fid}
+                type="button"
+                disabled={locked}
+                onClick={() => {
+                  const res = applyFramingPreset(clip, fid);
+                  patchClip(res.label, res.patch);
+                }}
+                className="h-7 border-r border-line-soft px-2 text-ink-soft last:border-r-0 hover:bg-raised hover:text-ink disabled:opacity-50"
+              >
+                {preset.shortLabel}
+              </button>
+            );
+          })}
+        </div>
+        <select
+          aria-label="Transição rápida de entrada"
+          disabled={locked}
+          value={clip.transitionIn?.transition ?? ''}
+          onChange={(e) => {
+            const tr = e.target.value;
+            const editorial = tr === 'match_cut' || tr === 'cut_on_action';
+            patchClip('Transição de entrada', {
+              transitionIn: tr
+                ? {
+                    transition: tr,
+                    durationUs: editorial ? 0 : clip.transitionIn?.durationUs || 400_000,
+                    params: { curve: 'linear', intensity: tr === 'flash' ? 0.8 : tr === 'whip_pan' ? 0.65 : 1, ...(tr === 'whip_pan' ? { direction: 1, blur: 8 } : {}) },
+                  }
+                : null,
+            });
+          }}
+          className="h-7 shrink-0 rounded-control border border-line bg-base px-1.5 text-2xs text-ink disabled:opacity-50"
+        >
+          <option value="">Corte seco</option>
+          {TRANSITIONS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+        </select>
+        <button
+          type="button"
+          disabled={locked}
+          onClick={onOpenModal}
+          className="ml-auto inline-flex h-7 shrink-0 items-center gap-1 rounded-control bg-violet px-2.5 text-2xs font-medium text-white hover:bg-violet-strong disabled:opacity-50"
+        >
+          <Pencil size={11} />
+          Modificar cena / Trocar trecho
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-9 flex-wrap items-center gap-1.5 border-t border-line-soft bg-raised/60 px-2 py-1 text-2xs">
+      <span className="shrink-0 rounded bg-azure/20 px-1.5 py-0.5 font-semibold text-azure">Áudio · {track?.name ?? 'Música'}</span>
+      <div className="flex shrink-0 items-center overflow-hidden rounded-control border border-line bg-base">
+        <span className="px-1.5 text-muted">Trecho</span>
+        <button
+          type="button"
+          disabled={locked}
+          onClick={() => {
+            const p = slipSourceUs(project, clip, -1_000_000);
+            if (p) patchClip('Voltar 1s na música', p);
+            else toast({ tone: 'info', title: 'Já está no início da faixa' });
+          }}
+          className="h-7 border-l border-line-soft px-2 text-ink-soft hover:bg-raised disabled:opacity-50"
+        >
+          -1s
+        </button>
+        <button
+          type="button"
+          disabled={locked}
+          onClick={() => {
+            const p = slipSourceUs(project, clip, 1_000_000);
+            if (p) patchClip('Avançar 1s na música', p);
+            else toast({ tone: 'info', title: 'Já está no fim da faixa' });
+          }}
+          className="h-7 border-l border-line-soft px-2 text-ink-soft hover:bg-raised disabled:opacity-50"
+        >
+          +1s
+        </button>
+      </div>
+      <div className="flex shrink-0 items-center overflow-hidden rounded-control border border-line bg-base">
+        <span className="px-1.5 text-muted">Vol</span>
+        {[-3, 0, 3].map((db) => (
+          <button
+            key={db}
+            type="button"
+            disabled={locked}
+            onClick={() => patchClip(`Volume ${db > 0 ? `+${db}` : db} dB`, { audio: { ...clip.audio, gainDb: db } })}
+            className={`h-7 border-l border-line-soft px-2 transition-colors disabled:opacity-50 ${Math.abs(clip.audio.gainDb - db) < 0.2 ? 'bg-azure/20 font-semibold text-ink' : 'text-muted hover:bg-raised hover:text-ink'}`}
+          >
+            {db > 0 ? `+${db}` : db} dB
+          </button>
+        ))}
+      </div>
+      <button
+        type="button"
+        disabled={locked}
+        onClick={() => patchClip('Fade in 0,5s', { audio: { ...clip.audio, fadeInUs: clip.audio.fadeInUs >= 400_000 ? 0 : 500_000 } })}
+        className={`h-7 rounded-control border px-2 disabled:opacity-50 ${clip.audio.fadeInUs >= 400_000 ? 'border-azure bg-azure/15 text-ink' : 'border-line bg-base text-muted hover:text-ink'}`}
+      >
+        Fade in 0.5s
+      </button>
+      <button
+        type="button"
+        disabled={locked}
+        onClick={() => patchClip('Fade out 0,5s', { audio: { ...clip.audio, fadeOutUs: clip.audio.fadeOutUs >= 400_000 ? 0 : 500_000 } })}
+        className={`h-7 rounded-control border px-2 disabled:opacity-50 ${clip.audio.fadeOutUs >= 400_000 ? 'border-azure bg-azure/15 text-ink' : 'border-line bg-base text-muted hover:text-ink'}`}
+      >
+        Fade out 0.5s
+      </button>
+      <button
+        type="button"
+        disabled={locked}
+        onClick={onOpenModal}
+        className="ml-auto inline-flex h-7 shrink-0 items-center gap-1 rounded-control bg-violet px-2.5 text-2xs font-medium text-white hover:bg-violet-strong disabled:opacity-50"
+      >
+        <Pencil size={11} />
+        Modificar áudio
+      </button>
+    </div>
+  );
+}
+
+function TimelineClipModifyModal({
+  session,
+  project,
+  clip,
+  platform,
+  run,
+  toast,
+  onClose,
+  onOpenAudioMixer,
+}: {
+  session: ProjectSession;
+  project: Project;
+  clip: Clip;
+  platform: ReturnType<typeof useApp.getState>['platform'];
+  run: (label: string, cmds: Command[]) => void;
+  toast: ReturnType<typeof useApp.getState>['toast'];
+  onClose: () => void;
+  onOpenAudioMixer: () => void;
+}) {
+  const S = 1_000_000;
+  const track = project.tracks.find((t) => t.id === clip.trackId);
+  const asset = clip.assetId ? project.assets.find((a) => a.id === clip.assetId) : null;
+  const [modalText, setModalText] = useState(clip.text?.text ?? '');
+  const [modalFont, setModalFont] = useState(clip.text?.font ?? 'Manrope Variable');
+  const [translating, setTranslating] = useState(false);
+  const [sceneAssetId, setSceneAssetId] = useState(clip.assetId ?? project.assets.find((a) => a.kind === 'video')?.id ?? '');
+  const [sceneTag, setSceneTag] = useState<ShotTag | null>(null);
+  const [durInput, setDurInput] = useState((clip.durationUs / S).toFixed(2));
+  const [inInput, setInInput] = useState((clip.sourceInUs / S).toFixed(2));
+  const [outInput, setOutInput] = useState((clip.sourceOutUs / S).toFixed(2));
+  const [gainInput, setGainInput] = useState(String(clip.audio.gainDb));
+  const [fadeInInput, setFadeInInput] = useState((clip.audio.fadeInUs / S).toFixed(2));
+  const [fadeOutInput, setFadeOutInput] = useState((clip.audio.fadeOutUs / S).toFixed(2));
+  const textAreaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    setModalText(clip.text?.text ?? '');
+    setModalFont(clip.text?.font ?? 'Manrope Variable');
+    setDurInput((clip.durationUs / S).toFixed(2));
+    setInInput((clip.sourceInUs / S).toFixed(2));
+    setOutInput((clip.sourceOutUs / S).toFixed(2));
+    setGainInput(String(clip.audio.gainDb));
+    setFadeInInput((clip.audio.fadeInUs / S).toFixed(2));
+    setFadeOutInput((clip.audio.fadeOutUs / S).toFixed(2));
+    if (clip.assetId) setSceneAssetId(clip.assetId);
+  }, [clip]);
+
+  useEffect(() => {
+    if (clip.text) textAreaRef.current?.focus();
+  }, [clip.id, !!clip.text]);
+
+  const patchClip = (label: string, patch: Partial<Clip>) => run(label, [{ type: 'clip.update', clipId: clip.id, patch }]);
+
+  const videoAssets = project.assets.filter((a) => a.kind === 'video');
+  const chosenSceneAsset = videoAssets.find((a) => a.id === sceneAssetId) ?? asset;
+  const candidateShots = useMemo(() => {
+    if (!chosenSceneAsset) return [];
+    const list = session.assetRuntime(chosenSceneAsset.id).episode?.shots ?? [];
+    return list
+      .filter((shot) => (!sceneTag || shot.tags.includes(sceneTag)) && shot.endS - shot.startS >= 0.35)
+      .slice(0, 60);
+  }, [chosenSceneAsset, session, sceneTag]);
+
+  if (clip.text) {
+    const t = clip.text;
+    const setT = (label: string, partial: Partial<NonNullable<Clip['text']>>) => patchClip(label, { text: { ...t, ...partial } });
+    const zone = textZoneOf(project, clip);
+    return (
+      <Dialog title={`Modificar texto · ${track?.name ?? 'Legendas'}`} width="w-[620px]" onClose={onClose}>
+        <div className="space-y-3 text-xs">
+          <div className="flex items-center justify-between gap-2">
+            <span className="tnum text-muted">
+              {formatTimecode(clip.timelineStartUs, project.settings.fps)} → {formatTimecode(clipEndUs(clip), project.settings.fps)}
+            </span>
+            <button
+              type="button"
+              disabled={!platform || translating}
+              onClick={async () => {
+                if (!platform || translating) return;
+                setTranslating(true);
+                try {
+                  const r = await translateTextClipsToPt(session, [clip], platform);
+                  if (r.failed && !r.translated) toast({ tone: 'warn', title: 'Não foi possível traduzir agora' });
+                  else if (r.translated) toast({ tone: 'ok', title: 'Traduzido para PT-BR' });
+                } catch (e) {
+                  toast({ tone: 'error', title: 'Erro ao traduzir', body: (e as Error).message });
+                } finally {
+                  setTranslating(false);
+                }
+              }}
+              className="inline-flex h-7 items-center gap-1 rounded-control border border-violet/45 bg-violet/15 px-2.5 text-xs font-medium text-ink hover:bg-violet/25 disabled:opacity-50"
+            >
+              <Languages size={13} />
+              {translating ? 'Traduzindo…' : 'Traduzir para PT-BR'}
+            </button>
+          </div>
+          <textarea
+            ref={textAreaRef}
+            autoFocus
+            value={modalText}
+            onChange={(e) => setModalText(e.target.value)}
+            onBlur={() => {
+              if (modalText !== t.text) setT('Editar texto', editSubtitleTextManually(t, modalText));
+            }}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.currentTarget.blur();
+                onClose();
+              }
+            }}
+            className="h-28 w-full resize-y rounded-control border border-line bg-base p-2.5 text-sm text-ink outline-none focus:border-violet"
+            aria-label="Editar texto completo"
+          />
+          {t.original !== undefined && (
+            <div className="rounded-control border border-line-soft bg-base/60 px-2.5 py-1.5 text-2xs text-muted">
+              <strong className="text-ink-soft">Original:</strong> {t.original}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-2.5">
+            <label className="space-y-1">
+              <span className="text-muted">Estilo visual</span>
+              <select
+                value=""
+                onChange={(e) => {
+                  const look = LOOKS.find((l) => l.id === e.target.value);
+                  if (look) run(`Estilo ${look.label}`, restyleSubtitles(project, [clip.id], look.id));
+                }}
+                className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink"
+              >
+                <option value="">Escolher estilo…</option>
+                {LOOKS.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-muted">Fonte</span>
+              <input
+                list="timeline-modal-fonts"
+                value={modalFont}
+                onChange={(e) => setModalFont(e.target.value)}
+                onBlur={() => {
+                  const next = modalFont.trim() || 'Manrope Variable';
+                  setModalFont(next);
+                  if (next !== t.font) setT('Fonte', { font: next });
+                }}
+                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink"
+              />
+              <datalist id="timeline-modal-fonts">
+                {LOCAL_FONT_FAMILIES.map((f) => <option key={f} value={f} />)}
+              </datalist>
+            </label>
+            <label className="space-y-1">
+              <span className="text-muted">Tamanho (px)</span>
+              <input
+                type="number"
+                min={10}
+                max={400}
+                step={2}
+                value={Math.round(t.size)}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v) && v >= 10) setT('Tamanho do texto', { size: v });
+                }}
+                className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink"
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-muted">Duração na timeline (s)</span>
+              <input
+                type="number"
+                min={0.15}
+                step={0.1}
+                value={durInput}
+                onChange={(e) => setDurInput(e.target.value)}
+                onBlur={() => {
+                  const v = Number(durInput.replace(',', '.'));
+                  if (Number.isFinite(v) && v >= 0.15) {
+                    run('Ajustar duração', trimClip(project, clip.id, 'end', clip.timelineStartUs + Math.round(v * S)));
+                  }
+                }}
+                className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink"
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-muted">Cor do texto</span>
+              <input type="color" value={t.color} onChange={(e) => setT('Cor do texto', { color: e.target.value })} className="h-8 w-full rounded-control border border-line bg-base" />
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="space-y-1">
+                <span className="text-muted">Contorno</span>
+                <input type="color" value={t.outlineColor ?? '#000000'} onChange={(e) => setT('Cor do contorno', { outlineColor: e.target.value, outlineWidth: t.outlineWidth || 3 })} className="h-8 w-full rounded-control border border-line bg-base" />
+              </label>
+              <label className="space-y-1">
+                <span className="text-muted">Espessura</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={20}
+                  value={t.outlineWidth}
+                  onChange={(e) => setT('Espessura do contorno', { outlineWidth: Math.max(0, Math.min(20, Number(e.target.value) || 0)) })}
+                  className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink"
+                />
+              </label>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="space-y-1">
+                <span className="text-muted">Glow (cor)</span>
+                <input type="color" value={t.glowColor} onChange={(e) => setT('Cor do glow', { glowColor: e.target.value })} className="h-8 w-full rounded-control border border-line bg-base" />
+              </label>
+              <label className="space-y-1">
+                <span className="text-muted">Glow (px)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={50}
+                  value={t.glowIntensity}
+                  onChange={(e) => setT('Intensidade do glow', { glowIntensity: Math.max(0, Math.min(50, Number(e.target.value) || 0)) })}
+                  className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink"
+                />
+              </label>
+            </div>
+            <div className="space-y-1">
+              <span className="text-muted block">Posição vertical</span>
+              <div className="grid grid-cols-3 gap-1">
+                {([['top', 'Topo'], ['center', 'Centro'], ['bottom', 'Base']] as const).map(([z, lbl]) => (
+                  <button
+                    key={z}
+                    type="button"
+                    onClick={() => patchClip(`Posicionar no ${lbl.toLowerCase()}`, textPositionPatch(project, clip, z))}
+                    className={`h-8 rounded-control border text-xs ${zone === z ? 'border-violet bg-violet/20 font-semibold text-ink' : 'border-line bg-base text-muted hover:text-ink'}`}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label className="space-y-1">
+              <span className="text-muted">Animação de entrada</span>
+              <select value={t.animationIn ?? ''} onChange={(e) => setT('Entrada', { animationIn: (e.target.value || null) as NonNullable<typeof t.animationIn> | null })} className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink">
+                {TEXT_ANIMATIONS_IN.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-muted">Animação de saída</span>
+              <select value={t.animationOut ?? ''} onChange={(e) => setT('Saída', { animationOut: (e.target.value || null) as NonNullable<typeof t.animationOut> | null })} className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink">
+                {TEXT_ANIMATIONS_OUT.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="primary" size="sm" onClick={() => { if (modalText !== t.text) setT('Editar texto', editSubtitleTextManually(t, modalText)); onClose(); }}>
+              Concluir
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+    );
+  }
+
+  if (track?.kind === 'video') {
+    const assetMaxS = asset?.probe?.durationUs ? asset.probe.durationUs / S : 3600;
+    const commitRangeInputs = () => {
+      const i = Number(inInput.replace(',', '.'));
+      const o = Number(outInput.replace(',', '.'));
+      if (!Number.isFinite(i) || !Number.isFinite(o) || o <= i + 0.1) return;
+      const res = clipSourceRangePatch(project, clip, i, o);
+      patchClip(res.label, res.patch);
+    };
+    return (
+      <Dialog title={`Modificar cena · ${clip.label ?? asset?.name ?? 'Vídeo'}`} width="w-[780px]" onClose={onClose}>
+        <div className="space-y-3 text-xs">
+          {asset?.kind === 'video' && (
+            <ClipRangePreview
+              session={session}
+              asset={asset}
+              startS={clip.sourceInUs / S}
+              endS={clip.sourceOutUs / S}
+              title={clip.label ?? asset.name}
+              onAdjustRange={(next) => {
+                const res = clipSourceRangePatch(project, clip, next.inS, next.outS);
+                patchClip(res.label, res.patch);
+              }}
+            />
+          )}
+          <div className="grid grid-cols-4 gap-2">
+            <label className="space-y-1">
+              <span className="text-muted">Início na origem (s)</span>
+              <input type="number" step={0.1} min={0} max={assetMaxS} value={inInput} onChange={(e) => setInInput(e.target.value)} onBlur={commitRangeInputs} className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink" />
+            </label>
+            <label className="space-y-1">
+              <span className="text-muted">Fim na origem (s)</span>
+              <input type="number" step={0.1} min={0.2} max={assetMaxS} value={outInput} onChange={(e) => setOutInput(e.target.value)} onBlur={commitRangeInputs} className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink" />
+            </label>
+            <label className="space-y-1">
+              <span className="text-muted">Duração na timeline (s)</span>
+              <input
+                type="number"
+                step={0.1}
+                min={0.15}
+                value={durInput}
+                onChange={(e) => setDurInput(e.target.value)}
+                onBlur={() => {
+                  const d = Number(durInput.replace(',', '.'));
+                  if (Number.isFinite(d) && d >= 0.15) run('Alterar duração', trimClip(project, clip.id, 'end', clip.timelineStartUs + Math.round(d * S)));
+                }}
+                className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink"
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-muted">Velocidade (×)</span>
+              <input
+                type="number"
+                step={0.05}
+                min={0.1}
+                max={8}
+                value={clip.speed}
+                onChange={(e) => {
+                  const spd = Number(e.target.value);
+                  if (Number.isFinite(spd) && spd >= 0.1 && spd <= 8) patchClip(`Velocidade ${spd}×`, speedClipPatch(project, clip, spd));
+                }}
+                className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink"
+              />
+            </label>
+          </div>
+          <div className="grid grid-cols-[1fr_200px] gap-2">
+            <div>
+              <span className="mb-1 block text-muted">Enquadramento &amp; movimento</span>
+              <div className="flex flex-wrap gap-1">
+                {FRAMING_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => {
+                      const res = applyFramingPreset(clip, preset.id);
+                      patchClip(res.label, res.patch);
+                    }}
+                    className={`rounded-control border px-2 py-1 text-2xs ${preset.accent ? 'border-violet/45 bg-violet/10 text-ink hover:bg-violet/20' : 'border-line bg-base text-ink-soft hover:border-violet/50 hover:text-ink'}`}
+                  >
+                    {preset.shortLabel}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label className="space-y-1">
+              <span className="text-muted">Transição de entrada</span>
+              <select
+                value={clip.transitionIn?.transition ?? ''}
+                onChange={(e) => {
+                  const tr = e.target.value;
+                  const editorial = tr === 'match_cut' || tr === 'cut_on_action';
+                  patchClip('Transição', {
+                    transitionIn: tr
+                      ? { transition: tr, durationUs: editorial ? 0 : clip.transitionIn?.durationUs || 400_000, params: { curve: 'linear', intensity: tr === 'flash' ? 0.8 : tr === 'whip_pan' ? 0.65 : 1 } }
+                      : null,
+                  });
+                }}
+                className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink"
+              >
+                <option value="">Corte seco</option>
+                {TRANSITIONS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="space-y-2 border-t border-line-soft pt-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-semibold text-ink-soft">Trocar por outra cena do episódio</span>
+              {videoAssets.length > 1 && (
+                <select value={chosenSceneAsset?.id ?? ''} onChange={(e) => setSceneAssetId(e.target.value)} className="h-7 rounded-control border border-line bg-base px-2 text-2xs text-ink">
+                  {videoAssets.map((va) => <option key={va.id} value={va.id}>{va.name}</option>)}
+                </select>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {MODAL_SCENE_TAGS.map((tg) => (
+                <button
+                  key={tg.id}
+                  type="button"
+                  onClick={() => setSceneTag(sceneTag === tg.id ? null : tg.id)}
+                  className={`rounded-full border px-2 py-0.5 text-2xs ${sceneTag === tg.id ? 'border-violet bg-violet/20 text-ink' : 'border-line text-muted hover:text-ink'}`}
+                >
+                  {tg.label}
+                </button>
+              ))}
+            </div>
+            {candidateShots.length === 0 ? (
+              <p className="rounded border border-line-soft bg-base/60 px-3 py-2 text-2xs text-muted">
+                Nenhuma cena encontrada com esse filtro ou análise ainda em andamento.
+              </p>
+            ) : (
+              <ul className="max-h-48 space-y-1 overflow-y-auto pr-1">
+                {candidateShots.map((shot) => (
+                  <li key={`${chosenSceneAsset?.id}-${shot.startS}`} className="flex items-center justify-between gap-2 rounded-control border border-line-soft bg-base/70 px-2.5 py-1.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="tnum font-semibold text-ink">
+                          {formatTimecode(Math.round(shot.startS * S), project.settings.fps)} → {formatTimecode(Math.round(shot.endS * S), project.settings.fps)}
+                        </span>
+                        <span className="tnum text-2xs text-faint">({(shot.endS - shot.startS).toFixed(1)}s)</span>
+                        {shot.tags.length > 0 && <span className="truncate text-2xs text-violet-strong">{shot.tags.slice(0, 3).join(' · ')}</span>}
+                      </div>
+                      {shot.line && <p className="truncate text-2xs text-muted">"{shot.line}"</p>}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        if (!chosenSceneAsset) return;
+                        const p = clipSceneShotPatch(project, clip, shot);
+                        patchClip('Trocar cena na timeline', chosenSceneAsset.id !== clip.assetId ? { ...p, assetId: chosenSceneAsset.id } : p);
+                      }}
+                    >
+                      Usar esta cena
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </Dialog>
+    );
+  }
+
+  return (
+    <Dialog title={`Modificar áudio · ${asset?.name ?? clip.label ?? 'Música'}`} width="w-[460px]" onClose={onClose}>
+      <div className="space-y-3 text-xs">
+        <div className="grid grid-cols-2 gap-2.5">
+          <label className="space-y-1">
+            <span className="text-muted">Entrada na origem (s)</span>
+            <input
+              type="number"
+              step={0.5}
+              min={0}
+              value={inInput}
+              onChange={(e) => setInInput(e.target.value)}
+              onBlur={() => {
+                const v = Number(inInput.replace(',', '.'));
+                if (Number.isFinite(v) && v >= 0) {
+                  const delta = Math.round(v * S) - clip.sourceInUs;
+                  const p = slipSourceUs(project, clip, delta);
+                  if (p) patchClip('Alterar ponto da música', p);
+                }
+              }}
+              className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted">Volume (dB)</span>
+            <input
+              type="number"
+              step={1}
+              min={-60}
+              max={12}
+              value={gainInput}
+              onChange={(e) => setGainInput(e.target.value)}
+              onBlur={() => {
+                const v = Number(gainInput.replace(',', '.'));
+                if (Number.isFinite(v)) patchClip('Volume', { audio: { ...clip.audio, gainDb: Math.max(-60, Math.min(12, v)) } });
+              }}
+              className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted">Fade in (s)</span>
+            <input
+              type="number"
+              step={0.1}
+              min={0}
+              max={clip.durationUs / S}
+              value={fadeInInput}
+              onChange={(e) => setFadeInInput(e.target.value)}
+              onBlur={() => {
+                const v = Number(fadeInInput.replace(',', '.'));
+                if (Number.isFinite(v) && v >= 0) patchClip('Fade in', { audio: { ...clip.audio, fadeInUs: Math.round(v * S) } });
+              }}
+              className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted">Fade out (s)</span>
+            <input
+              type="number"
+              step={0.1}
+              min={0}
+              max={clip.durationUs / S}
+              value={fadeOutInput}
+              onChange={(e) => setFadeOutInput(e.target.value)}
+              onBlur={() => {
+                const v = Number(fadeOutInput.replace(',', '.'));
+                if (Number.isFinite(v) && v >= 0) patchClip('Fade out', { audio: { ...clip.audio, fadeOutUs: Math.round(v * S) } });
+              }}
+              className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs text-ink"
+            />
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {[-5, -1, 1, 5].map((sec) => (
+            <button
+              key={sec}
+              type="button"
+              onClick={() => {
+                const p = slipSourceUs(project, clip, sec * S);
+                if (p) patchClip(`Deslizar ${sec > 0 ? `+${sec}` : sec}s`, p);
+                else toast({ tone: 'info', title: 'Limite do arquivo atingido' });
+              }}
+              className="h-7 rounded-control border border-line bg-base px-2 text-ink-soft hover:bg-raised hover:text-ink"
+            >
+              Trecho {sec > 0 ? `+${sec}` : sec}s
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center justify-between pt-1">
+          <Button variant="secondary" size="sm" icon={<SlidersHorizontal size={13} />} onClick={onOpenAudioMixer}>
+            Abrir mixer completo
+          </Button>
+          <Button variant="primary" size="sm" onClick={onClose}>Fechar</Button>
+        </div>
+      </div>
+    </Dialog>
   );
 }

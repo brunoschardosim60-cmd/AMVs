@@ -1,6 +1,6 @@
 import { decodeSubtitleBytes, parseSubtitles, pickAudioStreamByLanguage, toSrt } from '@amv/analysis';
 import { clipEndUs, type Clip } from '@amv/project';
-import { alignUntimedLyrics, alignUntimedLyricsWithFallback, applyTranslation, cuesForClip, editSubtitleTextManually, langLabel, LOOKS, originalText, placeCues, promoteAlignedCuesForTypography, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
+import { alignUntimedLyrics, alignUntimedLyricsWithFallback, applyTranslation, cuesForClip, editSubtitleTextManually, langLabel, LOOKS, lookText, originalText, placeCues, promoteAlignedCuesForTypography, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
 import { AlertTriangle, Download, FileText, Film, Languages, Mic, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ProjectSession } from '../../core/session';
@@ -665,6 +665,7 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
               <option key={l.id} value={l.id}>{l.label}</option>
             ))}
           </select>
+          <TextLookSample look={look} sample="Agora vai!" compact />
         </div>
         {clips.length > 0 && (
           <div className="space-y-1">
@@ -792,5 +793,114 @@ function SubRow({ index, clip, selected, onPick, onText, onDelete }: { index: nu
         }}
       />
     </li>
+  );
+}
+
+const DISPLAY_FONT_BY_LOOK: Partial<Record<SubtitleLook, string>> = {
+  'anime-impact': 'Impact, "Arial Black", sans-serif',
+  'anime-manga': 'Impact, "Arial Black", sans-serif',
+  'anime-neon': '"Trebuchet MS", "Segoe UI", sans-serif',
+  'anime-gold-epic': 'Cinzel, Georgia, serif',
+};
+
+const GENERATOR_GLOW_BY_LOOK: Partial<Record<SubtitleLook, { glowColor: string; glowIntensity: number; highlightColor?: string; useGradient?: boolean }>> = {
+  'anime-impact': { glowColor: '#ff5364', glowIntensity: 10, highlightColor: '#ff5364' },
+  'anime-neon': { glowColor: '#00d4ff', glowIntensity: 14, highlightColor: '#ff4d9d', useGradient: true },
+  'anime-gold-epic': { glowColor: '#f59e0b', glowIntensity: 12, highlightColor: '#fff0a6', useGradient: true },
+  'anime-manga': { glowColor: '#000000', glowIntensity: 0, highlightColor: '#ffe047' },
+};
+
+/** Miniatura CSS fiel de um estilo tipográfico (fonte, contorno, glow, gradiente e palavra ativa). */
+export function TextLookSample({
+  look,
+  sample,
+  compact = false,
+  fontSizePx,
+}: {
+  look: SubtitleLook;
+  sample: string;
+  compact?: boolean;
+  fontSizePx?: number;
+}) {
+  const { text: spec } = lookText(look, 1080, sample);
+  const tuned = GENERATOR_GLOW_BY_LOOK[look];
+  const fontFamily = DISPLAY_FONT_BY_LOOK[look] ?? (spec.font === 'Manrope Variable' ? 'Manrope, "Segoe UI", sans-serif' : spec.font);
+  const glowColor = tuned?.glowColor ?? spec.glowColor;
+  const glowIntensity = tuned?.glowIntensity ?? spec.glowIntensity;
+  const highlightColor = tuned?.highlightColor ?? spec.highlightColor ?? '#ffd166';
+  const useGradient = tuned?.useGradient ?? spec.fillStyle === 'linear-gradient';
+  const outlineColor = spec.outlineColor ?? '#000000';
+  const glowShadow = glowIntensity > 0 ? `, 0 0 ${Math.max(6, Math.round(glowIntensity * 1.1))}px ${glowColor}` : '';
+  const shadowStack = `0 2px 3px ${outlineColor}, -1px -1px 0 ${outlineColor}, 1px -1px 0 ${outlineColor}, -1px 1px 0 ${outlineColor}, 1px 1px 0 ${outlineColor}${glowShadow}`;
+  const tokens = spec.text.trim().split(/\s+/).filter(Boolean);
+  const highlightIdx = tokens.length >= 2 ? tokens.length - 1 : -1;
+  const resolvedSize = fontSizePx ?? (compact ? 11 : Math.min(24, Math.max(14, Math.round(spec.size * 0.22))));
+
+  const content = (
+    <span
+      className="inline-flex flex-wrap items-baseline justify-center gap-x-1 leading-tight"
+      style={{
+        fontFamily,
+        fontWeight: spec.weight ?? 700,
+        fontSize: `${resolvedSize}px`,
+        letterSpacing: `${Math.min(2, spec.letterSpacing ?? 0)}px`,
+        WebkitTextStroke: spec.outlineWidth > 0 ? `0.8px ${outlineColor}` : undefined,
+        textShadow: shadowStack,
+      }}
+    >
+      {tokens.map((word, idx) => {
+        const isActive = !compact && idx === highlightIdx;
+        if (isActive) {
+          return (
+            <span
+              key={`${word}-${idx}`}
+              style={{
+                color: highlightColor,
+                transform: 'scale(1.08)',
+                display: 'inline-block',
+              }}
+            >
+              {word}
+            </span>
+          );
+        }
+        return (
+          <span
+            key={`${word}-${idx}`}
+            style={
+              useGradient
+                ? {
+                    backgroundImage: `linear-gradient(180deg, ${spec.gradientStartColor}, ${spec.gradientEndColor})`,
+                    WebkitBackgroundClip: 'text',
+                    backgroundClip: 'text',
+                    WebkitTextFillColor: 'transparent',
+                  }
+                : { color: spec.color }
+            }
+          >
+            {word}
+          </span>
+        );
+      })}
+    </span>
+  );
+
+  if (compact) {
+    return (
+      <span
+        className={`inline-flex shrink-0 items-center justify-center rounded border border-line-soft px-2 py-0.5 ${spec.background === 'box' ? 'bg-black/90' : 'bg-[#090b10]'}`}
+        title={`Prévia visual: ${spec.text}`}
+      >
+        {content}
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className={`inline-flex max-w-full items-center justify-center rounded px-2.5 py-1 ${spec.background === 'box' ? 'border border-white/20 bg-black/85' : ''}`}
+    >
+      {content}
+    </span>
   );
 }
