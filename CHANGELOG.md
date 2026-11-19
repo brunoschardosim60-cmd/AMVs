@@ -1,5 +1,15 @@
 # Novidades
 
+## 0.6.26
+
+**Letras sincronizadas de verdade, falas visíveis, filtro estrito de personagem/luta, tipografia anime e recortes cinematográficos.**
+
+- **Sincronização de letras corrigida:** desliga o filtro VAD do Whisper ao transcrever vocais cantados (com fallback automático sem VAD quando vazio), tolera pequenas variações de transcrição em música cantada, importa diretamente letras coladas com tempos (.LRC/.SRT/.VTT) e sincroniza automaticamente letras digitadas ao clicar em Gerar AMV.
+- **Falas dos personagens preservadas:** corrige o bloqueio que escondia legendas em português/inglês em animes com áudio original japonês, encaixa falas mesmo em músicas energéticas ou sem drop e evita retranscrever episódios que já têm legendas embutidas.
+- **Respeito rigoroso a luta e personagem escolhidos:** falas e preenchimentos de fallback nunca mais misturam cenas ou falas de outra luta nem de outro personagem quando você escolhe uma luta específica ou filtra por personagem.
+- **Tipografia Anime e recortes rápidos:** 5 novos estilos de tipografia (`Anime · diálogo`, `Anime · impacto`, `Anime · neon`, `Anime · mangá`, `Anime · ouro épico`) disponíveis na geração, no Inspetor e na aba Legendas; presets de 1 clique no Inspetor (`Destaque 1,16×`, `Close 1,32×`, `Cinemascope`, `Painel Mangá`, `Punch no corte` e `Zoom dramático`) e movimento de câmera suave em planos longos e falas.
+- **Motor de montagem e editor evoluídos:** pontuação por continuidade/contraste de paleta de cor, encaixe cena×slot, respiro narrativo e anti-monotonia; sugestão de cenas por letra/clima/quadros via IA configurada; ideias de música (YouTube/Spotify); comparador A/B de trecho; prévia Proxy/Original com liberação de GPU/áudio; avaliador audiovisual com início atrasado, encerramento abrupto (com correção 1-clique) e score por dimensão.
+
 ## 0.6.25
 
 **Detecta travamento da forma de onda mesmo quando o FFmpeg continua enviando pequenos blocos de dados.**
