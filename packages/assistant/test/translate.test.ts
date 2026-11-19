@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PRESETS, parseTranslationArray, translateLines, type FetchLike } from '../src/index.js';
+import { PRESETS, normalizeTargetLangCode, parseTranslationArray, translateLines, translateLinesFree, translateLinesWithFallback, type FetchLike } from '../src/index.js';
 
 const cfg = { ...PRESETS.find((p) => p.id === 'ollama')! };
 
@@ -80,5 +80,41 @@ describe('tradução de legendas', () => {
     expect(parseTranslationArray('{"a":1}', 1)).toBeNull();
     expect(parseTranslationArray('[{"x":1}]', 1)).toBeNull();
     expect(parseTranslationArray('sem json', 1)).toBeNull();
+  });
+
+  it('normalizeTargetLangCode e tradução gratuita sem chave', async () => {
+    expect(normalizeTargetLangCode('Português (Brasil)')).toBe('pt');
+    expect(normalizeTargetLangCode('inglês')).toBe('en');
+    expect(normalizeTargetLangCode('japonês')).toBe('ja');
+
+    const seenUrls: string[] = [];
+    const gtxFetch: FetchLike = async (url) => {
+      seenUrls.push(url);
+      const q = new URL(url).searchParams.get('q') ?? '';
+      const mapped = q
+        .split('\n')
+        .map((line) => `PT:${line}`)
+        .join('\n');
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify([[[mapped, q]]]),
+      };
+    };
+
+    const free = await translateLinesFree(gtxFetch, ['Puchikamozā', 'Never surrender'], { target: 'português brasileiro', source: 'ja' });
+    expect(free.failed).toBe(0);
+    expect(free.translations).toEqual(['PT:Puchikamozā', 'PT:Never surrender']);
+    expect(seenUrls[0]).toContain('sl=ja');
+    expect(seenUrls[0]).toContain('tl=pt');
+
+    // fallback quando provedor configurado falha ou retorna null parcial
+    const partialFetch: FetchLike = async (url, init) => {
+      if (url.includes('translate.googleapis.com')) return gtxFetch(url, init);
+      return { ok: false, status: 500, text: async () => 'erro' };
+    };
+    const fb = await translateLinesWithFallback(cfg, null, partialFetch, ['Hello'], { target: 'pt-BR' });
+    expect(fb.failed).toBe(0);
+    expect(fb.translations).toEqual(['PT:Hello']);
   });
 });

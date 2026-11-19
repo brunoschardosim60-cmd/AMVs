@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Callable
+import inspect
 
 MODEL_SIZES = {"tiny", "base", "small", "medium", "large-v3"}
 _models: dict[str, Any] = {}
@@ -50,9 +51,27 @@ def transcribe(
             "vad_filter": use_vad,
             "word_timestamps": True,
         }
-        if not use_vad:
+        if use_vad:
+            try:
+                sig = inspect.signature(model.transcribe)
+                if "vad_parameters" in sig.parameters:
+                    opts["vad_parameters"] = {
+                        "threshold": 0.28,
+                        "min_speech_duration_ms": 180,
+                        "min_silence_duration_ms": 350,
+                        "speech_pad_ms": 250,
+                    }
+            except (TypeError, ValueError):
+                pass
+        else:
             opts["condition_on_previous_text"] = False
-        segments, info = model.transcribe(str(media), **opts)
+        try:
+            segments, info = model.transcribe(str(media), **opts)
+        except TypeError:
+            if "vad_parameters" not in opts:
+                raise
+            opts.pop("vad_parameters", None)
+            segments, info = model.transcribe(str(media), **opts)
         result: list[dict[str, Any]] = []
         duration = max(0.0, float(getattr(info, "duration", 0.0)))
         on_progress(0.0, duration)
@@ -82,10 +101,13 @@ def transcribe(
         return result, info, duration
 
     result, info, duration = _run_pass(vad_filter)
-    # Silero VAD frequentemente descarta vocais cantados ou falas com trilha alta;
-    # se o passe com VAD voltar vazio, repete automaticamente sem filtro VAD.
-    if vad_filter and not result and not cancelled():
-        result, info, duration = _run_pass(False)
+    # Silero VAD frequentemente descarta vocais cantados ou falas de anime com trilha alta;
+    # se o passe com VAD voltar vazio ou muito esparso em vídeos longos, repete sem filtro VAD.
+    sparse_vad = duration >= 45.0 and len(result) < max(3, int(duration / 60))
+    if vad_filter and not cancelled() and (not result or sparse_vad):
+        no_vad_result, no_vad_info, no_vad_duration = _run_pass(False)
+        if len(no_vad_result) > len(result):
+            result, info, duration = no_vad_result, no_vad_info, no_vad_duration
 
     return {
         "language": getattr(info, "language", None),

@@ -952,11 +952,12 @@ function addCaptionPhrases(
   reason: string,
   impact = 0,
   translations?: SubtitleTranslations | string | null,
+  preset: LyricTypographyStyle | 'dialogue-dramatic' = 'dialogue-dramatic',
 ): void {
   if (!text.trim() || durationS <= 0) return;
   commands.push({
     type: 'clip.add',
-    clip: textClip(trackId, startS, durationS, text, height, 'line', reason, false, impact, undefined, 'dialogue-dramatic', translations),
+    clip: textClip(trackId, startS, durationS, text, height, 'line', reason, false, impact, undefined, preset, translations),
   });
 }
 
@@ -1121,7 +1122,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       }
       return n ? sum / n : 1;
     };
-    const free = (a: number, b: number) => blocks.every((x) => b <= x.from - VOICE_GAP_S || a >= x.to + VOICE_GAP_S) && (dropT === null || b <= dropT - 0.5 || a >= dropT + 2.5);
+    const free = (a: number, b: number) => blocks.every((x) => b <= x.from - VOICE_GAP_S || a >= x.to + VOICE_GAP_S) && (dropT === null || b <= dropT - 0.5 || a >= dropT + 1.5);
     const limit = blocks[0] ? blocks[0].atS : D;
     const downs = m.downbeats.map((d) => d + beatOffsetS - range[0]).filter((t) => t >= 1.5 && t <= D - 3);
     const fallbackGrid = downs.length >= 2 ? downs : Array.from({ length: Math.max(1, Math.floor((D - 4.5) / 2)) }, (_, idx) => 1.5 + idx * 2);
@@ -1133,11 +1134,10 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const validSlots = fallbackGrid.filter((t) => t + len <= limit - VOICE_GAP_S && free(t, t + len));
       if (!validSlots.length) continue;
       const calmFits = validSlots.filter((t) => quiet(t, t + len) < 0.6).sort((a, b) => Math.abs(a - ideal) - Math.abs(b - ideal));
-      // Se a música for muito energética e não houver trecho < 0.6, ainda encaixa no ponto mais calmo disponível
-      // quando o usuário pediu falas mas nenhuma fala pré-drop entrou (ex.: música sem drop).
-      const pickedAt = calmFits[0] ?? (blocks.length === 0
-        ? [...validSlots].sort((a, b) => quiet(a, a + len) - quiet(b, b + len) || Math.abs(a - ideal) - Math.abs(b - ideal))[0]
-        : undefined);
+      // Se a música for muito energética e não houver trecho < 0.6, encaixa no ponto mais calmo disponível
+      // para não ignorar o número de falas pedido pelo usuário.
+      const pickedAt = calmFits[0]
+        ?? [...validSlots].sort((a, b) => quiet(a, a + len) - quiet(b, b + len) || Math.abs(a - ideal) - Math.abs(b - ideal))[0];
       if (pickedAt === undefined) continue;
       blocks.push({ ep, s: sp, atS: pickedAt, len, from: pickedAt, to: pickedAt + len, preDrop: false });
       placed++;
@@ -1189,7 +1189,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, t, len + 0.35, s.startS, reason, { effects: opts.useEffects ? [...gradeFx(style.grade)] : [] }) });
       cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: voiceGainDb(2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
       const subtitleTranslations = speechTranslation(ep, s, opts);
-      if (opts.showText && text && sourceText) addCaptionPhrases(cmds, text.id, t, len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations);
+      const speechPreset = opts.lyricStyle && opts.lyricStyle !== 'lyrics-cinematic' ? opts.lyricStyle : 'dialogue-dramatic';
+      if (opts.showText && text && sourceText) addCaptionPhrases(cmds, text.id, t, len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset);
       used.add(`${ep.assetId}@${s.startS}`);
       clipsMade++;
       t += len + 0.35;
@@ -2053,7 +2054,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     }
     cmds.push({ type: 'clip.add', clip: voiceClip });
     cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: voiceGainDb(b.preDrop ? 3 : 2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
-    if (opts.showText && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations);
+    const speechPreset = opts.lyricStyle && opts.lyricStyle !== 'lyrics-cinematic' ? opts.lyricStyle : 'dialogue-dramatic';
+    if (opts.showText && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset);
     clipsMade++;
   }
 

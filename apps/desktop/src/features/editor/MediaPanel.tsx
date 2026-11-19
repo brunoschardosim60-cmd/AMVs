@@ -1,5 +1,5 @@
 import { isSfxAsset, type Asset } from '@amv/project';
-import { AudioLines, Film, Image as ImageIcon, LibraryBig, Plus } from 'lucide-react';
+import { AudioLines, Film, Image as ImageIcon, LibraryBig, Play, Plus, Volume2, X } from 'lucide-react';
 import { useEffect, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { duration } from '../../format';
@@ -18,6 +18,16 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
   const select = useEditor((s) => s.select);
   const assets = session.project.assets.filter((a) => !isSfxAsset(a));
   const [tab, setTab] = useState<'media' | 'scenes' | 'lines' | 'subs'>('media');
+  const [previewAssetId, setPreviewAssetId] = useState<string | null>(null);
+  const previewAsset = previewAssetId ? assets.find((a) => a.id === previewAssetId && a.status !== 'missing') : undefined;
+  const previewPath = previewAsset
+    ? previewAsset.kind === 'video'
+      ? (session.assetRuntime(previewAsset.id).artifacts?.proxyPath ?? previewAsset.path)
+      : previewAsset.kind === 'audio'
+        ? (session.assetRuntime(previewAsset.id).artifacts?.audioProxyPath ?? previewAsset.path)
+        : previewAsset.path
+    : null;
+  const previewUrl = previewPath && platform ? platform.fileUrl(previewPath) : null;
 
   const startDrag = (e: RPointerEvent, a: Asset) => {
     if (e.button !== 0) return;
@@ -79,39 +89,97 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
           <p className="mt-1 text-2xs leading-relaxed text-muted">Importe episódios e músicas. Depois, arraste um item para a timeline.</p>
         </div>
       ) : (
-        <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-          {assets.map((a) => {
-            const Icon = ICON[a.kind];
-            const poster = session.assetRuntime(a.id).artifacts?.posterPath;
-            const sel = a.id === selectedAssetId;
-            return (
-              <li key={a.id}>
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onPointerDown={(e) => startDrag(e, a)}
-                  onKeyDown={(e) => e.key === 'Enter' && selectAsset(a.id)}
-                  title={a.status === 'missing' ? `${a.name} — arquivo não encontrado` : `${a.name} — arraste para a timeline`}
-                  className={`group flex cursor-grab items-center gap-2 rounded-lg border px-1.5 py-1.5 transition-colors active:cursor-grabbing ${sel ? 'border-violet/35 bg-violet/10' : 'border-transparent hover:border-line-soft hover:bg-raised/70'} ${a.status === 'missing' ? 'opacity-55' : ''}`}
+        <div className="flex min-h-0 flex-1 flex-col">
+          {previewAsset && previewUrl && (
+            <div className="mx-2 mb-2 shrink-0 space-y-1.5 rounded-md border border-line-soft bg-base p-2">
+              <div className="flex items-center gap-1">
+                <Volume2 size={12} className="shrink-0 text-violet-strong" />
+                <span className="min-w-0 flex-1 truncate text-2xs font-medium text-ink-soft" title={previewAsset.name}>
+                  {previewAsset.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPreviewAssetId(null)}
+                  title="Fechar prévia"
+                  className="rounded p-0.5 text-muted hover:bg-raised hover:text-ink"
                 >
-                  {poster && a.status !== 'missing' ? (
-                    <img src={platform?.fileUrl(poster)} alt="" draggable={false} className="h-9 w-14 shrink-0 rounded-md bg-base object-cover" />
-                  ) : (
-                    <span className={`grid h-9 w-14 shrink-0 place-items-center rounded-md ${a.kind === 'audio' ? 'bg-azure-deep/70 text-azure' : 'bg-raised text-faint'}`}>
-                      <Icon size={14} />
+                  <X size={12} />
+                </button>
+              </div>
+              {previewAsset.kind === 'video' ? (
+                <video
+                  key={previewUrl}
+                  src={previewUrl}
+                  controls
+                  autoPlay
+                  playsInline
+                  preload="metadata"
+                  className="aspect-video w-full rounded bg-black object-contain"
+                />
+              ) : previewAsset.kind === 'audio' ? (
+                <audio
+                  key={previewUrl}
+                  src={previewUrl}
+                  controls
+                  autoPlay
+                  preload="metadata"
+                  className="h-9 w-full"
+                />
+              ) : (
+                <img src={previewUrl} alt={previewAsset.name} className="aspect-video w-full rounded bg-black object-contain" />
+              )}
+            </div>
+          )}
+          <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+            {assets.map((a) => {
+              const Icon = ICON[a.kind];
+              const poster = session.assetRuntime(a.id).artifacts?.posterPath;
+              const sel = a.id === selectedAssetId;
+              const isPreview = a.id === previewAssetId;
+              return (
+                <li key={a.id}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onPointerDown={(e) => startDrag(e, a)}
+                    onKeyDown={(e) => e.key === 'Enter' && selectAsset(a.id)}
+                    title={a.status === 'missing' ? `${a.name} — arquivo não encontrado` : `${a.name} — arraste para a timeline`}
+                    className={`group flex cursor-grab items-center gap-2 rounded-lg border px-1.5 py-1.5 transition-colors active:cursor-grabbing ${sel ? 'border-violet/35 bg-violet/10' : 'border-transparent hover:border-line-soft hover:bg-raised/70'} ${a.status === 'missing' ? 'opacity-55' : ''}`}
+                  >
+                    {poster && a.status !== 'missing' ? (
+                      <img src={platform?.fileUrl(poster)} alt="" draggable={false} className="h-9 w-14 shrink-0 rounded-md bg-base object-cover" />
+                    ) : (
+                      <span className={`grid h-9 w-14 shrink-0 place-items-center rounded-md ${a.kind === 'audio' ? 'bg-azure-deep/70 text-azure' : 'bg-raised text-faint'}`}>
+                        <Icon size={14} />
+                      </span>
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[11px] font-medium text-ink" title={a.name}>{a.name}</span>
+                      <span className={`tnum block truncate text-[10px] ${a.status === 'missing' ? 'text-warn' : a.status === 'processing' ? 'text-azure' : 'text-muted'}`}>
+                        {a.status === 'processing' ? 'Processando mídia…' : a.status === 'missing' ? 'Arquivo não encontrado' : a.kind === 'image' ? 'Imagem' : a.probe ? duration(a.probe.durationUs) : 'Aguardando análise'}
+                      </span>
                     </span>
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[11px] font-medium text-ink" title={a.name}>{a.name}</span>
-                    <span className={`tnum block truncate text-[10px] ${a.status === 'missing' ? 'text-warn' : a.status === 'processing' ? 'text-azure' : 'text-muted'}`}>
-                      {a.status === 'processing' ? 'Processando mídia…' : a.status === 'missing' ? 'Arquivo não encontrado' : a.kind === 'image' ? 'Imagem' : a.probe ? duration(a.probe.durationUs) : 'Aguardando análise'}
-                    </span>
-                  </span>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                    {a.status !== 'missing' && (a.kind === 'video' || a.kind === 'audio') && (
+                      <button
+                        type="button"
+                        aria-label={`Ouvir e assistir prévia de ${a.name}`}
+                        title={a.kind === 'audio' ? 'Escutar música' : 'Assistir e ouvir prévia'}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPreviewAssetId((id) => (id === a.id ? null : a.id));
+                        }}
+                        className={`grid size-6 shrink-0 place-items-center rounded border text-muted hover:border-violet hover:text-ink ${isPreview ? 'border-violet bg-violet/15 text-ink' : 'border-transparent bg-base/70'}`}
+                      >
+                        <Play size={11} />
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       )}
     </aside>
   );

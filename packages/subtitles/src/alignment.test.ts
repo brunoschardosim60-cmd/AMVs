@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { alignUntimedLyrics } from './index';
-import { restyleSubtitles, subtitleClip } from './index';
+import { alignUntimedLyrics, alignUntimedLyricsWithFallback, promoteAlignedCuesForTypography, restyleSubtitles, subtitleClip } from './index';
 import { applyCommand, createProject } from '@amv/project';
 
 describe('local lyric alignment', () => {
@@ -38,5 +37,45 @@ describe('local lyric alignment', () => {
     expect(result.matched).toBe(1);
     expect(result.unmatched).toBe(1);
     expect(result.cues[0]).toMatchObject({ startS: 1, endS: 2.8, text: 'Never shining tonight' });
+  });
+  it('alinha letra colada em PT usando versão traduzida para o idioma da música e promove wordTimings', () => {
+    const result = alignUntimedLyricsWithFallback(
+      'Nunca vou parar\nBrilhando sob a lua',
+      [
+        { start: 2, end: 2.4, text: 'Never' },
+        { start: 2.4, end: 2.8, text: 'gonna' },
+        { start: 2.8, end: 3.4, text: 'stop' },
+        { start: 4.0, end: 4.5, text: 'Shining' },
+        { start: 4.5, end: 4.9, text: 'under' },
+        { start: 4.9, end: 5.5, text: 'moonlight' },
+      ],
+      [
+        { start: 2, end: 3.4, text: 'Never gonna stop' },
+        { start: 4.0, end: 5.5, text: 'Shining under moonlight' },
+      ],
+      'Never gonna stop\nShining under moonlight',
+    );
+    expect(result.matched).toBe(2);
+    expect(result.cues.map((c) => c.text)).toEqual(['Nunca vou parar', 'Brilhando sob a lua']);
+    expect(result.cues[0]!.startS).toBe(2);
+    expect(result.cues[0]!.endS).toBe(3.4);
+    expect(result.cues[0]!.words?.map((w) => w.text)).toEqual(['Nunca', 'vou', 'parar']);
+    expect(result.cues[0]!.words?.every((w) => w.source === 'lrc' && !w.uncertain && (w.confidence ?? 0) >= 0.9)).toBe(true);
+  });
+  it('distribui versos nos segmentos vocais quando o reconhecimento direto não alcança metade', () => {
+    const result = alignUntimedLyricsWithFallback(
+      'Primeiro verso livre\nSegundo verso livre',
+      [{ start: 10, end: 11, text: 'la' }],
+      [
+        { start: 10, end: 13, text: 'vocais um' },
+        { start: 15, end: 18, text: 'vocais dois' },
+      ],
+    );
+    expect(result.matched).toBe(2);
+    expect(result.cues[0]).toMatchObject({ startS: 10, endS: 13, text: 'Primeiro verso livre' });
+    expect(result.cues[1]).toMatchObject({ startS: 15, endS: 18, text: 'Segundo verso livre' });
+    const promoted = promoteAlignedCuesForTypography(result.cues);
+    expect(promoted[0]!.words).toHaveLength(3);
+    expect(promoted[0]!.words![0]!.source).toBe('lrc');
   });
 });

@@ -105,3 +105,29 @@ def test_transcribe_retries_without_vad_when_vad_returns_empty(tmp_path):
     assert calls[1]["condition_on_previous_text"] is False
     assert len(result["segments"]) == 1
     assert result["segments"][0]["text"] == "Rise"
+
+
+def test_transcribe_retries_without_vad_when_vad_is_sparse_on_long_audio(tmp_path):
+    media = tmp_path / "episode.wav"
+    media.touch()
+    calls = []
+
+    class SparseVadModel:
+        def transcribe(self, path, vad_parameters=None, **options):
+            calls.append((options, vad_parameters))
+            if options.get("vad_filter", True):
+                return [SimpleNamespace(start=16.7, end=18.2, text=" One line", words=[])], SimpleNamespace(language="ja", language_probability=0.9, duration=300.0)
+            return [
+                SimpleNamespace(start=16.7, end=18.2, text=" One line", words=[]),
+                SimpleNamespace(start=25.0, end=27.0, text=" Two", words=[]),
+                SimpleNamespace(start=40.0, end=42.5, text=" Three", words=[]),
+                SimpleNamespace(start=65.0, end=68.0, text=" Four", words=[]),
+                SimpleNamespace(start=90.0, end=93.0, text=" Five", words=[]),
+            ], SimpleNamespace(language="ja", language_probability=0.9, duration=300.0)
+
+    result = transcribe(str(media), "small", model_loader=lambda _: SparseVadModel())
+    assert len(calls) == 2
+    assert calls[0][0]["vad_filter"] is True
+    assert calls[0][1] is not None and calls[0][1]["threshold"] == 0.28
+    assert calls[1][0]["vad_filter"] is False
+    assert len(result["segments"]) == 5

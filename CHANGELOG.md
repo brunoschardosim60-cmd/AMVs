@@ -1,5 +1,15 @@
 # Novidades
 
+## 0.6.27
+
+**Prévia com áudio na Biblioteca, tradução automática garantida para PT-BR, reconhecimento ampliado de falas e alinhamento de letras entre idiomas.**
+
+- **Prévia com vídeo e áudio antes de editar:** todas as abas da Biblioteca (`Mídia`, `Cenas` e `Falas`) agora permitem assistir e escutar episódios, músicas, cenas cortadas e falas diretamente no painel (com botão de repetir trecho e `+ Na timeline`). Redimensionar a qualidade do preview também redesenha o quadro pausado na hora.
+- **Mais falas captadas e sempre em Português:** ajusta os parâmetros do Silero VAD e amplia o fallback sem VAD quando o episódio retorna poucas falas, além de preencher falas extras mesmo em músicas energéticas e aumentar o padrão de 1 para 2 falas.
+- **Tradução automática garantida sem chave externa:** falas em japonês/inglês (tanto na geração quanto na aba `Falas` ou `Legendas`) agora são traduzidas automaticamente para Português (Brasil) mesmo sem configurar Ollama/API paga no Assistente, e os textos traduzidos ficam salvos na aba `Biblioteca > Falas`.
+- **Letra da música em PT alinhada mesmo com áudio em inglês e extração direta:** permite colar letra em Português sobre música em inglês/japonês, traduz automaticamente versos extraídos do vocal com `Extrair letra do áudio (PT-BR)` e promove tempos por palavra para destacar a tipografia animada na tela.
+- **Tipografia Anime também nas falas:** o preset tipográfico escolhido no gerador (`Anime · impacto`, `Anime · neon`, `Anime · mangá`, `Anime · ouro épico`, `Anime · diálogo`) passa a estilizar também as legendas das falas dos personagens.
+
 ## 0.6.26
 
 **Letras sincronizadas de verdade, falas visíveis, filtro estrito de personagem/luta, tipografia anime e recortes cinematográficos.**

@@ -143,7 +143,8 @@ export function Preview({ session, project }: { session: ProjectSession; project
     const cv = canvasRef.current!;
     cv.width = Math.round(P.width * previewScale);
     cv.height = Math.round(P.height * previewScale);
-  }, [P.width, P.height, previewScale]);
+    if (!player.isPlaying) player.seek(useEditor.getState().playheadUs);
+  }, [P.width, P.height, previewScale, player]);
 
   const end = projectDurationUs(project);
   const go = (us: number) => {

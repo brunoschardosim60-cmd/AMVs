@@ -1,12 +1,10 @@
 import { decodeSubtitleBytes, parseSubtitles, pickAudioStreamByLanguage, toSrt } from '@amv/analysis';
-import { joinPath } from '@amv/media';
 import { clipEndUs, type Clip } from '@amv/project';
-import { translateLines } from '@amv/assistant';
-import { alignUntimedLyrics, applyTranslation, cuesForClip, editSubtitleTextManually, langLabel, LOOKS, originalText, placeCues, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
+import { alignUntimedLyrics, alignUntimedLyricsWithFallback, applyTranslation, cuesForClip, editSubtitleTextManually, langLabel, LOOKS, originalText, placeCues, promoteAlignedCuesForTypography, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
 import { AlertTriangle, Download, FileText, Film, Languages, Mic, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import type { ProjectSession } from '../../core/session';
+import { extractTranscriptWords, mergeSpeechSegments, transcribeMediaAsset, translateTextsAuto } from '../../core/transcription';
 import { useApp } from '../../store';
 import { Button } from '../../ui/controls';
 import { useEditor } from './editorStore';
@@ -35,6 +33,8 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   });
   const [speechProgress, setSpeechProgress] = useState<{ stage: 'extracting' | 'preparing' | 'transcribing'; progress: number; duration: number } | null>(null);
   const [cancellingSpeech, setCancellingSpeech] = useState(false);
+  const [autoTranslateSpeech, setAutoTranslateSpeech] = useState(true);
+  const [translateLyricsToPt, setTranslateLyricsToPt] = useState(true);
   const musicTrack = project.tracks.find((track) => track.role === 'music');
   const musicClips = musicTrack
     ? project.clips.filter((clip) => clip.trackId === musicTrack.id && !!clip.assetId).sort((a, b) => a.timelineStartUs - b.timelineStartUs)
@@ -144,15 +144,11 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     const videoClips = project.clips.filter((clip) => clip.assetId === transcriptAssetId && project.tracks.find((track) => track.id === clip.trackId)?.kind === 'video');
     const selectedClips = videoClips.filter((clip) => selection.includes(clip.id));
     const targetVideoClips = selectedClips.length ? selectedClips : videoClips;
-    if (!targetVideoClips.length) {
-      toast({ tone: 'warn', title: 'Episódio ainda não está na timeline', body: 'Adicione ao menos um clipe deste episódio para posicionar as falas transcritas.' });
-      return;
-    }
     if (asset.status === 'missing') {
       toast({ tone: 'error', title: 'Arquivo do episódio ausente', body: 'Relocalize o arquivo antes de transcrever.' });
       return;
     }
-    const overlaps = clips.some((subtitle) =>
+    const overlaps = targetVideoClips.length > 0 && clips.some((subtitle) =>
       targetVideoClips.some(
         (video) =>
           subtitle.timelineStartUs < clipEndUs(video) && clipEndUs(subtitle) > video.timelineStartUs,
@@ -165,10 +161,62 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     setCancellingSpeech(false);
     setSpeechProgress({ stage: 'extracting', progress: 0, duration });
     try {
-      const transcript = await transcribeAsset(asset, audioIndex, controller);
-      const cues = transcript.segments.map((segment) => ({
+      const transcript = await transcribeMediaAsset(platform, asset, audioIndex, {
+        model: speechModel,
+        ...(speechLanguage ? { language: speechLanguage } : {}),
+        vadFilter: true,
+        signal: controller.signal,
+        onProgress: setSpeechProgress,
+      });
+      const fallbackLang = audioStreams.find((stream) => stream.index === audioIndex)?.language ?? null;
+      let mergedSpeech = mergeSpeechSegments(session.assetRuntime(transcriptAssetId).episode?.speech ?? [], transcript, fallbackLang);
+      let finalSegments = transcript.segments.map((segment) => ({
         startS: segment.start,
         endS: segment.end,
+        text: segment.text,
+        words: segment.words,
+      }));
+      const targetLangPrefix = lang.toLowerCase().split('-')[0]!;
+      const detectedLang = (transcript.language ?? speechLanguage ?? '').toLowerCase();
+      let translatedCount = 0;
+      if (autoTranslateSpeech && finalSegments.length && (!detectedLang || !detectedLang.startsWith(targetLangPrefix))) {
+        const translated = await translateTextsAuto(
+          platform,
+          finalSegments.map((segment) => segment.text),
+          langLabel(lang),
+          { sourceLanguage: transcript.language, signal: controller.signal },
+        );
+        finalSegments = finalSegments.map((segment, index) => {
+          const t = translated.translations[index]?.trim();
+          if (t) translatedCount++;
+          return t && t !== segment.text
+            ? { ...segment, text: t, words: [] }
+            : segment;
+        });
+        const nonEmptySpeech = mergedSpeech
+          .map((seg, index) => ({ seg, index }))
+          .filter(({ seg }) => !!seg.text?.trim() && !(seg.language ?? '').toLowerCase().startsWith(targetLangPrefix));
+        if (nonEmptySpeech.length) {
+          const translatedEpisode = await translateTextsAuto(
+            platform,
+            nonEmptySpeech.map(({ seg }) => seg.text!),
+            langLabel(lang),
+            { sourceLanguage: transcript.language, signal: controller.signal },
+          );
+          const mapByIdx = new Map<number, string>();
+          translatedEpisode.translations.forEach((value, idx) => {
+            if (value?.trim()) mapByIdx.set(nonEmptySpeech[idx]!.index, value.trim());
+          });
+          mergedSpeech = mergedSpeech.map((seg, idx) =>
+            mapByIdx.has(idx) ? { ...seg, text: mapByIdx.get(idx)!, language: lang } : seg,
+          );
+        }
+      }
+      await session.updateEpisodeSpeech(transcriptAssetId, mergedSpeech);
+
+      const cues = finalSegments.map((segment) => ({
+        startS: segment.startS,
+        endS: segment.endS,
         text: segment.text,
         ...(segment.words.length
           ? {
@@ -186,16 +234,34 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
         toast({ tone: 'warn', title: 'Nenhuma fala reconhecida', body: 'Tente outra faixa de áudio ou um modelo maior. O arquivo original não foi alterado.' });
         return;
       }
+      if (!targetVideoClips.length) {
+        toast({
+          tone: 'ok',
+          title: `${cues.length} falas salvas no episódio`,
+          body: translatedCount
+            ? `Falas transcritas e traduzidas para ${langLabel(lang)}. Veja na aba Falas ou gere o AMV.`
+            : 'Falas reconhecidas e salvas na aba Falas. Adicione clipes à timeline ou clique em Gerar AMV.',
+        });
+        return;
+      }
       const r = pullClipSubtitles(project, targetVideoClips, new Map([[transcriptAssetId, cues]]), trackId, look);
       if (!r.commands.length) {
-        toast({ tone: 'warn', title: 'As falas não caíram nos clipes', body: 'Confira se o trecho de origem dos clipes coincide com o episódio transcrito.' });
+        toast({
+          tone: 'warn',
+          title: 'Falas salvas no episódio, mas fora dos clipes atuais',
+          body: 'Os trechos na timeline não coincidem com as falas deste episódio. Confira a aba Falas.',
+        });
         return;
       }
       session.history.transaction(`Transcrever falas (${r.count} linhas)`, r.commands);
       const language = transcript.language ? (transcript.language_probability > 0
         ? ` Idioma detectado: ${transcript.language} (${Math.round(transcript.language_probability * 100)}%).`
         : ` Idioma utilizado: ${transcript.language}.`) : '';
-      toast({ tone: 'ok', title: `${r.count} falas adicionadas`, body: `Reveja e edite as legendas na trilha. A transcrição roda localmente.${language}` });
+      toast({
+        tone: 'ok',
+        title: `${r.count} falas adicionadas${translatedCount ? ` em ${langLabel(lang)}` : ''}`,
+        body: `Falas atualizadas na aba Falas e na trilha de legendas.${language}`,
+      });
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         toast({ tone: 'info', title: 'Transcrição cancelada', body: 'O áudio original não foi alterado.' });
@@ -206,72 +272,6 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
       speechAbort.current = null;
       setCancellingSpeech(false);
       setSpeechProgress(null);
-    }
-  };
-
-  const transcribeAsset = async (asset: (typeof project.assets)[number], audioIndex: number, controller: AbortController, vadFilter = true) => {
-    const duration = (asset.probe?.durationUs ?? 0) / 1e6;
-    const cacheDir = joinPath(await platform!.cacheDir(), 'transcription');
-    await platform!.fs.mkdir(cacheDir);
-    const cacheKey = (asset.hash || asset.id).replace(/[^a-zA-Z0-9_-]/g, '_');
-    const audioPath = joinPath(cacheDir, `${cacheKey}-stream-${audioIndex}.wav`);
-    let partialPath: string | null = null;
-    try {
-      if (!(await platform!.fs.exists(audioPath)) || (await platform!.fs.size(audioPath)) <= 44) {
-        partialPath = `${audioPath}.partial`;
-        if (await platform!.fs.exists(partialPath)) await platform!.fs.remove(partialPath);
-        let progressOutput = '';
-        const extracted = await platform!.runner.run(
-          'ffmpeg',
-          [
-            '-y', '-hide_banner', '-v', 'error', '-i', asset.path, '-map', `0:${audioIndex}`,
-            '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-progress', 'pipe:1', '-nostats', '-f', 'wav', partialPath,
-          ],
-          {
-            signal: controller.signal,
-            onStdout: (chunk) => {
-              progressOutput = (progressOutput + chunk).slice(-4096);
-              for (const line of progressOutput.split(/\r?\n/)) {
-                const match = /^out_time_us=(\d+)/.exec(line);
-                if (match) setSpeechProgress({ stage: 'extracting', progress: Number(match[1]) / 1e6, duration });
-              }
-            },
-          },
-        );
-        if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
-        if (extracted.code !== 0) {
-          throw new Error(`FFmpeg não conseguiu extrair a faixa ${audioIndex}: ${extracted.stderr.trim() || `código ${extracted.code}`}`);
-        }
-        if (!(await platform!.fs.exists(partialPath)) || (await platform!.fs.size(partialPath)) <= 44) {
-          throw new Error('FFmpeg não gerou um WAV válido para transcrição.');
-        }
-        await platform!.fs.rename(partialPath, audioPath);
-        partialPath = null;
-      }
-      const connection = await platform!.analyzer.start();
-      if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
-      return await platform!.analyzer.transcribe(
-        connection,
-        { path: audioPath, model: speechModel, vadFilter, ...(speechLanguage ? { language: speechLanguage } : {}) },
-        {
-          signal: controller.signal,
-          onProgress: (job) => {
-            setSpeechProgress({
-              stage: job.status === 'queued' || job.progress === 0 ? 'preparing' : 'transcribing',
-              progress: job.progress,
-              duration: job.duration || duration,
-            });
-          },
-        },
-      );
-    } finally {
-      if (partialPath && (await platform!.fs.exists(partialPath))) {
-        try {
-          await platform!.fs.remove(partialPath);
-        } catch (cleanupError) {
-          console.warn('Não foi possível remover o áudio temporário da transcrição:', cleanupError);
-        }
-      }
     }
   };
 
@@ -291,22 +291,47 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     setCancellingSpeech(false);
     setSpeechProgress({ stage: 'extracting', progress: 0, duration: (lyricsAsset.probe?.durationUs ?? 0) / 1e6 });
     try {
-      const transcript = await transcribeAsset(lyricsAsset, audioIndex, controller, false);
-      const words = transcript.segments.flatMap((segment) => {
-        const w = (segment.words ?? []).filter((item) => item.text.trim() && item.end > item.start);
-        if (w.length) return w;
-        if (!segment.text.trim() || segment.end <= segment.start) return [];
-        const tokens = segment.text.trim().split(/\s+/).filter(Boolean);
-        const step = (segment.end - segment.start) / Math.max(1, tokens.length);
-        return tokens.map((tok, idx) => ({ start: segment.start + idx * step, end: segment.start + (idx + 1) * step, text: tok }));
+      const transcript = await transcribeMediaAsset(platform, lyricsAsset, audioIndex, {
+        model: speechModel,
+        ...(speechLanguage ? { language: speechLanguage } : {}),
+        vadFilter: false,
+        signal: controller.signal,
+        onProgress: setSpeechProgress,
       });
-      const aligned = alignUntimedLyrics(untimedLyrics.text, words);
+      const words = extractTranscriptWords(transcript);
+      const origLines = untimedLyrics.text.replace(/\r/g, '').split('\n').map((l) => l.trim()).filter(Boolean);
+      const direct = alignUntimedLyrics(untimedLyrics.text, words);
+      const detectedAudioLang = (transcript.language ?? speechLanguage ?? '').toLowerCase();
+      let translatedForMatching: string | undefined;
+      if (origLines.length && direct.matched < origLines.length * 0.4 && detectedAudioLang && !detectedAudioLang.startsWith('pt')) {
+        const forMatch = await translateTextsAuto(platform, origLines, detectedAudioLang, { signal: controller.signal });
+        const mapped = origLines.map((line, i) => forMatch.translations[i]?.trim() || line);
+        translatedForMatching = mapped.join('\n');
+      }
+      const aligned = alignUntimedLyricsWithFallback(untimedLyrics.text, words, transcript.segments, translatedForMatching);
       if (!aligned.cues.length) {
-        toast({ tone: 'warn', title: 'Nenhum verso alinhado', body: 'A transcrição não encontrou palavras suficientemente parecidas. Tente escolher outro idioma ou um modelo maior.' });
+        toast({ tone: 'warn', title: 'Nenhum verso alinhado', body: 'A transcrição não encontrou vocais nem segmentos na música.' });
         return;
       }
-      const timelineCues = cuesForClip(lyricsClip, aligned.cues);
-      const outsideClip = aligned.cues.length - timelineCues.length;
+      let finalCues = aligned.cues;
+      if (translateLyricsToPt && !translatedForMatching && (!detectedAudioLang || !detectedAudioLang.startsWith('pt'))) {
+        const ptTrans = await translateTextsAuto(
+          platform,
+          finalCues.map((c) => c.text),
+          'português brasileiro',
+          { sourceLanguage: transcript.language, signal: controller.signal },
+        );
+        finalCues = promoteAlignedCuesForTypography(
+          finalCues.map((c, idx) => ({
+            ...c,
+            text: ptTrans.translations[idx]?.trim() || c.text,
+          })),
+        );
+      } else {
+        finalCues = promoteAlignedCuesForTypography(finalCues);
+      }
+      const timelineCues = cuesForClip(lyricsClip, finalCues);
+      const outsideClip = finalCues.length - timelineCues.length;
       const windowUs: [number, number] = [lyricsClip.timelineStartUs, clipEndUs(lyricsClip)];
       const overlaps = clips.some((subtitle) => subtitle.timelineStartUs < windowUs[1] && clipEndUs(subtitle) > windowUs[0]);
       if (overlaps && !(await platform.dialogs.confirm('Os versos alinhados substituem legendas existentes sobre este trecho da música. Continuar?', 'Substituir legendas no trecho?'))) return;
@@ -326,7 +351,7 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
       toast({
         tone: aligned.unmatched || aligned.uncertain ? 'warn' : 'ok',
         title: `${commands.filter((command) => command.type === 'clip.add').length} versos sincronizados`,
-        body: `${aligned.uncertain} correspondências incertas, ${aligned.unmatched} versos não encontrados e ${outsideClip} fora do trecho do clipe. Revise os clipes de texto na timeline. A transcrição foi local.`,
+        body: `${aligned.uncertain} com tempo aproximado e ${outsideClip} fora do trecho do clipe. Revise os clipes de texto na timeline.`,
       });
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
@@ -350,21 +375,18 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   const translate = async () => {
     if (!platform || !target.length || translating) return;
     try {
-      const settings = await loadAiSettings(platform);
-      if (!settings.enabled || !(isLocal(settings) || settings.allowExternal)) {
-        toast({ tone: 'warn', title: 'Ligue um modelo de IA para traduzir', body: 'Abra o Assistente e clique na engrenagem. O Ollama roda no seu PC (grátis, offline). Claude e OpenAI são na nuvem: o texto das legendas é enviado a eles.' });
-        return;
-      }
-      const key = settings.provider.needsKey ? await platform.secrets.get(secretName(settings.presetId)) : null;
       abort.current = new AbortController();
       setTranslating({ done: 0, total: target.length });
       // sempre parte do texto original (trocar de idioma não traduz uma tradução)
-      const r = await translateLines(settings.provider, key, platform.http, target.map(originalText), { target: langLabel(lang), signal: abort.current.signal, onProgress: (done, total) => setTranslating({ done, total }) });
+      const r = await translateTextsAuto(platform, target.map(originalText), langLabel(lang), {
+        signal: abort.current.signal,
+        onProgress: (done, total) => setTranslating({ done, total }),
+      });
       const cmds = applyTranslation(target, r.translations, lang);
       if (cmds.length) session.history.transaction(`Traduzir legendas (${langLabel(lang)})`, cmds);
       toast(
         r.failed
-          ? { tone: 'warn', title: `${cmds.length} traduzidas, ${r.failed} mantidas no original`, body: 'O modelo errou essas linhas. Tente de novo ou use um modelo maior.' }
+          ? { tone: 'warn', title: `${cmds.length} traduzidas, ${r.failed} mantidas no original`, body: 'Algumas linhas falharam. Tente novamente.' }
           : { tone: 'ok', title: `${cmds.length} legenda(s) em ${langLabel(lang)}`, body: 'Ctrl+Z desfaz. "Original" volta ao idioma de antes.' },
       );
     } catch (e) {
@@ -479,8 +501,12 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
                     </Button>
                   )}
                 </div>
+                <label className="flex items-center gap-1.5 text-2xs text-ink-soft">
+                  <input type="checkbox" className="accent-violet" checked={translateLyricsToPt} onChange={(e) => setTranslateLyricsToPt(e.target.checked)} disabled={transcribing} />
+                  Traduzir letra para Português na tela
+                </label>
                 <p className="text-2xs text-faint">
-                  O app transcreve a música localmente e compara a letra em ordem. Os versos incertos ou não encontrados são informados; revise os tempos antes de exportar.
+                  O app transcreve a música localmente e alinha versos (inclusive se a letra estiver em PT e a música em EN).
                 </p>
               </>
             ) : (
@@ -564,8 +590,12 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
                 </Button>
               )}
             </div>
+            <label className="flex items-center gap-1.5 text-2xs text-ink-soft">
+              <input type="checkbox" className="accent-violet" checked={autoTranslateSpeech} onChange={(e) => setAutoTranslateSpeech(e.target.checked)} disabled={transcribing} />
+              Traduzir automaticamente para {langLabel(lang)}
+            </label>
             <p className="text-2xs text-faint">
-              Local, sem enviar áudio. A faixa escolhida é extraída para cache sem alterar o original; o progresso acompanha extração e segmentos. Cancelar tenta parar no limite do segmento e encerra o analisador após 5 s se necessário. Usa os clipes selecionados ou todos os clipes desse episódio.
+              Local, sem enviar áudio. As falas são salvas no episódio e traduzidas para {langLabel(lang)}.
             </p>
           </div>
         )}

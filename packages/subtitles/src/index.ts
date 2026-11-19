@@ -92,11 +92,10 @@ function editDistance(a: string[], b: string[]): number {
   return previous[b.length]!;
 }
 
-/** Alinha linhas de letra a palavras transcritas localmente, em ordem e com score explícito. */
-export function alignUntimedLyrics(
+function alignUntimedLyricsIndexed(
   lyrics: string,
   transcriptWords: { start: number; end: number; text: string }[],
-): UntimedLyricAlignment {
+): { cues: Cue[]; lineIndices: number[]; matched: number; uncertain: number; unmatched: number } {
   const lines = lyrics.replace(/\r/g, '').split('\n').map((line) => line.trim()).filter(Boolean);
   transcriptWords = transcriptWords
     .filter((word) => Number.isFinite(word.start) && Number.isFinite(word.end) && word.start >= 0 && word.end > word.start && word.text.trim())
@@ -110,8 +109,10 @@ export function alignUntimedLyrics(
   let matched = 0;
   let uncertain = 0;
   const cues: Cue[] = [];
+  const lineIndices: number[] = [];
 
-  for (const line of lines) {
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx]!;
     const target = lyricTokens(line, characters);
     if (!target.length || cursor >= spoken.length) continue;
     const lengthSlack = characters ? Math.max(2, Math.ceil(target.length * 0.12)) : Math.max(2, Math.ceil(target.length * 0.3));
@@ -150,6 +151,7 @@ export function alignUntimedLyrics(
         uncertain: best.score < 0.78,
       })),
     });
+    lineIndices.push(lineIdx);
     matched++;
     if (best.score < 0.78) uncertain++;
     const lastWordIndex = spoken[best.end - 1]?.wordIndex;
@@ -158,7 +160,263 @@ export function alignUntimedLyrics(
     while (lastWordIndex !== undefined && spoken[cursor]?.wordIndex === lastWordIndex) cursor++;
   }
 
-  return { cues, matched, uncertain, unmatched: lines.length - matched };
+  return { cues, lineIndices, matched, uncertain, unmatched: lines.length - matched };
+}
+
+/** Alinha linhas de letra a palavras transcritas localmente, em ordem e com score explícito. */
+export function alignUntimedLyrics(
+  lyrics: string,
+  transcriptWords: { start: number; end: number; text: string }[],
+): UntimedLyricAlignment {
+  const { cues, matched, uncertain, unmatched } = alignUntimedLyricsIndexed(lyrics, transcriptWords);
+  return { cues, matched, uncertain, unmatched };
+}
+
+function splitDisplayWords(text: string): string[] {
+  const ws = text.trim().match(/\S+/gu) ?? [];
+  if (ws.length > 1 || !/[\u3040-\u30ff\u3400-\u9fff]/u.test(text)) return ws;
+  return Array.from(text.trim()).filter((ch) => !/\s/u.test(ch));
+}
+
+/**
+ * Garante timings por palavra compatíveis com o texto exibido para que as tipografias
+ * animadas (karaoke, realce palavra a palavra e estilo "letra") funcionem mesmo após tradução.
+ */
+export function promoteAlignedCuesForTypography(cues: Cue[]): Cue[] {
+  return cues.map((cue) => {
+    const startS = Math.max(0, cue.startS);
+    const endS = Math.max(startS + 0.04, cue.endS);
+    const tokens = splitDisplayWords(cue.text);
+    if (!tokens.length) return cue;
+
+    const existing = (cue.words ?? []).filter(
+      (word) => Number.isFinite(word.startS) && Number.isFinite(word.endS) && word.endS > word.startS,
+    );
+    if (existing.length === tokens.length) {
+      const words: CueWord[] = tokens.map((token, idx) => {
+        const w = existing[idx]!;
+        const wStart = Math.max(startS, Math.min(endS - 0.01, w.startS));
+        const wEnd = Math.max(wStart + 0.01, Math.min(endS, w.endS));
+        return {
+          startS: wStart,
+          endS: wEnd,
+          text: token,
+          source: 'lrc',
+          confidence: 0.95,
+          uncertain: false,
+        };
+      });
+      return { ...cue, startS, endS, words };
+    }
+
+    const totalDur = endS - startS;
+    const weights = tokens.map((token) => Math.max(1, Array.from(token).length));
+    const totalWeight = weights.reduce((acc, w) => acc + w, 0);
+    let cursor = startS;
+    const words: CueWord[] = tokens.map((token, idx) => {
+      const share = (weights[idx]! / totalWeight) * totalDur;
+      const wStart = cursor;
+      const wEnd = idx === tokens.length - 1 ? endS : Math.min(endS, Math.max(wStart + 0.02, wStart + share));
+      cursor = wEnd;
+      return {
+        startS: wStart,
+        endS: wEnd,
+        text: token,
+        source: 'lrc',
+        confidence: 0.95,
+        uncertain: false,
+      };
+    });
+    return { ...cue, startS, endS, words };
+  });
+}
+
+function buildVocalSpans(
+  transcriptWords: { start: number; end: number; text: string }[],
+  transcriptSegments?: { start: number; end: number; text: string }[],
+): { start: number; end: number }[] {
+  const segs = (transcriptSegments ?? [])
+    .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start + 0.05)
+    .map((s) => ({ start: Math.max(0, s.start), end: s.end }))
+    .sort((a, b) => a.start - b.start);
+  if (segs.length) return segs;
+
+  const words = transcriptWords
+    .filter((w) => Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start)
+    .sort((a, b) => a.start - b.start);
+  if (!words.length) return [];
+
+  const spans: { start: number; end: number }[] = [];
+  let curStart = Math.max(0, words[0]!.start);
+  let curEnd = words[0]!.end;
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i]!;
+    if (w.start - curEnd > 1.2) {
+      spans.push({ start: curStart, end: curEnd });
+      curStart = Math.max(0, w.start);
+    }
+    curEnd = Math.max(curEnd, w.end);
+  }
+  spans.push({ start: curStart, end: curEnd });
+  return spans;
+}
+
+function distributeLinesAcrossSpans(
+  lines: string[],
+  spans: { start: number; end: number }[],
+  windowStart: number,
+  windowEnd: number,
+): Cue[] {
+  if (!lines.length || windowEnd - windowStart < 0.08) return [];
+  const activeSpans = spans
+    .map((s) => ({ start: Math.max(windowStart, s.start), end: Math.min(windowEnd, s.end) }))
+    .filter((s) => s.end - s.start >= 0.08);
+
+  if (activeSpans.length >= lines.length && lines.length === 1) {
+    return [{
+      startS: activeSpans[0]!.start,
+      endS: activeSpans[activeSpans.length - 1]!.end,
+      text: lines[0]!,
+    }];
+  }
+
+  if (activeSpans.length >= lines.length) {
+    // Agrupa os segmentos vocais na mesma ordem para cada verso.
+    const out: Cue[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const fromIdx = Math.floor((i * activeSpans.length) / lines.length);
+      const toIdx = Math.max(fromIdx, Math.floor(((i + 1) * activeSpans.length) / lines.length) - 1);
+      const s = activeSpans[fromIdx]!.start;
+      const e = Math.max(s + 0.1, activeSpans[toIdx]!.end);
+      out.push({ startS: s, endS: e, text: lines[i]! });
+    }
+    return out;
+  }
+
+  // Menos spans do que linhas: concatena o tempo vocal contínuo proporcionalmente ao texto.
+  const sourceSpans = activeSpans.length ? activeSpans : [{ start: windowStart, end: windowEnd }];
+  const weights = lines.map((line) => Math.max(1, Array.from(line).length));
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
+  const totalVocal = sourceSpans.reduce((a, s) => a + (s.end - s.start), 0);
+  if (totalVocal < 0.08) return [];
+
+  const vocalAt = (offset: number): number => {
+    let rem = Math.max(0, Math.min(totalVocal, offset));
+    for (const s of sourceSpans) {
+      const len = s.end - s.start;
+      if (rem <= len + 1e-9) return s.start + rem;
+      rem -= len;
+    }
+    return sourceSpans[sourceSpans.length - 1]!.end;
+  };
+
+  let accWeight = 0;
+  return lines.map((line, i) => {
+    const startOffset = (accWeight / totalWeight) * totalVocal;
+    accWeight += weights[i]!;
+    const endOffset = (accWeight / totalWeight) * totalVocal;
+    const startS = vocalAt(startOffset);
+    const endS = Math.max(startS + 0.08, vocalAt(endOffset));
+    return { startS, endS, text: line };
+  });
+}
+
+/**
+ * Alinha letras sem tempo suportando letra traduzida para o idioma da música e fallback
+ * distribuído sobre os segmentos vocais detectados pelo Whisper.
+ */
+export function alignUntimedLyricsWithFallback(
+  lyrics: string,
+  transcriptWords: { start: number; end: number; text: string }[],
+  transcriptSegments?: { start: number; end: number; text: string }[],
+  translatedLyricsForMatching?: string,
+): UntimedLyricAlignment {
+  const origLines = lyrics.replace(/\r/g, '').split('\n').map((line) => line.trim()).filter(Boolean);
+  if (!origLines.length) return { cues: [], matched: 0, uncertain: 0, unmatched: 0 };
+
+  let indexed = alignUntimedLyricsIndexed(lyrics, transcriptWords);
+
+  if (translatedLyricsForMatching?.trim()) {
+    const transLines = translatedLyricsForMatching.replace(/\r/g, '').split('\n').map((line) => line.trim()).filter(Boolean);
+    const transIndexed = alignUntimedLyricsIndexed(translatedLyricsForMatching, transcriptWords);
+    const useTranslated = transLines.length === origLines.length
+      ? transIndexed.matched >= indexed.matched
+      : transIndexed.matched > indexed.matched;
+    if (useTranslated && transIndexed.matched > 0) {
+      const remappedCues: Cue[] = [];
+      const remappedIndices: number[] = [];
+      transIndexed.cues.forEach((cue, idx) => {
+        const lineIdx = transIndexed.lineIndices[idx]!;
+        const mappedText = origLines[lineIdx];
+        if (!mappedText) return;
+        remappedCues.push({ ...cue, text: mappedText });
+        remappedIndices.push(lineIdx);
+      });
+      indexed = {
+        cues: remappedCues,
+        lineIndices: remappedIndices,
+        matched: remappedCues.length,
+        uncertain: transIndexed.uncertain,
+        unmatched: origLines.length - remappedCues.length,
+      };
+    }
+  }
+
+  const vocalSpans = buildVocalSpans(transcriptWords, transcriptSegments);
+  if (indexed.matched >= origLines.length * 0.5 && indexed.cues.length > 0) {
+    const cues = promoteAlignedCuesForTypography(indexed.cues);
+    return {
+      cues,
+      matched: indexed.matched,
+      uncertain: indexed.uncertain,
+      unmatched: origLines.length - indexed.matched,
+    };
+  }
+
+  if (!vocalSpans.length) {
+    const cues = promoteAlignedCuesForTypography(indexed.cues);
+    return {
+      cues,
+      matched: indexed.matched,
+      uncertain: indexed.uncertain,
+      unmatched: origLines.length - indexed.matched,
+    };
+  }
+
+  const minVocal = vocalSpans[0]!.start;
+  const maxVocal = vocalSpans[vocalSpans.length - 1]!.end;
+  const finalCues: Cue[] = [];
+  let fallbackCount = 0;
+
+  // Ancoragem híbrida em ordem usando eventuais versos já casados + distribuição nos segmentos vocais.
+  let prevLine = -1;
+  let prevEnd = minVocal;
+  const anchors = indexed.cues.map((cue, idx) => ({ lineIdx: indexed.lineIndices[idx]!, cue }));
+  for (const anchor of [...anchors, { lineIdx: origLines.length, cue: null as Cue | null }]) {
+    const gapLines = origLines.slice(prevLine + 1, anchor.lineIdx);
+    const windowEnd = anchor.cue ? anchor.cue.startS : maxVocal;
+    if (gapLines.length && windowEnd - prevEnd >= 0.08) {
+      const distributed = distributeLinesAcrossSpans(gapLines, vocalSpans, prevEnd, windowEnd);
+      for (const item of distributed) {
+        finalCues.push(item);
+        fallbackCount++;
+      }
+    }
+    if (anchor.cue) {
+      finalCues.push(anchor.cue);
+      prevEnd = anchor.cue.endS;
+    }
+    prevLine = anchor.lineIdx;
+  }
+
+  const normalized = normalizeCues(finalCues);
+  const cues = promoteAlignedCuesForTypography(normalized);
+  return {
+    cues,
+    matched: cues.length,
+    uncertain: indexed.uncertain + fallbackCount,
+    unmatched: Math.max(0, origLines.length - cues.length),
+  };
 }
 
 export function lookText(look: SubtitleLook, H: number, text: string): { transform: Clip['transform']; text: NonNullable<Clip['text']> } {

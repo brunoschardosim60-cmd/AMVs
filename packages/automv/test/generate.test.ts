@@ -1083,4 +1083,36 @@ describe('integração das melhorias do patch', () => {
     const textTrack = out.tracks.find((t) => t.kind === 'text')!;
     expect(out.clips.some((c) => c.trackId === textTrack.id && c.text?.text === 'Não acabou ainda!')).toBe(true);
   });
+
+  it('aplica tipografia anime nas falas escolhidas e encaixa múltiplas falas mesmo com energia alta', () => {
+    const ep = episode('ep1', 60, 3);
+    ep.analysis.speech = [
+      { startS: 10, endS: 11.8, kind: 'fala', confidence: 0.9, text: 'Primeiro golpe!', language: 'por', impact: 0.9 },
+      { startS: 22, endS: 23.6, kind: 'fala', confidence: 0.9, text: 'Agora vai começar!', language: 'por', impact: 0.85 },
+    ];
+    const m = music();
+    const highEnergy: MusicInput = {
+      ...m,
+      analysis: {
+        ...m.analysis,
+        energy: m.analysis.energy.map(() => 0.82),
+      },
+    };
+    const p = project();
+    const r = generateAmv(p, highEnergy, [ep], {
+      ...base,
+      durationS: 30,
+      musicStartS: 16,
+      useSpeech: true,
+      showText: true,
+      voiceMoments: 2,
+      lyricStyle: 'anime-impact',
+    });
+    expect(r.summary.voices).toBe(2);
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const textTrack = out.tracks.find((t) => t.kind === 'text')!;
+    const captions = out.clips.filter((c) => c.trackId === textTrack.id);
+    expect(captions).toHaveLength(2);
+    expect(captions.every((c) => c.text?.text === c.text?.text.toUpperCase() && c.text?.highlightColor === '#ff5364')).toBe(true);
+  });
 });

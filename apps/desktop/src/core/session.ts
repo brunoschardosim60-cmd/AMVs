@@ -27,7 +27,7 @@ import {
   type ProjectSettings,
 } from '@amv/project';
 import type { Platform } from '../platform/types';
-import { analyzeEpisodeFile, analyzeLocalVisualFrames, analyzeMusicFile, EPISODE_ANALYSIS_VERSION, findSimilarVisualScenes, grabFrameJpeg, grabFrameRgb, LOCAL_VISION_VERSION, mergeShotVision, MUSIC_ANALYSIS_VERSION, selectLocalVisionTargets, selectVisionTargets, shotKey, toBase64, VISION_VERSION, type EpisodeAnalysis, type EpisodeVision, type MusicAnalysis, type VisionScope } from '@amv/analysis';
+import { analyzeEpisodeFile, analyzeLocalVisualFrames, analyzeMusicFile, EPISODE_ANALYSIS_VERSION, findSimilarVisualScenes, grabFrameJpeg, grabFrameRgb, LOCAL_VISION_VERSION, mergeShotVision, MUSIC_ANALYSIS_VERSION, selectLocalVisionTargets, selectVisionTargets, shotKey, toBase64, VISION_VERSION, type Cue, type EpisodeAnalysis, type EpisodeVision, type MusicAnalysis, type SpeechSegment, type VisionScope } from '@amv/analysis';
 import { labelScenes, type FetchLike, type ProviderConfig, type SceneAnalysisContext, type SceneLyricMatch } from '@amv/assistant';
 import { renderSfx, SFX_KINDS, SFX_LABEL, sfxFileName, toWav, type SfxKind } from '@amv/sfx';
 import { forgetRecent, rememberRecent, updateRecent } from './recents';
@@ -655,6 +655,57 @@ export class ProjectSession {
     if (!(await this.platform.fs.exists(file))) throw new Error('análise da música não encontrada no cache');
     const music = JSON.parse(new TextDecoder().decode(await this.platform.fs.readFile(file))) as MusicAnalysis;
     this.runtime.set(assetId, { ...this.assetRuntime(assetId), music, analysis: 'done' });
+    this.emit();
+  }
+
+  /** Atualiza e persiste em cache as falas/legendas de um episódio após transcrição ou tradução. */
+  async updateEpisodeSpeech(assetId: string, speech: SpeechSegment[], subtitles?: Cue[]): Promise<void> {
+    const asset = this.project.assets.find((a) => a.id === assetId && a.kind === 'video');
+    if (!asset) return;
+    const rt = this.assetRuntime(assetId);
+    const ep = rt.episode;
+    if (!ep) return;
+    const nextSpeech = [...speech].sort((a, b) => a.startS - b.startS);
+    const derivedSubtitles: Cue[] = nextSpeech
+      .filter((s) => !!s.text?.trim() && s.endS > s.startS)
+      .map((s) => ({
+        startS: s.startS,
+        endS: s.endS,
+        text: s.text!.trim(),
+        ...(s.language ? { language: s.language } : {}),
+      }));
+    const nextSubtitles = subtitles
+      ? [...subtitles].sort((a, b) => a.startS - b.startS)
+      : derivedSubtitles.length
+        ? [
+            ...ep.subtitles.filter((c) => !derivedSubtitles.some((d) => d.startS < c.endS && d.endS > c.startS)),
+            ...derivedSubtitles,
+          ].sort((a, b) => a.startS - b.startS)
+        : ep.subtitles;
+    const nextShots = ep.shots.map((shot) => {
+      const texts = [
+        ...nextSpeech.filter((s) => s.text?.trim() && s.endS > shot.startS && s.startS < shot.endS).map((s) => s.text!.trim()),
+        ...nextSubtitles.filter((c) => c.text.trim() && c.endS > shot.startS && c.startS < shot.endS).map((c) => c.text.trim()),
+      ];
+      const unique = [...new Set(texts)];
+      return unique.length ? { ...shot, line: unique.slice(0, 2).join(' ') } : shot;
+    });
+    const updatedEpisode: EpisodeAnalysis = {
+      ...ep,
+      speech: nextSpeech,
+      subtitles: nextSubtitles,
+      shots: nextShots,
+    };
+    this.runtime.set(assetId, { ...rt, episode: updatedEpisode });
+    try {
+      const env = await this.mediaEnv();
+      const dir = cachePaths(env.cacheRoot, asset.hash, joinPath).dir;
+      await this.platform.fs.mkdir(dir);
+      const file = joinPath(dir, `analysis-${EPISODE_ANALYSIS_VERSION}.json`);
+      await writeAtomic(this.platform, file, JSON.stringify(updatedEpisode));
+    } catch (error) {
+      console.warn('Não foi possível persistir atualização das falas no cache:', error);
+    }
     this.emit();
   }
 
