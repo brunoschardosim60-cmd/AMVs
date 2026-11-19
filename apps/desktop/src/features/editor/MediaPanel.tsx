@@ -7,6 +7,7 @@ import { useApp } from '../../store';
 import { Button } from '../../ui/controls';
 import { useEditor } from './editorStore';
 import { LinesPanel, ScenesPanel } from './MomentsPanel';
+import { canPlayOriginalDirectly } from './Preview';
 import { SubtitlesPanel } from './SubtitlesPanel';
 
 const ICON = { video: Film, audio: AudioLines, image: ImageIcon };
@@ -22,7 +23,9 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
   const previewAsset = previewAssetId ? assets.find((a) => a.id === previewAssetId && a.status !== 'missing') : undefined;
   const previewPath = previewAsset
     ? previewAsset.kind === 'video'
-      ? (session.assetRuntime(previewAsset.id).artifacts?.proxyPath ?? previewAsset.path)
+      ? (canPlayOriginalDirectly(previewAsset)
+          ? previewAsset.path
+          : (session.assetRuntime(previewAsset.id).artifacts?.proxyPath ?? previewAsset.path))
       : previewAsset.kind === 'audio'
         ? (session.assetRuntime(previewAsset.id).artifacts?.audioProxyPath ?? previewAsset.path)
         : previewAsset.path

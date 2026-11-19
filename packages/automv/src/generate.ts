@@ -70,6 +70,8 @@ export interface GenerateOptions {
   useSpeech: boolean;
   useEffects: boolean;
   showText: boolean;
+  /** Exibir legendas para as falas (desmarcar evita cobrir hardsubs do vídeo). Padrão: true. */
+  showSpeechCaptions?: boolean;
   /** Episódios/cenas proibidos (assetId ou `${assetId}@${startS}`). */
   exclude?: string[];
   seed: number;
@@ -863,7 +865,7 @@ function textClip(
       : preset === 'anime-gold-epic' ? '#f59e0b'
         : highlight ? '#ffd166' : '#ff7a00';
   const useGradient = preset === 'anime-neon' || preset === 'anime-gold-epic' || (isClimaxImpact && !word && preset !== 'anime-manga' && preset !== 'anime-dialogue');
-  const useBox = preset === 'anime-manga' || (!isLyrics);
+  const useBox = preset === 'anime-manga';
 
   return baseClip(trackId, null, startS, durS, 0, reason, {
     transform: { x: 0, y: Math.round(H * yRatio), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
@@ -874,7 +876,7 @@ function textClip(
       weight: word || isClimaxImpact || preset === 'anime-neon' || preset === 'anime-manga' ? 900 : isLyrics ? 800 : 700,
       color,
       outlineColor,
-      outlineWidth: word || preset === 'anime-impact' || preset === 'anime-manga' || preset === 'anime-gold-epic' ? 5 : isClimaxImpact || preset === 'anime-neon' ? 4 : 3,
+      outlineWidth: word || preset === 'anime-impact' || preset === 'anime-manga' || preset === 'anime-gold-epic' ? 5 : 4,
       shadow: true,
       animationIn: preset === 'anime-manga' ? 'slide' : preset === 'anime-dialogue' ? 'fade' : 'pop',
       animationOut: preset === 'anime-gold-epic' ? 'blur' : 'fade',
@@ -1006,6 +1008,49 @@ export function voiceGainDb(baseDb: number, loudnessDb: number | undefined): num
   return Math.round((baseDb + correction) * 10) / 10;
 }
 const VOICE_GAP_S = 1.5;
+
+/** Agrupa intervalos de voz próximos para manter a música abaixada em pausas curtas sem efeito gangorra. */
+function buildDuckingKeyframes(
+  intervals: { startS: number; endS: number; preDrop?: boolean }[],
+  mergeGapS: number,
+  rampDownS: number,
+  rampUpAfterS: number,
+): Keyframe[] {
+  const ordered = [...intervals].sort((a, b) => a.startS - b.startS);
+  const groups: { startS: number; endS: number; preDrop: boolean }[] = [];
+  for (const curr of ordered) {
+    const prev = groups.at(-1);
+    if (prev && !prev.preDrop && !curr.preDrop && curr.startS - prev.endS <= mergeGapS) {
+      prev.endS = Math.max(prev.endS, curr.endS);
+    } else {
+      groups.push({ startS: curr.startS, endS: curr.endS, preDrop: !!curr.preDrop });
+    }
+  }
+  const kf: Keyframe[] = [];
+  for (const g of groups) {
+    const startUs = us(g.startS);
+    const downUs = us(Math.max(0, g.startS - rampDownS));
+    const prevEndUs = kf.at(-1)?.atUs ?? -1;
+    if (g.startS > 0 && downUs > prevEndUs) {
+      kf.push({ atUs: downUs, value: 0, easing: 'linear' });
+    }
+    if (startUs > (kf.at(-1)?.atUs ?? -1)) {
+      kf.push({ atUs: startUs, value: DUCK_DB, easing: 'linear' });
+    }
+    if (g.preDrop) {
+      kf.push(
+        { atUs: us(g.endS - 0.06), value: DUCK_DB, easing: 'linear' },
+        { atUs: us(g.endS), value: 0, easing: 'linear' },
+      );
+    } else {
+      kf.push(
+        { atUs: us(g.endS), value: DUCK_DB, easing: 'linear' },
+        { atUs: us(g.endS + rampUpAfterS), value: 0, easing: 'linear' },
+      );
+    }
+  }
+  return kf;
+}
 
 function generateInner(project: Project, music: MusicInput, episodes: EpisodeInput[], opts: GenerateOptions): GenerateResult {
   const organizationMode = opts.organizationMode ?? 'narrative';
@@ -1146,37 +1191,42 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     if (placed < extraWanted && lines.length > 0) warnings.push(`Só coube ${placed + blocks.filter((b) => b.preDrop).length} de ${totalVoice} falas: faltou trecho calmo na música ou fala marcante na luta escolhida.`);
   }
   blocks.sort((a, b) => a.atS - b.atS);
-  // a música abaixa durante cada fala e volta depois (no drop, rampa curta para o golpe entrar forte)
+  // a música abaixa durante cada fala e só volta quando há respiro real (evita gangorra em pausas curtas)
   if (blocks.length && generatedVoiceAndMusicAreAudible(project, musicTrack, voice)) {
-    const kf: { atUs: number; value: number; easing: 'linear' }[] = [];
-    for (const b of blocks) {
-      const a = b.atS;
-      const end = b.preDrop ? dropT! : b.atS + b.len;
-      kf.push({ atUs: us(Math.max(0, a - 0.35)), value: 0, easing: 'linear' }, { atUs: us(a), value: DUCK_DB, easing: 'linear' });
-      if (b.preDrop) kf.push({ atUs: us(end - 0.06), value: DUCK_DB, easing: 'linear' }, { atUs: us(end), value: 0, easing: 'linear' });
-      else kf.push({ atUs: us(end), value: DUCK_DB, easing: 'linear' }, { atUs: us(end + 0.4), value: 0, easing: 'linear' });
-    }
-    musicClip.keyframes['audio.gainDb'] = kf;
+    musicClip.keyframes['audio.gainDb'] = buildDuckingKeyframes(
+      blocks.map((b) => ({ startS: b.atS, endS: b.preDrop ? dropT! : b.atS + b.len, preDrop: b.preDrop })),
+      2.2,
+      0.35,
+      0.4,
+    );
     musicClip.audio.duckingMode = 'manual';
   }
   // ---------------------------------------------------------------- estilo discurso: as falas são a espinha
   const used = new Set<string>();
   let clipsMade = 0;
   if (opts.style === 'discurso' && voice) {
-    const lines = episodes
+    const allLines = episodes
       .filter((e) => e.hasAudio && !exclude.has(e.assetId) && hasRequestedSpeechAudio(e, lang))
       .flatMap((ep) => ep.analysis.speech.map((s) => ({ ep, s })))
-      .filter((x) => x.s.endS - x.s.startS >= 0.8 && x.s.endS - x.s.startS <= 6)
-      .sort((x, y) => scoreSpeechCandidate(y.s) - scoreSpeechCandidate(x.s) || x.s.startS - y.s.startS);
+      .filter((x) => x.s.endS - x.s.startS >= 0.8 && x.s.endS - x.s.startS <= 6 && (!plan.wanted || speechMatchesWanted(x.ep, x.s)));
+    const focusPool = chooseSequences(episodes, D, { sequenceIds: opts.sequenceIds, exclude, wanted: plan.wanted });
+    const inFocus = (ep: EpisodeInput, s: SpeechSegment) => focusPool.some((e) => e.ep.assetId === ep.assetId && s.startS >= e.seq.startS - 15 && s.endS <= e.seq.endS + 5);
+    const primaryLines = focusPool.length ? allLines.filter(({ ep, s }) => inFocus(ep, s)) : allLines;
+    const secondaryLines = focusPool.length ? allLines.filter(({ ep, s }) => !inFocus(ep, s)) : [];
+    const byScore = (a: { ep: EpisodeInput; s: SpeechSegment }, b: { ep: EpisodeInput; s: SpeechSegment }) =>
+      scoreSpeechCandidate(b.s) - scoreSpeechCandidate(a.s) || a.s.startS - b.s.startS;
+    const orderedPool = [...primaryLines.sort(byScore), ...secondaryLines.sort(byScore)];
     let t = 0;
-    const chosen: typeof lines = [];
-    for (const l of lines) {
+    const chosen: typeof orderedPool = [];
+    for (const l of orderedPool) {
       if (t >= D - 0.8) break;
       const len = l.s.endS - l.s.startS;
       if (t + len > D) continue;
       chosen.push(l);
       t += len + 0.35;
     }
+    // Ordena cronologicamente para o discurso preservar começo, meio e fim.
+    chosen.sort((a, b) => (episodeOrders.get(a.ep.assetId) ?? 0) - (episodeOrders.get(b.ep.assetId) ?? 0) || a.s.startS - b.s.startS);
     if (!chosen.length) warnings.push('O estilo discurso precisa de falas: importe episódios com legenda ou com falas claras.');
     t = 0;
     const speechIntervals: { startS: number; endS: number }[] = [];
@@ -1186,27 +1236,23 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       speechIntervals.push({ startS, endS: startS + len });
       const sourceText = speechCaptionText(ep, s, lang, opts);
       const reason = `Fala ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}" ` : ''}de ${ep.name} ${fmt(s.startS)} (impacto ${s.impact.toFixed(2)})`;
-      cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, t, len + 0.35, s.startS, reason, { effects: opts.useEffects ? [...gradeFx(style.grade)] : [] }) });
+      cmds.push({
+        type: 'clip.add',
+        clip: baseClip(v1.id, ep.assetId, t, len + 0.35, s.startS, reason, {
+          effects: opts.useEffects ? [...gradeFx(style.grade)] : [],
+          audio: selectedVideoAudio(streamFor(ep), -60),
+        }),
+      });
       cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: voiceGainDb(2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
       const subtitleTranslations = speechTranslation(ep, s, opts);
       const speechPreset = opts.lyricStyle && opts.lyricStyle !== 'lyrics-cinematic' ? opts.lyricStyle : 'dialogue-dramatic';
-      if (opts.showText && text && sourceText) addCaptionPhrases(cmds, text.id, t, len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset);
+      if (opts.showText && opts.showSpeechCaptions !== false && text && sourceText) addCaptionPhrases(cmds, text.id, t, len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset);
       used.add(`${ep.assetId}@${s.startS}`);
       clipsMade++;
       t += len + 0.35;
     }
     if (speechIntervals.length && generatedVoiceAndMusicAreAudible(project, musicTrack, voice)) {
-      const keyframes: Keyframe[] = [];
-      for (const interval of speechIntervals) {
-        const duckStartS = Math.max(0, interval.startS - 0.1);
-        if (interval.startS > 0) keyframes.push({ atUs: us(duckStartS), value: 0, easing: 'linear' });
-        keyframes.push(
-          { atUs: us(interval.startS), value: DUCK_DB, easing: 'linear' },
-          { atUs: us(interval.endS), value: DUCK_DB, easing: 'linear' },
-          { atUs: us(interval.endS + 0.25), value: 0, easing: 'linear' },
-        );
-      }
-      musicClip.keyframes['audio.gainDb'] = keyframes;
+      musicClip.keyframes['audio.gainDb'] = buildDuckingKeyframes(speechIntervals, 2.5, 0.1, 0.25);
       musicClip.audio.duckingMode = 'manual';
     }
     cmds.push({ type: 'clip.add', clip: musicClip });
@@ -1415,8 +1461,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     score: (slot, candidate, previous, previousSlot, history) => scoreCandidate(slot, candidate, previous, previousSlot, history)?.score ?? Number.NEGATIVE_INFINITY,
     candidateWindow: fight
       ? (_slotIndex, musicSlot, forward) => {
-          // No foco em lutas, escolhe a próxima cena cronológica que realmente
-          // cabe no slot. Cenas curtas demais não podem bloquear todo o plano.
+          // No foco em lutas, abre uma janela progressiva (mantendo ordem cronológica estrita)
+          // para percorrer começo, meio, clímax e desfecho da luta com base no score narrativo.
           const ordered = [...forward].sort((a, b) =>
             a.episodeOrder - b.episodeOrder || a.sourceStartS - b.sourceStartS,
           );
@@ -1425,12 +1471,16 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
             candidate.sourceEndS - candidate.sourceStartS + 1e-6 >= slotDuration * 0.6,
           );
           if (!fits.length) return [];
+          const remainingSlots = Math.max(1, fitSlots.length - _slotIndex);
+          const stride = Math.max(1, Math.floor(fits.length / remainingSlots));
+          const windowSize = Math.min(fits.length, Math.max(4, Math.min(10, stride * 2 + 2)));
+          const windowFits = fits.slice(0, windowSize);
           const highEnergy = musicSlot.isDrop || musicSlot.energy >= 0.7;
           if (highEnergy) {
             // Respeita rótulos explícitos de "não é luta". Análises antigas não
             // registram confidence; nesse formato, o booleano explícito continua
             // sendo o sinal disponível (mesma regra usada pelo score de cenas).
-            const nextAction = fits.find((candidate) => {
+            const actionFits = windowFits.filter((candidate) => {
               const visual = visionOf(candidate.ep, candidate.shot);
               const usableFightLabel = visual && (
                 visual.confidence === undefined
@@ -1441,9 +1491,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
               );
               return !(usableFightLabel && visual.fight === false);
             });
-            return [nextAction ?? fits[0]!];
+            return actionFits.length ? actionFits : windowFits;
           }
-          return [fits[0]!];
+          return windowFits;
         }
       : organizationMode === 'narrative' && fitSlots.length > 3
       ? (slotIndex, musicSlot, forward, progress) => {
@@ -2055,7 +2105,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     cmds.push({ type: 'clip.add', clip: voiceClip });
     cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: voiceGainDb(b.preDrop ? 3 : 2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
     const speechPreset = opts.lyricStyle && opts.lyricStyle !== 'lyrics-cinematic' ? opts.lyricStyle : 'dialogue-dramatic';
-    if (opts.showText && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset);
+    if (opts.showText && opts.showSpeechCaptions !== false && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset);
     clipsMade++;
   }
 

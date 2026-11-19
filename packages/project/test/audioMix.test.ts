@@ -47,4 +47,19 @@ describe('mixagem de áudio', () => {
     expect(result.project.audioMix).toMatchObject({ normalization: 'ebu-r128', targetLufs: -12, duckingEnabled: false });
     expect(applyCommand(result.project, result.inverse).project.audioMix).toEqual(project.audioMix);
   });
+
+  it('funde falas próximas (<= 2,2 s) num único envelope de ducking sem subir a música no meio', () => {
+    let project = baseProject();
+    const music = track(project, 'Música');
+    const voice = track(project, 'Vozes');
+    const asset = audioAsset();
+    project = applyCommand(project, { type: 'asset.add', asset }).project;
+    project = applyCommand(project, { type: 'clip.add', clip: clip(music.id, asset.id, { timelineStartUs: 0, durationUs: 10_000_000 }) }).project;
+    project = applyCommand(project, { type: 'clip.add', clip: clip(voice.id, asset.id, { timelineStartUs: 1_000_000, durationUs: 1_500_000 }) }).project;
+    project = applyCommand(project, { type: 'clip.add', clip: clip(voice.id, asset.id, { timelineStartUs: 3_500_000, durationUs: 1_500_000 }) }).project;
+
+    const reduced = 10 ** (-12 / 20);
+    expect(automaticDuckingGain(project, music.id, 3_000_000)).toBeCloseTo(reduced);
+    expect(automaticDuckingGain(project, music.id, 5_500_000)).toBeCloseTo(1);
+  });
 });

@@ -19,6 +19,20 @@ export function getPlayer(session: ProjectSession): Player {
   return p;
 }
 
+const DIRECT_VIDEO_EXT = /\.(mp4|m4v|webm|mov)$/i;
+const DIRECT_VIDEO_CODECS = new Set(['h264', 'vp8', 'vp9', 'av1']);
+
+/** Indica se o WebView2 reproduz o vídeo original direto (ex.: MP4 H.264 8-bit em 1080p). */
+export function canPlayOriginalDirectly(asset: Project['assets'][number]): boolean {
+  if (asset.kind !== 'video') return false;
+  const extOk = DIRECT_VIDEO_EXT.test(asset.path) || DIRECT_VIDEO_EXT.test(asset.name);
+  const v = asset.probe?.video;
+  if (!v) return extOk;
+  const codecOk = DIRECT_VIDEO_CODECS.has(v.codec.toLowerCase());
+  const depthOk = v.bitDepth === null || v.bitDepth === undefined || v.bitDepth <= 8;
+  return extOk && codecOk && depthOk;
+}
+
 export function createPlayer(session: ProjectSession, project: Project, original?: boolean): Player {
   const platform = useApp.getState().platform;
   if (!platform) throw new Error('Plataforma indisponível');
@@ -26,7 +40,11 @@ export function createPlayer(session: ProjectSession, project: Project, original
     videoUrl: (id) => {
       const asset = session.project.assets.find((a) => a.id === id);
       if (!asset || asset.status === 'missing') return null;
-      const path = (original ?? useEditor.getState().previewOriginal) ? asset.path : session.assetRuntime(id).artifacts?.proxyPath ?? asset.path;
+      const useOriginal = original ?? useEditor.getState().previewOriginal;
+      const proxyPath = session.assetRuntime(id).artifacts?.proxyPath ?? null;
+      const path = useOriginal
+        ? (canPlayOriginalDirectly(asset) || !proxyPath ? asset.path : proxyPath)
+        : (proxyPath ?? asset.path);
       return path ? platform.fileUrl(path) : null;
     },
     audioUrl: (id, streamIndex) => {
@@ -37,9 +55,13 @@ export function createPlayer(session: ProjectSession, project: Project, original
         const defaultStream = asset.probe?.audio[0]?.index;
         if (streamIndex !== null && streamIndex !== undefined && streamIndex !== defaultStream) {
           const streamProxy = art?.audioStreamProxyPaths[streamIndex];
-          return streamProxy ? platform.fileUrl(streamProxy) : null;
+          return streamProxy ? platform.fileUrl(streamProxy) : (asset.path ? platform.fileUrl(asset.path) : null);
         }
-        return art?.proxyPath ? platform.fileUrl(art.proxyPath) : null;
+        const useOriginal = original ?? useEditor.getState().previewOriginal;
+        const path = useOriginal && canPlayOriginalDirectly(asset)
+          ? asset.path
+          : (art?.proxyPath ?? asset.path);
+        return path ? platform.fileUrl(path) : null;
       }
       return platform.fileUrl(art?.audioProxyPath ?? asset.path);
     },

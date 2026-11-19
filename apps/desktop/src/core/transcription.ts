@@ -71,7 +71,34 @@ export function mergeSpeechSegments(
     };
   });
   const untouched = existing.filter((_, index) => !consumed.has(index));
-  return [...untouched, ...recognized].sort((left, right) => left.startS - right.startS);
+  const sorted = [...untouched, ...recognized].sort((left, right) => left.startS - right.startS);
+  const coalesced: SpeechSegment[] = [];
+  for (const next of sorted) {
+    const prev = coalesced.at(-1);
+    if (
+      prev
+      && prev.text?.trim()
+      && next.text?.trim()
+      && next.startS - prev.endS >= -0.05
+      && next.startS - prev.endS <= 1.1
+      && next.endS - prev.startS <= 4.2
+      && (!prev.language || !next.language || prev.language === next.language)
+    ) {
+      const mergedText = `${prev.text.trim()} ${next.text.trim()}`.replace(/\s+/g, ' ').trim();
+      coalesced[coalesced.length - 1] = {
+        ...prev,
+        endS: Math.max(prev.endS, next.endS),
+        kind: prev.kind === 'grito' || next.kind === 'grito' ? 'grito' : prev.kind,
+        confidence: Math.max(prev.confidence, next.confidence),
+        text: mergedText,
+        language: prev.language ?? next.language ?? null,
+        impact: Math.max(prev.impact, next.impact, impactScore(mergedText)),
+      };
+    } else {
+      coalesced.push(next);
+    }
+  }
+  return coalesced;
 }
 
 function isValidTranscript(data: unknown): data is SpeechTranscript {

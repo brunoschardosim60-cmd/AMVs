@@ -614,21 +614,25 @@ describe('outros estilos', () => {
     expect(dropWord.text?.animationOut).toBe('fade');
   });
 
-  it('discurso: as falas viram frases em unidade e indicam precisão por segmento', () => {
+  it('discurso: as falas viram frases em unidade, mantêm ducking contínuo sem gangorra e indicam precisão por segmento', () => {
     const { on } = run({ style: 'discurso', durationS: 20 });
     expect(on('Vozes').length).toBeGreaterThan(0);
     expect(on('Música')[0]!.audio.gainDb).toBe(0);
     expect(on('Música')[0]!.audio.duckingMode).toBe('manual');
     expect(on('V1')[0]!.timelineStartUs).toBe(0);
+    expect(on('V1')[0]!.audio.gainDb).toBe(-60);
     expect(on('Vozes')[0]!.timelineStartUs).toBe(0);
     expect(evaluateKeyframes(on('Música')[0]!.keyframes['audio.gainDb'], 0, 0)).toBe(-16);
+    if (on('Vozes').length >= 2) {
+      expect(evaluateKeyframes(on('Música')[0]!.keyframes['audio.gainDb'], clipEndUs(on('Vozes')[0]!) + 150_000, 0)).toBe(-16);
+    }
     expect(evaluateKeyframes(
       on('Música')[0]!.keyframes['audio.gainDb'],
-      clipEndUs(on('Vozes')[0]!) + 250_000,
+      clipEndUs(on('Vozes').at(-1)!) + 250_000,
       0,
     )).toBe(0);
     expect(on('V1').every((c) => c.effects.some((e) => e.effect === 'color' && e.params.saturation === 0))).toBe(true);
-    expect(on('Legendas').every((c) => c.text?.timingPrecision === 'segment')).toBe(true);
+    expect(on('Legendas').every((c) => c.text?.timingPrecision === 'segment' && c.text.background === 'none')).toBe(true);
   });
 });
 
@@ -1114,5 +1118,39 @@ describe('integração das melhorias do patch', () => {
     const captions = out.clips.filter((c) => c.trackId === textTrack.id);
     expect(captions).toHaveLength(2);
     expect(captions.every((c) => c.text?.text === c.text?.text.toUpperCase() && c.text?.highlightColor === '#ff5364')).toBe(true);
+  });
+
+  it('episódio longo com lutas e falas não cai automaticamente no estilo discurso', () => {
+    const ep = episode('ep1', 360, 3); // 24 min
+    ep.analysis.sequences = [{ id: 'f1', kind: 'luta', startS: 200, endS: 400, intensity: 0.9, peak: 0.95, shotCount: 40 }];
+    ep.analysis.speech = Array.from({ length: 120 }, (_, i) => ({
+      startS: i * 10 + 1,
+      endS: i * 10 + 3,
+      kind: 'fala' as const,
+      confidence: 0.9,
+      text: `Fala ${i}`,
+      impact: 0.5,
+    }));
+    expect(recommendStyle([ep], music().analysis, false).style).not.toBe('discurso');
+  });
+
+  it('showSpeechCaptions=false oculta legenda das falas mantendo letra da música sem caixa preta', () => {
+    const ep = episode('ep1', 40, 3);
+    ep.analysis.speech = [{ startS: 10, endS: 12, kind: 'fala', confidence: 0.9, text: 'Fala com hardsub', impact: 0.95 }];
+    const p = project();
+    const r = generateAmv(p, music(), [ep], {
+      ...base,
+      durationS: 30,
+      musicStartS: 16,
+      useSpeech: true,
+      showText: true,
+      showSpeechCaptions: false,
+      lyrics: [{ startS: 20, endS: 23, text: 'Cantar com estilo' }],
+    });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const textTrack = out.tracks.find((t) => t.kind === 'text')!;
+    const captions = out.clips.filter((c) => c.trackId === textTrack.id);
+    expect(captions.some((c) => c.reason === 'Legenda da fala')).toBe(false);
+    expect(captions.some((c) => c.text?.text === 'Cantar com estilo' && c.text.background === 'none')).toBe(true);
   });
 });

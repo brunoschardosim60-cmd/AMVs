@@ -1,5 +1,14 @@
 # Novidades
 
+## 0.6.28
+
+**Prévia em 1080p nativo, áudio contínuo sem efeito gangorra nas falas, narrativa com início/meio/fim e legendas sem tarja preta.**
+
+- **Qualidade 1080p na Prévia:** o editor e a Biblioteca (`Mídia`, `Cenas` e `Falas`) agora usam `Original` e `100%` por padrão para vídeos H.264/VP9/AV1 8-bit compatíveis (`.mp4`/`.mov`/`.webm`), eliminando o aspecto borrado do proxy 540p/50%.
+- **Música sem disputar com a voz:** os intervalos de ducking automático e manual agora fundem pausas curtas entre falas (`<= 2,2 s`–`2,5 s`), mantendo a música suavemente abaixada durante todo o bloco de diálogo em vez de subir e descer a cada segundo. No modo Discurso, o áudio embutido de `V1` também é silenciado para evitar eco.
+- **Começo, meio e fim consistentes:** corrige `recommendStyle` para que episódios longos com lutas não caiam automaticamente em `Discurso` P&B, ordena cronologicamente as falas escolhidas no modo Discurso e abre janela progressiva no modo Luta para percorrer abertura, clímax e desfecho do confronto.
+- **Legendas limpas sem cobrir hardsubs:** remove a tarja preta opaca (`box`) das legendas de fala mantendo contorno forte + sombra, e adiciona a opção `Escrever legenda das falas na tela` para desativar facilmente em episódios que já têm legenda gravada no vídeo.
+
 ## 0.6.27
 
 **Prévia com áudio na Biblioteca, tradução automática garantida para PT-BR, reconhecimento ampliado de falas e alinhamento de letras entre idiomas.**

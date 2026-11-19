@@ -101,6 +101,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [musicStart, setMusicStart] = useState<number | null>(null);
   const [useEffects, setUseEffects] = useState(true);
   const [showText, setShowText] = useState(true);
+  const [showSpeechCaptions, setShowSpeechCaptions] = useState(true);
   const [speechCaptionLanguage, setSpeechCaptionLanguage] = useState('pt-BR');
   const [lyrics, setLyrics] = useState<{ name: string; cues: Cue[] } | null>(null);
   const [lyricDraft, setLyricDraft] = useState('');
@@ -1116,7 +1117,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         effectiveLyricSceneMatches = { ...effectiveLyricSceneMatches };
         for (const [scene, cues] of Object.entries(suggestedMatches)) effectiveLyricSceneMatches[scene] = { ...(effectiveLyricSceneMatches[scene] ?? {}), ...cues };
       }
-      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: resolvedLyrics, lyricSceneMatches: effectiveLyricSceneMatches, lyricStyle, speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
+      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: resolvedLyrics, lyricSceneMatches: effectiveLyricSceneMatches, lyricStyle, speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, showSpeechCaptions, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
       const m = musics.find((a) => a.id === musicId)!;
       const suggestedEditorialRange = chosenStart !== null
         ? null
@@ -2228,6 +2229,12 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               <label className="flex items-center gap-2">
                 <input type="checkbox" className="accent-violet" checked={showText} onChange={(e) => setShowText(e.target.checked)} /> Legendas e letras na tela
               </label>
+              {showText && (voiceMoments > 0 || selectedStyle === 'discurso') && (
+                <label className="ml-5 flex items-start gap-2 text-2xs text-ink-soft">
+                  <input type="checkbox" className="mt-0.5 accent-violet" checked={showSpeechCaptions} onChange={(e) => setShowSpeechCaptions(e.target.checked)} />
+                  <span>Escrever legenda das falas na tela (desmarque se o vídeo já tiver legenda gravada)</span>
+                </label>
+              )}
             </div>
 
             <div className="space-y-2">

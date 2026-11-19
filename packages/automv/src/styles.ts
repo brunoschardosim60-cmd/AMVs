@@ -289,11 +289,17 @@ export function recommendStyle(episodes: StyleEvidence[], music: MusicAnalysis, 
   const shots = episodes.flatMap((episode) => episode.analysis.shots);
   const speech = episodes.flatMap((episode) => episode.analysis.speech);
   const vision = episodes.flatMap((episode) => Object.values(episode.visual?.shots ?? {}));
+  const totalEpisodeDurationS = Math.max(
+    music.durationS,
+    episodes.reduce((sum, ep) => sum + Math.max(ep.analysis.durationS || 0, ep.analysis.shots.at(-1)?.endS ?? 0), 0),
+  );
+  const hasFights = episodes.some((ep) => (ep.analysis.sequences ?? []).some((seq) => seq.kind === 'luta'));
   const rate = (count: number, total: number) => total ? count / total : 0;
-  const impactRate = rate(shots.filter((shot) => shot.tags.includes('impacto') || shot.tags.includes('ação')).length, shots.length);
+  const rawImpactRate = rate(shots.filter((shot) => shot.tags.includes('impacto') || shot.tags.includes('ação')).length, shots.length);
+  const impactRate = hasFights ? Math.max(0.45, rawImpactRate) : rawImpactRate;
   const calmRate = rate(shots.filter((shot) => shot.tags.includes('calma')).length, shots.length);
   const sadRate = rate(vision.filter((shot) => shot.emotion === 'tristeza' || shot.emotion === 'calma').length, vision.length);
-  const speechRate = Math.min(1, speech.length / Math.max(1, music.durationS / 12));
+  const speechRate = Math.min(1, speech.length / Math.max(1, totalEpisodeDurationS / 15));
   const highTempo = Math.max(0, Math.min(1, (music.bpm - 90) / 80));
   const energy = Math.max(0, Math.min(1, music.intensity / 100));
   const scores: Record<StyleId, number> = {
@@ -301,7 +307,7 @@ export function recommendStyle(episodes: StyleEvidence[], music: MusicAnalysis, 
     rapido: 0.5 * impactRate + 0.3 * highTempo + 0.2 * energy,
     superacao: 0.3 * impactRate + 0.25 * speechRate + 0.25 * energy + 0.2 * (music.drops.length ? 1 : 0),
     letra: (hasLyrics ? 0.72 : 0) + 0.18 * energy + 0.1 * impactRate,
-    discurso: 0.6 * speechRate + 0.2 * calmRate + 0.2 * (1 - energy),
+    discurso: (0.6 * speechRate + 0.2 * calmRate + 0.2 * (1 - energy)) - (hasFights || energy >= 0.45 ? 0.35 : 0),
     emocional: 0.38 * calmRate + 0.32 * sadRate + 0.2 * (1 - energy) + 0.1 * (1 - highTempo),
   };
   const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])) as [StyleId, number][];

@@ -8,6 +8,7 @@ import { mergeSpeechSegments, transcribeMediaAsset, translateTextsAuto } from '.
 import { useApp, useSessionVersion } from '../../store';
 import { useEditor } from './editorStore';
 import { useStrip } from './mediaCache';
+import { canPlayOriginalDirectly } from './Preview';
 
 const TAGS: { id: ShotTag; label: string }[] = [
   { id: 'impacto', label: 'Impacto' },
@@ -92,7 +93,11 @@ export function ClipRangePreview({
   const videoRef = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false);
   const proxyPath = session.assetRuntime(asset.id).artifacts?.proxyPath;
-  const mediaPath = asset.status === 'missing' ? null : (proxyPath ?? asset.path);
+  const mediaPath = asset.status === 'missing'
+    ? null
+    : canPlayOriginalDirectly(asset)
+      ? asset.path
+      : (proxyPath ?? asset.path);
   const mediaUrl = mediaPath ? platform.fileUrl(mediaPath) : null;
 
   useEffect(() => {

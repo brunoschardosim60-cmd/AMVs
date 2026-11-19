@@ -15,6 +15,29 @@ function isVoiceClip(project: Project, clip: Project['clips'][number]): boolean 
   return track?.kind === 'video' && project.audioMix.includeVideoAudio && !!asset?.probe?.audio.length;
 }
 
+const MERGE_VOICE_GAP_US = 2_200_000;
+
+/** Agrupa clipes de voz próximos (<= 2,2 s) para evitar a música subir e descer entre frases seguidas. */
+function mergedAudibleVoiceIntervals(project: Project): { start: number; end: number }[] {
+  const intervals: { start: number; end: number }[] = [];
+  for (const clip of project.clips) {
+    const track = project.tracks.find((item) => item.id === clip.trackId);
+    if (!track || !isVoiceClip(project, clip) || !clip.assetId || !isAudibleTrack(project, track.id)) continue;
+    intervals.push({ start: clip.timelineStartUs, end: clipEndUs(clip) });
+  }
+  intervals.sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged: { start: number; end: number }[] = [];
+  for (const curr of intervals) {
+    const prev = merged.at(-1);
+    if (prev && curr.start - prev.end <= MERGE_VOICE_GAP_US) {
+      prev.end = Math.max(prev.end, curr.end);
+    } else {
+      merged.push({ ...curr });
+    }
+  }
+  return merged;
+}
+
 /** Linear gain reduction from audible voice clips for a music track at timeline time. */
 export function automaticDuckingGain(project: Project, targetTrackId: string, atUs: number, targetClip?: Clip): number {
   const settings = project.audioMix;
@@ -28,11 +51,7 @@ export function automaticDuckingGain(project: Project, targetTrackId: string, at
   const releaseUs = settings.duckingReleaseMs * 1000;
   const reducedGain = 10 ** (-settings.duckingAmountDb / 20);
   let gain = 1;
-  for (const clip of project.clips) {
-    const track = project.tracks.find((item) => item.id === clip.trackId);
-    if (!track || !isVoiceClip(project, clip) || !clip.assetId || !isAudibleTrack(project, track.id)) continue;
-    const start = clip.timelineStartUs;
-    const end = clipEndUs(clip);
+  for (const { start, end } of mergedAudibleVoiceIntervals(project)) {
     let candidate = 1;
     if (atUs < start && attackUs > 0 && atUs >= start - attackUs) {
       candidate = 1 - (1 - reducedGain) * (atUs - (start - attackUs)) / attackUs;
@@ -59,11 +78,9 @@ export function automaticDuckingExpression(project: Project, targetTrackId: stri
   const release = settings.duckingReleaseMs / 1000;
   const reduced = 10 ** (-settings.duckingAmountDb / 20);
   const expressions: string[] = [];
-  for (const clip of project.clips) {
-    const track = project.tracks.find((item) => item.id === clip.trackId);
-    if (!track || !isVoiceClip(project, clip) || !clip.assetId || !isAudibleTrack(project, track.id)) continue;
-    const start = (clip.timelineStartUs - targetStartUs) / 1e6;
-    const end = (clipEndUs(clip) - targetStartUs) / 1e6;
+  for (const interval of mergedAudibleVoiceIntervals(project)) {
+    const start = (interval.start - targetStartUs) / 1e6;
+    const end = (interval.end - targetStartUs) / 1e6;
     const attackStart = start - attack;
     const fadeIn = attack > 0
       ? `if(lt(t,${start}),1-(1-${reduced})*(t-${attackStart})/${attack},${reduced})`
