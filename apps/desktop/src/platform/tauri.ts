@@ -130,7 +130,7 @@ export function createTauriPlatform(): Platform {
     },
     async transcribe(
       connection: AnalyzerConnection,
-      request: { path: string; model: string; language?: string },
+      request: { path: string; model: string; language?: string; vadFilter?: boolean },
       options: { signal?: AbortSignal; onProgress?: (progress: SpeechProgress) => void } = {},
     ): Promise<SpeechTranscript> {
       const { signal, onProgress } = options;
@@ -151,11 +151,17 @@ export function createTauriPlatform(): Platform {
       };
       try {
         if (signal?.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
+        const payload: Record<string, unknown> = {
+          path: request.path,
+          model: request.model,
+          ...(request.language ? { language: request.language } : {}),
+          ...(request.vadFilter !== undefined ? { vad_filter: request.vadFilter } : {}),
+        };
         const started = await readJson<{ job_id: string }>(
           await tauriFetch(`${connection.baseUrl}/speech/jobs`, {
             method: 'POST',
             headers,
-            body: JSON.stringify(request),
+            body: JSON.stringify(payload),
             signal,
             connectTimeout: 15_000,
           }),

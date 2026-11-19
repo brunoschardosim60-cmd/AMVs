@@ -209,7 +209,7 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     }
   };
 
-  const transcribeAsset = async (asset: (typeof project.assets)[number], audioIndex: number, controller: AbortController) => {
+  const transcribeAsset = async (asset: (typeof project.assets)[number], audioIndex: number, controller: AbortController, vadFilter = true) => {
     const duration = (asset.probe?.durationUs ?? 0) / 1e6;
     const cacheDir = joinPath(await platform!.cacheDir(), 'transcription');
     await platform!.fs.mkdir(cacheDir);
@@ -252,7 +252,7 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
       if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
       return await platform!.analyzer.transcribe(
         connection,
-        { path: audioPath, model: speechModel, ...(speechLanguage ? { language: speechLanguage } : {}) },
+        { path: audioPath, model: speechModel, vadFilter, ...(speechLanguage ? { language: speechLanguage } : {}) },
         {
           signal: controller.signal,
           onProgress: (job) => {
@@ -291,8 +291,15 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     setCancellingSpeech(false);
     setSpeechProgress({ stage: 'extracting', progress: 0, duration: (lyricsAsset.probe?.durationUs ?? 0) / 1e6 });
     try {
-      const transcript = await transcribeAsset(lyricsAsset, audioIndex, controller);
-      const words = transcript.segments.flatMap((segment) => segment.words ?? []);
+      const transcript = await transcribeAsset(lyricsAsset, audioIndex, controller, false);
+      const words = transcript.segments.flatMap((segment) => {
+        const w = (segment.words ?? []).filter((item) => item.text.trim() && item.end > item.start);
+        if (w.length) return w;
+        if (!segment.text.trim() || segment.end <= segment.start) return [];
+        const tokens = segment.text.trim().split(/\s+/).filter(Boolean);
+        const step = (segment.end - segment.start) / Math.max(1, tokens.length);
+        return tokens.map((tok, idx) => ({ start: segment.start + idx * step, end: segment.start + (idx + 1) * step, text: tok }));
+      });
       const aligned = alignUntimedLyrics(untimedLyrics.text, words);
       if (!aligned.cues.length) {
         toast({ tone: 'warn', title: 'Nenhum verso alinhado', body: 'A transcrição não encontrou palavras suficientemente parecidas. Tente escolher outro idioma ou um modelo maior.' });

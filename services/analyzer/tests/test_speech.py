@@ -83,3 +83,25 @@ def test_transcribe_reports_progress_and_cancels_between_segments(tmp_path):
         )
 
     assert progress == [(0.0, 2.0), (1.0, 2.0)]
+
+
+def test_transcribe_retries_without_vad_when_vad_returns_empty(tmp_path):
+    media = tmp_path / "song.wav"
+    media.touch()
+    calls = []
+
+    class SingingModel:
+        def transcribe(self, path, **options):
+            calls.append(options)
+            if options.get("vad_filter", True):
+                return [], SimpleNamespace(language="en", language_probability=0.0, duration=3.0)
+            words = [SimpleNamespace(word=" Rise", start=0.5, end=1.0)]
+            return [SimpleNamespace(start=0.5, end=1.0, text=" Rise", words=words)], SimpleNamespace(language="en", language_probability=0.82, duration=3.0)
+
+    result = transcribe(str(media), "small", model_loader=lambda _: SingingModel())
+    assert len(calls) == 2
+    assert calls[0]["vad_filter"] is True
+    assert calls[1]["vad_filter"] is False
+    assert calls[1]["condition_on_previous_text"] is False
+    assert len(result["segments"]) == 1
+    assert result["segments"][0]["text"] == "Rise"

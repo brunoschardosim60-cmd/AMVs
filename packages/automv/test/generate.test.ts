@@ -330,12 +330,12 @@ describe('gerar AMV — hype', () => {
       command.type === 'clip.add' && command.clip.trackId === voiceTrackId ? [command.clip] : [],
     );
 
-    // A legenda em português não combina com o áudio japonês, mas não deve suprimir a fala.
+    // Em anime legendado (áudio japonês + legenda em português), preserva a voz original e exibe a legenda.
     expect(voiceClips).toHaveLength(1);
     expect(voiceClips[0]!.audio.streamIndex).toBe(1);
     expect(result.warnings.some((warning) => warning.includes('Nenhuma fala marcante'))).toBe(false);
     const textTrackId = p.tracks.find((track) => track.kind === 'text')!.id;
-    expect(result.commands.some((command) => command.type === 'clip.add' && command.clip.trackId === textTrackId)).toBe(false);
+    expect(result.commands.some((command) => command.type === 'clip.add' && command.clip.trackId === textTrackId && command.clip.text?.text === 'Eu não vou desistir!')).toBe(true);
   });
 
   it('monta vídeo inteiro, sem sobreposição, na batida, com motivo em cada clipe', () => {
@@ -995,5 +995,92 @@ describe('integração das melhorias do patch', () => {
     expect(clips.every((clip) => clip.effects.some((effect) =>
       effect.effect === 'color' && Number(effect.params.exposure ?? 0) > 0,
     ))).toBe(true);
+  });
+
+  it('exibe legenda PT embutida em anime com áudio japonês (não apaga legenda por idioma diferente)', () => {
+    const ep = episode('ep1', 40, 3);
+    ep.audioStreams = [{ index: 1, language: 'jpn', title: 'Japanese' }];
+    ep.analysis.speech = [
+      { startS: 12, endS: 14, kind: 'fala', confidence: 0.9, text: 'Eu vou superar meus limites!', language: 'por', impact: 0.95 },
+    ];
+    const p = project();
+    const r = generateAmv(p, music(), [ep], {
+      ...base, durationS: 60, musicStartS: 16, useSpeech: true, showText: true, voiceLang: 'original', voiceMoments: 1,
+    });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const textTrack = out.tracks.find((t) => t.kind === 'text')!;
+    const captions = out.clips.filter((c) => c.trackId === textTrack.id);
+    expect(captions.some((c) => c.text?.text === 'Eu vou superar meus limites!')).toBe(true);
+  });
+
+  it('filtro de personagem e luta escolhida à mão nunca misturam falas de outro personagem ou outra luta', () => {
+    const ep = episode('ep1', 100, 3);
+    ep.analysis.sequences = [
+      { id: 'f1', kind: 'luta', startS: 0, endS: 40, intensity: 0.8, peak: 0.9, shotCount: 10 },
+      { id: 'f2', kind: 'luta', startS: 60, endS: 100, intensity: 0.85, peak: 0.95, shotCount: 10 },
+    ];
+    ep.analysis.speech = [
+      { startS: 12, endS: 14, kind: 'fala', confidence: 0.9, text: 'Fala da Luta 1', language: 'por', impact: 0.6 },
+      { startS: 72, endS: 74, kind: 'fala', confidence: 0.9, text: 'Fala da Luta 2', language: 'por', impact: 0.99 },
+    ];
+    ep.vision = {
+      version: 'v2',
+      model: 'test',
+      shots: Object.fromEntries(ep.analysis.shots.map((sh) => [
+        shotKey(sh.startS),
+        {
+          characters: sh.startS < 50 ? ['Naruto'] : ['Sasuke'],
+          fight: true,
+          action: 'combate' as const,
+          confidence: 0.9,
+          note: '',
+        },
+      ])),
+    };
+    const p = project();
+    const r = generateAmv(p, music(), [ep], {
+      ...base,
+      durationS: 30,
+      musicStartS: 20,
+      focus: 'fight',
+      sequenceIds: ['ep1#f1'],
+      characters: ['Naruto'],
+      useSpeech: true,
+      showText: true,
+      voiceMoments: 2,
+    });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const v1 = out.tracks.find((t) => t.name === 'V1')!;
+    const videoClips = out.clips.filter((c) => c.trackId === v1.id);
+    expect(videoClips.length).toBeGreaterThan(0);
+    // Nenhuma cena nem fala pode vazar da Luta 2 / Sasuke (>= 50s)
+    expect(videoClips.every((c) => c.sourceInUs < 50 * S)).toBe(true);
+    const textTrack = out.tracks.find((t) => t.kind === 'text')!;
+    const captions = out.clips.filter((c) => c.trackId === textTrack.id);
+    expect(captions.some((c) => c.text?.text === 'Fala da Luta 2')).toBe(false);
+  });
+
+  it('encaixa fala solicitada mesmo em música sem drop e de energia alta', () => {
+    const ep = episode('ep1', 40, 3);
+    ep.analysis.speech = [
+      { startS: 10, endS: 12, kind: 'fala', confidence: 0.9, text: 'Não acabou ainda!', language: 'por', impact: 0.9 },
+    ];
+    const m = music();
+    const highEnergyNoDrop: MusicInput = {
+      ...m,
+      analysis: {
+        ...m.analysis,
+        drops: [],
+        energy: m.analysis.energy.map(() => 0.8),
+      },
+    };
+    const p = project();
+    const r = generateAmv(p, highEnergyNoDrop, [ep], {
+      ...base, durationS: 20, musicStartS: 0, useSpeech: true, showText: true, voiceMoments: 1,
+    });
+    expect(r.summary.voices).toBe(1);
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const textTrack = out.tracks.find((t) => t.kind === 'text')!;
+    expect(out.clips.some((c) => c.trackId === textTrack.id && c.text?.text === 'Não acabou ainda!')).toBe(true);
   });
 });

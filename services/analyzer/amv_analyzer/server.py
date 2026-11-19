@@ -35,6 +35,7 @@ class TranscriptionRequest(BaseModel):
     path: str = Field(min_length=1)
     model: str = "small"
     language: str | None = None
+    vad_filter: bool = True
 
 
 class SegmentationPoint(BaseModel):
@@ -158,12 +159,14 @@ def create_app(token: str) -> FastAPI:
             try:
                 if job.cancelled.is_set():
                     raise TranscriptionCancelled("transcrição cancelada")
+                extra: dict[str, Any] = {"vad_filter": False} if not request.vad_filter else {}
                 result = transcribe(
                     str(path),
                     request.model,
                     request.language,
                     cancelled=job.cancelled.is_set,
                     on_progress=lambda done, total: update_progress(job, done, total),
+                    **extra,
                 )
                 with job.lock:
                     job.result = result

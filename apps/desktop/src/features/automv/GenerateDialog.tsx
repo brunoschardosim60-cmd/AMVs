@@ -480,14 +480,51 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const noOriginal = ready.some((e) => (e.probe?.audio.length ?? 0) > 1 && pickAudioStreamByLanguage(e.probe!.audio, voiceLang) === null);
   const sceneCount = useMemo(() => ready.reduce((a, e) => a + (session.assetRuntime(e.id).episode?.shots.length ?? 0), 0), [ready, session]);
 
+  const parseDraftTimedLyrics = (raw: string): Cue[] => {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    const ext = /^\s*\[\d+:\d{2}/m.test(trimmed)
+      ? 'letra.lrc'
+      : /-->/.test(trimmed)
+        ? (/^WEBVTT/i.test(trimmed) ? 'letra.vtt' : 'letra.srt')
+        : null;
+    if (!ext) return [];
+    return parseSubtitles(ext, trimmed, music?.durationS).filter((c) => Number.isFinite(c.startS) && c.text.trim());
+  };
+
+  const extractTranscriptWords = (transcript: SpeechTranscript): { start: number; end: number; text: string }[] => {
+    const out: { start: number; end: number; text: string }[] = [];
+    for (const segment of transcript.segments) {
+      const words = (segment.words ?? []).filter((word) => word.text.trim() && word.end > word.start);
+      if (words.length) {
+        out.push(...words);
+      } else if (segment.text.trim() && segment.end > segment.start) {
+        const tokens = segment.text.trim().split(/\s+/).filter(Boolean);
+        const step = (segment.end - segment.start) / Math.max(1, tokens.length);
+        tokens.forEach((tok, idx) => {
+          out.push({ start: segment.start + idx * step, end: segment.start + (idx + 1) * step, text: tok });
+        });
+      }
+    }
+    return out;
+  };
+
   const pickLyrics = async () => {
-    const path = await platform!.dialogs.pickFile('Letra da música (com tempo)', ['lrc', 'srt', 'ass', 'vtt', 'txt']);
+    const path = await platform!.dialogs.pickFile('Letra da música (com tempo ou texto)', ['lrc', 'srt', 'ass', 'vtt', 'txt']);
     if (!path) return;
     const text = decodeSubtitleBytes(await platform!.fs.readFile(path));
     const cues = parseSubtitles(path, text, music?.durationS);
     const timed = cues.filter((c) => Number.isFinite(c.startS));
     if (!timed.length) {
-      toast({ tone: 'warn', title: 'Essa letra não tem tempo', body: 'Use um arquivo .lrc ou .srt (letra sincronizada).' });
+      const plain = text.replace(/^\uFEFF/, '').trim();
+      if (plain) {
+        setLyricDraft(plain);
+        setLyrics(null);
+        setLyricSceneMatches({});
+        toast({ tone: 'info', title: 'Texto carregado na caixa de letra', body: 'Clique em "Sincronizar texto com a música" ou gere o AMV para sincronizar automaticamente.' });
+        return;
+      }
+      toast({ tone: 'warn', title: 'Essa letra está vazia', body: 'Use um arquivo .lrc, .srt ou .txt com versos.' });
       return;
     }
     setLyrics({ name: path.split(/[\\/]/).pop()!, cues: timed });
@@ -499,15 +536,17 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     audioIndex: number,
     controller: AbortController,
     onProgress?: (stage: string, progress: number) => void,
+    options?: { vadFilter?: boolean },
   ) => {
     if (!platform) throw new Error('Plataforma local indisponível.');
     if (asset.status === 'missing') throw new Error(`O arquivo ${asset.name} está ausente. Relocalize-o antes de transcrever.`);
+    const vadFilter = options?.vadFilter ?? true;
     const duration = (asset.probe?.durationUs ?? 0) / S;
     const cacheDir = joinPath(await platform.cacheDir(), 'transcription');
     await platform.fs.mkdir(cacheDir);
     const cacheKey = (asset.hash || asset.id).replace(/[^a-zA-Z0-9_-]/g, '_');
     const audioPath = joinPath(cacheDir, `${cacheKey}-stream-${audioIndex}.wav`);
-    const transcriptPath = joinPath(cacheDir, `${cacheKey}-stream-${audioIndex}-small-v1.json`);
+    const transcriptPath = joinPath(cacheDir, `${cacheKey}-stream-${audioIndex}-small-${vadFilter ? 'v1' : 'novad-v1'}.json`);
     let partialPath: string | null = null;
     try {
       if (await platform.fs.exists(transcriptPath)) {
@@ -563,7 +602,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       }
       if (controller.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
       const connection = await platform.analyzer.start();
-      const transcript = await platform.analyzer.transcribe(connection, { path: audioPath, model: 'small' }, {
+      const transcript = await platform.analyzer.transcribe(connection, { path: audioPath, model: 'small', vadFilter }, {
         signal: controller.signal,
         onProgress: (job) => onProgress?.(
           'Reconhecendo palavras',
@@ -595,13 +634,20 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     }
   };
 
-  const syncWrittenLyrics = async () => {
+  const syncWrittenLyrics = async (): Promise<Cue[] | null> => {
     const text = lyricDraft.trim();
-    if (!platform || !selectedMusic || !text || lyricsSyncing) return;
+    if (!platform || !selectedMusic || !text || lyricsSyncing) return null;
+    const directTimed = parseDraftTimedLyrics(text);
+    if (directTimed.length) {
+      setLyrics({ name: 'Letra colada (com tempo)', cues: directTimed });
+      setLyricSceneMatches({});
+      toast({ tone: 'ok', title: `${directTimed.length} linhas carregadas`, body: 'Os tempos colados no campo foram reconhecidos diretamente.' });
+      return directTimed;
+    }
     const audioIndex = selectedMusic.probe?.audio[0]?.index;
     if (audioIndex === undefined) {
       toast({ tone: 'error', title: 'A música não tem áudio disponível', body: 'Escolha outro arquivo de música ou confira se ele ainda existe.' });
-      return;
+      return null;
     }
     const controller = new AbortController();
     transcriptionAbort.current = controller;
@@ -609,16 +655,17 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     setLyricsSyncing(true);
     setLyricsSyncProgress({ stage: 'Preparando áudio da música', progress: 0 });
     try {
-      const transcript = await transcribeAudioAsset(selectedMusic, audioIndex, controller, (stage, progress) => setLyricsSyncProgress({ stage, progress }));
-      const words = transcript.segments.flatMap((segment) => segment.words ?? []).filter((word) => word.text.trim() && word.end > word.start);
+      // Para voz cantada sobre música, desliga o filtro VAD para o Silero não descartar os vocais.
+      const transcript = await transcribeAudioAsset(selectedMusic, audioIndex, controller, (stage, progress) => setLyricsSyncProgress({ stage, progress }), { vadFilter: false });
+      const words = extractTranscriptWords(transcript);
       if (!words.length) {
-        toast({ tone: 'warn', title: 'Não consegui reconhecer as palavras cantadas', body: 'O modelo não devolveu tempos por palavra. Tente um trecho mais limpo ou use um .LRC/.SRT sincronizado.' });
-        return;
+        toast({ tone: 'warn', title: 'Não consegui reconhecer as palavras cantadas', body: 'O modelo não encontrou vocais claros nessa faixa. Tente um arquivo .LRC/.SRT sincronizado.' });
+        return null;
       }
       const aligned = alignUntimedLyrics(text, words);
       if (!aligned.cues.length) {
         toast({ tone: 'warn', title: 'Não encontrei correspondências suficientes', body: 'A letra pode estar diferente do áudio reconhecido. Confira se o texto é da mesma versão e idioma da música.' });
-        return;
+        return null;
       }
       setLyrics({ name: 'Letra escrita e sincronizada', cues: aligned.cues });
       setLyricSceneMatches({});
@@ -627,8 +674,10 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         title: `${aligned.matched} linhas sincronizadas`,
         body: `${aligned.uncertain} com tempo incerto e ${aligned.unmatched} não encontradas. As linhas sem correspondência não serão inventadas; revise o resultado antes de gerar.`,
       });
+      return aligned.cues;
     } catch (error) {
       if ((error as Error).name !== 'AbortError') toast({ tone: 'error', title: 'Não consegui sincronizar a letra', body: (error as Error).message });
+      return null;
     } finally {
       transcriptionAbort.current = null;
       setLyricsSyncing(false);
@@ -898,6 +947,15 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       });
 
       const automaticSpeechWarnings: string[] = [];
+      let resolvedLyrics: Cue[] | undefined = lyrics?.cues;
+      if (!resolvedLyrics?.length && lyricDraft.trim() && selectedMusic) {
+        setGenerationStep('Sincronizando a letra digitada com a música...');
+        setGenerationProgress(25);
+        const synced = await syncWrittenLyrics();
+        if (synced?.length) resolvedLyrics = synced;
+        else automaticSpeechWarnings.push('Não foi possível sincronizar automaticamente a letra digitada; confira o texto ou importe um .LRC/.SRT.');
+      }
+
       const speechTranslations: Record<string, string> = {};
       const wantsSpeech = voiceMoments > 0 || selectedStyle === 'discurso';
       const speechController = wantsSpeech ? new AbortController() : null;
@@ -905,6 +963,13 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         transcriptionAbort.current = speechController;
         let completed = 0;
         for (const episodeInput of directorInputs) {
+          const existingWithText = episodeInput.analysis.speech.filter((s) => s.text && s.text.trim().length >= 3);
+          const hasUsableSubtitles = existingWithText.length >= 3
+            && (voiceLang !== 'pt' || existingWithText.some((s) => s.language?.toLowerCase().startsWith('pt') || s.language?.toLowerCase().startsWith('por')));
+          if (hasUsableSubtitles) {
+            completed++;
+            continue;
+          }
           const asset = selectedEpisodes.find((item) => item.id === episodeInput.assetId);
           const streams = asset?.probe?.audio ?? [];
           const audioIndex = pickAudioStreamByLanguage(streams, voiceLang)
@@ -1065,7 +1130,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         effectiveLyricSceneMatches = { ...effectiveLyricSceneMatches };
         for (const [scene, cues] of Object.entries(suggestedMatches)) effectiveLyricSceneMatches[scene] = { ...(effectiveLyricSceneMatches[scene] ?? {}), ...cues };
       }
-      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches: effectiveLyricSceneMatches, lyricStyle, speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
+      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: resolvedLyrics, lyricSceneMatches: effectiveLyricSceneMatches, lyricStyle, speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
       const m = musics.find((a) => a.id === musicId)!;
       const suggestedEditorialRange = chosenStart !== null
         ? null

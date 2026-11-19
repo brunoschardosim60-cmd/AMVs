@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { parseAss, parseLrc, parseVtt } from './subtitles';
 
 describe('subtitle files', () => {
-  it('keeps imported song styles and dialogue styles containing ed', () => {
-    const file = '[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.00,0:00:03.00,Song,,0,0,0,,{\\k100}Hello {\\k100}world\nDialogue: 0,0:00:04.00,0:00:06.00,Default-Red,,0,0,0,,Stay here';
+  it('keeps imported song styles and dialogue styles containing ed, while filtering signs', () => {
+    const file = '[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.00,0:00:03.00,Song,,0,0,0,,{\\k100}Hello {\\k100}world\nDialogue: 0,0:00:03.00,0:00:03.50,Sign,,0,0,0,,PLACA\nDialogue: 0,0:00:04.00,0:00:06.00,Default-Red,,0,0,0,,Stay here';
     expect(parseAss(file).map((cue) => cue.text)).toEqual(['Hello world', 'Stay here']);
     expect(parseAss(file, true).map((cue) => cue.text)).toEqual(['Stay here']);
   });

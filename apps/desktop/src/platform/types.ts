@@ -61,7 +61,7 @@ export interface Platform {
     start(): Promise<AnalyzerConnection>;
     transcribe(
       connection: AnalyzerConnection,
-      request: { path: string; model: string; language?: string },
+      request: { path: string; model: string; language?: string; vadFilter?: boolean },
       options?: { signal?: AbortSignal; onProgress?: (progress: SpeechProgress) => void },
     ): Promise<SpeechTranscript>;
     stop(): Promise<void>;

@@ -136,9 +136,12 @@ export function parseAss(text: string, dialogueOnly = false): Cue[] {
     };
     const s = p(get('start'));
     const e = p(get('end'));
-    // estilos de placa/sinal/karaokê costumam ser texto na tela, não fala
+    // estilos de placa/sinal costumam ser texto na tela, não fala nem letra;
+    // estilos de música (song/op/ed/title) são ignorados apenas ao extrair falas embutidas.
     const style = get('style').toLowerCase();
-    if (!t || !Number.isFinite(s) || !Number.isFinite(e) || e <= s || (dialogueOnly && /(?:^|[\s_-])(sign|placa|song|op|ed|title)(?:$|[\s_-])/.test(style))) continue;
+    const isSign = /(?:^|[\s_-])(sign|placa)(?:$|[\s_-])/.test(style);
+    const isNonDialogue = /(?:^|[\s_-])(song|op|ed|title)(?:$|[\s_-])/.test(style);
+    if (!t || !Number.isFinite(s) || !Number.isFinite(e) || e <= s || isSign || (dialogueOnly && isNonDialogue)) continue;
     const words = assKaraokeWords(rawText, s, e);
     out.push({ startS: s, endS: e, text: t, ...(words.length ? { words } : {}) });
   }

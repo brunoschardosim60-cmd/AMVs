@@ -29,4 +29,14 @@ describe('local lyric alignment', () => {
     expect(result.cues).toHaveLength(1);
     expect(result.unmatched).toBe(1);
   });
+  it('tolera pequenas variações de transcrição em vocais cantados sem inventar linhas ausentes', () => {
+    const result = alignUntimedLyrics('Never shining tonight\nVerso totalmente diferente', [
+      { start: 1, end: 1.5, text: 'Neva' },
+      { start: 1.5, end: 2.1, text: 'shinin' },
+      { start: 2.1, end: 2.8, text: 'tonight' },
+    ]);
+    expect(result.matched).toBe(1);
+    expect(result.unmatched).toBe(1);
+    expect(result.cues[0]).toMatchObject({ startS: 1, endS: 2.8, text: 'Never shining tonight' });
+  });
 });

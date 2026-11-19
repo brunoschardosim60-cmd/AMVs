@@ -49,6 +49,33 @@ function lyricTokens(text: string, characters: boolean): string[] {
   return normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
 }
 
+function tokenCost(a: string, b: string): number {
+  if (a === b) return 0;
+  // Tolerância leve para erros de 1–2 letras comuns ao transcrever voz cantada sobre música,
+  // mantendo custo >= 0,45 para que casamentos aproximados sejam marcados como incertos.
+  if (a.length >= 4 && b.length >= 4) {
+    if (a.startsWith(b) || b.startsWith(a)) {
+      const ratio = Math.min(a.length, b.length) / Math.max(a.length, b.length);
+      if (ratio >= 0.72) return 0.45;
+    }
+    if (Math.abs(a.length - b.length) <= 2) {
+      let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+      for (let i = 1; i <= a.length; i++) {
+        const curr = [i];
+        for (let j = 1; j <= b.length; j++) {
+          curr[j] = Math.min(prev[j]! + 1, curr[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+        }
+        prev = curr;
+      }
+      const dist = prev[b.length]!;
+      const maxLen = Math.max(a.length, b.length);
+      if (maxLen >= 5 && dist <= 2) return Math.max(0.45, dist / maxLen);
+      if (dist === 1) return 0.68;
+    }
+  }
+  return 1;
+}
+
 function editDistance(a: string[], b: string[]): number {
   let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
   for (let i = 1; i <= a.length; i++) {
@@ -57,7 +84,7 @@ function editDistance(a: string[], b: string[]): number {
       current[j] = Math.min(
         previous[j]! + 1,
         current[j - 1]! + 1,
-        previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
+        previous[j - 1]! + tokenCost(a[i - 1]!, b[j - 1]!),
       );
     }
     previous = current;
