@@ -50,7 +50,7 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
   };
 
   return (
-    <aside className="editor-side-panel flex w-[250px] shrink-0 flex-col border-r border-line" aria-label="Mídia do projeto">
+    <aside className="editor-side-panel flex w-[300px] shrink-0 flex-col border-r border-line" aria-label="Mídia do projeto">
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line-soft px-3">
         <LibraryBig size={15} className="text-violet-strong" />
         <span className="text-xs font-semibold tracking-wide text-ink">Biblioteca</span>

@@ -1153,4 +1153,30 @@ describe('integração das melhorias do patch', () => {
     expect(captions.some((c) => c.reason === 'Legenda da fala')).toBe(false);
     expect(captions.some((c) => c.text?.text === 'Cantar com estilo' && c.text.background === 'none')).toBe(true);
   });
+
+  it('lyricDisplayMode=kinetic-words divide versos em explosões cinéticas de 1-2 palavras no centro com glow e pop', () => {
+    const ep = episode('ep1', 40, 3);
+    const p = project();
+    const r = generateAmv(p, music(), [ep], {
+      ...base,
+      durationS: 30,
+      musicStartS: 16,
+      useSpeech: false,
+      showText: true,
+      lyricStyle: 'anime-impact',
+      lyricDisplayMode: 'kinetic-words',
+      lyrics: [{ startS: 20, endS: 22.4, text: 'Nunca vou desistir agora' }],
+    });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const textTrack = out.tracks.find((t) => t.kind === 'text')!;
+    const lyricClips = out.clips
+      .filter((c) => c.trackId === textTrack.id)
+      .sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+    expect(lyricClips.length).toBeGreaterThanOrEqual(2);
+    expect(lyricClips.every((c) => c.transform.y === 0 && c.text?.background === 'none')).toBe(true);
+    expect(lyricClips.every((c) => (c.text?.glowIntensity ?? 0) > 0)).toBe(true);
+    expect(lyricClips.some((c) => (c.keyframes['transform.scale']?.length ?? 0) >= 2)).toBe(true);
+    const combined = lyricClips.map((c) => c.text?.text).join(' ');
+    expect(combined).toContain('DESISTIR');
+  });
 });

@@ -128,6 +128,23 @@ function drawSpaced(
   }
 }
 
+function strokeSpaced(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  spacing: number,
+): void {
+  if (!spacing) {
+    ctx.strokeText(text, x, y);
+    return;
+  }
+  for (const char of Array.from(text)) {
+    ctx.strokeText(char, x, y);
+    x += ctx.measureText(char).width + spacing;
+  }
+}
+
 function layoutLines(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   text: string,
@@ -297,7 +314,7 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   const activeWord = wordTimings.findIndex((word) => {
     const reliable = !word.uncertain && (
       word.source === 'ass' || word.source === 'lrc' || word.source === 'manual' ||
-      ((word.source === 'whisper' || word.source === 'estimated') && (word.confidence ?? 0) >= 0.78)
+      ((word.source === 'whisper' || word.source === 'estimated') && (word.confidence ?? 0) >= 0.55)
     );
     return reliable && nowUs >= word.startUs && nowUs < word.endUs;
   });
@@ -320,18 +337,19 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
       ctx.font = `${word?.weight ?? t.weight ?? 700} ${wordSize}px "${t.font}", "Manrope Variable", system-ui, sans-serif`;
       if (active && animation === 'fade') ctx.globalAlpha *= Math.min(1, wordProgress * 3);
       if (t.shadow) {
-        ctx.shadowColor = 'rgba(0,0,0,0.75)';
+        ctx.shadowColor = 'rgba(0,0,0,0.85)';
         ctx.shadowBlur = 10 * k;
         ctx.shadowOffsetY = 3 * k;
-      }
-      if ((t.glowIntensity ?? 0) > 0) {
-        ctx.shadowColor = t.glowColor ?? '#ffde59';
-        ctx.shadowBlur = (t.glowIntensity ?? 0) * k;
       }
       if (t.outlineColor && t.outlineWidth > 0) {
         ctx.lineWidth = t.outlineWidth * 2 * k;
         ctx.strokeStyle = t.outlineColor;
-        ctx.strokeText(part.word, wordX, wordY);
+        strokeSpaced(ctx, part.word, wordX, wordY, spacing * wordScale);
+      }
+      if ((t.glowIntensity ?? 0) > 0) {
+        ctx.shadowColor = t.glowColor ?? '#ffde59';
+        ctx.shadowBlur = (t.glowIntensity ?? 0) * k;
+        ctx.shadowOffsetY = 0;
       }
       const useSyllables = !!t.syllableAnimation && !!word && !word.uncertain &&
         (word.source === 'ass' || word.source === 'manual') && (word.confidence ?? 0) >= 0.95 &&

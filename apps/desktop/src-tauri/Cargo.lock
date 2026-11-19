@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "amv-studio"
-version = "0.6.28"
+version = "0.6.29"
 dependencies = [
  "keyring",
  "serde",

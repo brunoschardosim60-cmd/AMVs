@@ -1,4 +1,4 @@
-import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type CameraMotionType, type Cue, type SceneEmotion, type SpeechSegment } from '@amv/analysis';
+import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type Cue, type SceneEmotion, type SpeechSegment } from '@amv/analysis';
 import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, planNarrative, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, scoreSpeechCandidate, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type LyricTypographyStyle, type OrganizationMode, type StyleId } from '@amv/automv';
 import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { alignUntimedLyrics, alignUntimedLyricsWithFallback, promoteAlignedCuesForTypography } from '@amv/subtitles';
@@ -24,19 +24,6 @@ const INTENSITY = ['Suave', 'Moderada', 'Intensa', 'Extrema'] as const;
 const DURATIONS = [15, 30, 45, 60, 90];
 const S = 1_000_000;
 const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-const CAMERA_MOTION_LABEL: Record<CameraMotionType, string> = {
-  'pan-horizontal': 'pan horizontal',
-  'pan-vertical': 'pan vertical',
-  'zoom-in': 'zoom aparente in',
-  'zoom-out': 'zoom aparente out',
-  rotation: 'rotação',
-  travelling: 'travelling/deslocamento',
-  static: 'câmera estática',
-  unknown: 'movimento não classificado',
-};
-const FLOW_DIRECTIONS = ['direita', 'baixo-direita', 'baixo', 'baixo-esquerda', 'esquerda', 'cima-esquerda', 'cima', 'cima-direita'];
-const flowDirectionLabel = (degrees: number | null): string | null =>
-  degrees === null ? null : FLOW_DIRECTIONS[((Math.round(degrees / 45) % 8) + 8) % 8]!;
 
 interface LocalizedRange {
   startUs: number;
@@ -78,6 +65,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [epIds, setEpIds] = useState<string[]>(episodes.map((e) => e.id));
   const [style, setStyle] = useState<StyleId>('hype');
   const [styleMode, setStyleMode] = useState<'auto' | 'manual'>('auto');
+  const [musicDriveMode, setMusicDriveMode] = useState<'lyric-kinetic' | 'pure-rhythm' | 'lyric-verse' | 'narrative-climax'>('lyric-kinetic');
+  const [autoExtractMusicLyrics, setAutoExtractMusicLyrics] = useState(true);
   const [intensity, setIntensity] = useState<0 | 1 | 2 | 3>(2);
   const [duration, setDuration] = useState(30);
   const [localizedStartS, setLocalizedStartS] = useState((localizedRange?.startUs ?? 0) / S);
@@ -112,7 +101,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [matchLyrics, setMatchLyrics] = useState(false);
   const [lyricSceneMatches, setLyricSceneMatches] = useState<NonNullable<GenerateOptions['lyricSceneMatches']>>({});
   const [suggestedMatches, setSuggestedMatches] = useState<NonNullable<GenerateOptions['lyricSceneMatches']> | null>(null);
-  const [lyricStyle, setLyricStyle] = useState<LyricTypographyStyle>('lyrics-cinematic');
+  const [lyricStyle, setLyricStyle] = useState<LyricTypographyStyle>('anime-impact');
   const [seed, setSeed] = useState(1);
   const [result, setResult] = useState<{
     warnings: string[];
@@ -477,7 +466,6 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   };
 
   const hasTwoAudio = ready.some((e) => (e.probe?.audio.length ?? 0) > 1);
-  const noOriginal = ready.some((e) => (e.probe?.audio.length ?? 0) > 1 && pickAudioStreamByLanguage(e.probe!.audio, voiceLang) === null);
   const sceneCount = useMemo(() => ready.reduce((a, e) => a + (session.assetRuntime(e.id).episode?.shots.length ?? 0), 0), [ready, session]);
 
   const parseDraftTimedLyrics = (raw: string): Cue[] => {
@@ -492,25 +480,74 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     return parseSubtitles(ext, trimmed, music?.durationS).filter((c) => Number.isFinite(c.startS) && c.text.trim());
   };
 
+  const applyMusicDriveMode = (mode: 'lyric-kinetic' | 'pure-rhythm' | 'lyric-verse' | 'narrative-climax') => {
+    setMusicDriveMode(mode);
+    if (mode === 'lyric-kinetic') {
+      setShowText(true);
+      setAutoExtractMusicLyrics(true);
+      if (lyricStyle === 'lyrics-cinematic' || lyricStyle === 'anime-dialogue') setLyricStyle('anime-impact');
+      if (editorialDirection === 'cinematic') setEditorialDirection('hype');
+    } else if (mode === 'pure-rhythm') {
+      setStyleMode('manual');
+      setStyle('rapido');
+      setEditorialDirection('hype');
+      setHitSync(true);
+      setAdaptiveSpeed(true);
+      setVoiceMoments(0);
+      setShowSpeechCaptions(false);
+      setAutoExtractMusicLyrics(false);
+    } else if (mode === 'lyric-verse') {
+      setShowText(true);
+      setAutoExtractMusicLyrics(true);
+    } else if (mode === 'narrative-climax') {
+      setEditorialDirection('cinematic');
+      setOrganizationMode('narrative');
+      setShowText(true);
+    }
+  };
+
   const pickLyrics = async () => {
     const path = await platform!.dialogs.pickFile('Letra da música (com tempo ou texto)', ['lrc', 'srt', 'ass', 'vtt', 'txt']);
     if (!path) return;
     const text = decodeSubtitleBytes(await platform!.fs.readFile(path));
     const cues = parseSubtitles(path, text, music?.durationS);
     const timed = cues.filter((c) => Number.isFinite(c.startS));
+    const fileName = path.split(/[\\/]/).pop()!;
     if (!timed.length) {
       const plain = text.replace(/^\uFEFF/, '').trim();
       if (plain) {
         setLyricDraft(plain);
         setLyrics(null);
         setLyricSceneMatches({});
-        toast({ tone: 'info', title: 'Texto carregado na caixa de letra', body: 'Clique em "Sincronizar texto com a música" ou gere o AMV para sincronizar automaticamente.' });
+        toast({ tone: 'info', title: 'Texto carregado na caixa de letra', body: 'Sincronize com a música ou clique em Gerar.' });
         return;
       }
       toast({ tone: 'warn', title: 'Essa letra está vazia', body: 'Use um arquivo .lrc, .srt ou .txt com versos.' });
       return;
     }
-    setLyrics({ name: path.split(/[\\/]/).pop()!, cues: timed });
+    let prepared = timed;
+    let labelName = fileName;
+    if (translateLyricsToPt && platform) {
+      setLyricsSyncing(true);
+      setLyricsSyncProgress({ stage: 'Traduzindo letra importada (PT-BR)', progress: 0.4 });
+      try {
+        const ptRes = await translateTextsAuto(platform, timed.map((c) => c.text), 'português brasileiro');
+        prepared = promoteAlignedCuesForTypography(
+          timed.map((cue, idx) => ({
+            ...cue,
+            text: ptRes.translations[idx]?.trim() || cue.text,
+          })),
+        );
+        labelName = `${fileName} (PT-BR)`;
+      } finally {
+        setLyricsSyncing(false);
+        setLyricsSyncProgress(null);
+      }
+    } else {
+      prepared = promoteAlignedCuesForTypography(timed);
+    }
+    setLyricDraft(prepared.map((c) => c.text).join('\n'));
+    setLyrics({ name: labelName, cues: prepared });
     setLyricSceneMatches({});
   };
 
@@ -889,8 +926,64 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       let sfxAssets: GenerateOptions['sfxAssets'];
       let sfxError: string | null = null;
       setBusy(true);
-      setGenerationStep('Completando a análise visual local das cenas...');
-      setGenerationProgress(8);
+      const automaticSpeechWarnings: string[] = [];
+
+      // Passo 1 (Música Primeiro): analisa/sincroniza/extrai e traduz a letra da música ANTES de escolher as cenas.
+      let resolvedLyrics: Cue[] | undefined = lyrics?.cues;
+      let lyricsTranslatedToPt = !!lyrics?.name.includes('(PT-BR)');
+      if (!resolvedLyrics?.length && lyricDraft.trim() && selectedMusic) {
+        setGenerationStep('Sincronizando a letra com a música...');
+        setGenerationProgress(6);
+        const synced = await syncWrittenLyrics();
+        if (synced?.length) {
+          resolvedLyrics = synced;
+          if (translateLyricsToPt) lyricsTranslatedToPt = true;
+        } else {
+          automaticSpeechWarnings.push('Não foi possível sincronizar automaticamente a letra digitada; confira o texto ou importe um .LRC/.SRT.');
+        }
+      } else if (
+        !resolvedLyrics?.length
+        && autoExtractMusicLyrics
+        && selectedMusic
+        && (musicDriveMode === 'lyric-kinetic' || musicDriveMode === 'lyric-verse' || selectedStyle === 'letra')
+      ) {
+        setGenerationStep('Analisando música e extraindo a letra...');
+        setGenerationProgress(6);
+        const extracted = await extractLyricsFromMusic();
+        if (extracted?.length) {
+          resolvedLyrics = extracted;
+          if (translateLyricsToPt) lyricsTranslatedToPt = true;
+        }
+      }
+      if (resolvedLyrics?.length && translateLyricsToPt && !lyricsTranslatedToPt) {
+        setGenerationStep('Traduzindo a letra da música para PT-BR...');
+        setGenerationProgress(12);
+        const controller = new AbortController();
+        transcriptionAbort.current = controller;
+        try {
+          const ptRes = await translateTextsAuto(
+            platform!,
+            resolvedLyrics.map((cue) => cue.text),
+            'português brasileiro',
+            { signal: controller.signal },
+          );
+          resolvedLyrics = promoteAlignedCuesForTypography(
+            resolvedLyrics.map((cue, idx) => ({
+              ...cue,
+              text: ptRes.translations[idx]?.trim() || cue.text,
+            })),
+          );
+          lyricsTranslatedToPt = true;
+        } catch (error) {
+          if ((error as Error).name === 'AbortError') throw error;
+          automaticSpeechWarnings.push(`Não foi possível traduzir a letra antes de gerar: ${(error as Error).message}`);
+        } finally {
+          transcriptionAbort.current = null;
+        }
+      }
+
+      setGenerationStep('Analisando cenas pela energia e letra da música...');
+      setGenerationProgress(16);
       await new Promise((resolve) => setTimeout(resolve, 0));
       const localVisionPending = ready.reduce((total, episode) => total + session.localVisionTargets(episode.id, 'all').length, 0);
       let localVisionAnalyzed = 0;
@@ -909,7 +1002,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             signal: controller.signal,
             onProgress: (done, total) => {
               const fraction = (completedBeforeEpisode + done) / Math.max(1, localVisionPending);
-              setGenerationProgress(8 + fraction * 18);
+              setGenerationProgress(16 + fraction * 14);
               setGenerationStep('Analisando cenas localmente · ' + episode.name + ' (' + done + '/' + total + ')');
             },
           });
@@ -927,7 +1020,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       const semanticPending = ready.reduce((total, episode) => total + session.visionTargets(episode.id, 'all').length, 0);
       if (deepVisionBeforeGenerate && semanticPending > 0) {
         setGenerationStep('Preparando análise semântica de todas as cenas...');
-        setGenerationProgress(26);
+        setGenerationProgress(30);
         await new Promise((resolve) => setTimeout(resolve, 0));
         semanticVisionResult = await runVision('all');
         if (!semanticVisionResult) {
@@ -949,16 +1042,6 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           vision: canonicalizeEpisodeVision(runtime.vision as EpisodeVision | null | undefined, session.project.characterLibrary),
         };
       });
-
-      const automaticSpeechWarnings: string[] = [];
-      let resolvedLyrics: Cue[] | undefined = lyrics?.cues;
-      if (!resolvedLyrics?.length && lyricDraft.trim() && selectedMusic) {
-        setGenerationStep('Sincronizando a letra digitada com a música...');
-        setGenerationProgress(25);
-        const synced = await syncWrittenLyrics();
-        if (synced?.length) resolvedLyrics = synced;
-        else automaticSpeechWarnings.push('Não foi possível sincronizar automaticamente a letra digitada; confira o texto ou importe um .LRC/.SRT.');
-      }
 
       const speechTranslations: Record<string, string> = {};
       const wantsSpeech = voiceMoments > 0 || selectedStyle === 'discurso';
@@ -1028,6 +1111,17 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         editorialDirection,
       }, music);
 
+      const targetLanguage: Record<string, string> = {
+        'pt-BR': 'português brasileiro',
+        en: 'inglês',
+        es: 'espanhol',
+        fr: 'francês',
+        ja: 'japonês',
+        de: 'alemão',
+        it: 'italiano',
+        ko: 'coreano',
+        zh: 'chinês',
+      };
       if (showText && wantsSpeech && speechCaptionLanguage !== 'original') {
         const pool = editorialFootagePlan.pool;
         const speechCandidates = directorInputs
@@ -1041,30 +1135,24 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             if (!episodeInput.hasAudio || excluded.includes(episodeInput.assetId)) return false;
             const streams = episodeInput.audioStreams ?? [];
             if (voiceLang === 'pt' && streams.length >= 2 && pickAudioStreamByLanguage(streams, 'pt') === null) return false;
-            if (editorialFootagePlan.mode !== 'fight' || selectedStyle === 'discurso') return true;
+            if (editorialFootagePlan.mode !== 'fight') return true;
             const nearChosenFight = pool.some((entry) => entry.ep.assetId === episodeInput.assetId
               && speech.startS >= entry.seq.startS - 15 && speech.endS <= entry.seq.endS + 5);
             const fallbackFromChosenFightEpisode = pool.some((entry) => entry.ep.assetId === episodeInput.assetId);
-            return nearChosenFight || fallbackFromChosenFightEpisode;
+            return nearChosenFight || fallbackFromChosenFightEpisode || selectedStyle === 'discurso';
           })
-          .sort((left, right) => scoreSpeechCandidate(right.speech) - scoreSpeechCandidate(left.speech)
-            || left.speech.startS - right.speech.startS)
+          .sort((left, right) => {
+            const leftInPool = pool.some((entry) => entry.ep.assetId === left.episodeInput.assetId && left.speech.startS >= entry.seq.startS - 15 && left.speech.endS <= entry.seq.endS + 5) ? 1 : 0;
+            const rightInPool = pool.some((entry) => entry.ep.assetId === right.episodeInput.assetId && right.speech.startS >= entry.seq.startS - 15 && right.speech.endS <= entry.seq.endS + 5) ? 1 : 0;
+            return rightInPool - leftInPool
+              || scoreSpeechCandidate(right.speech) - scoreSpeechCandidate(left.speech)
+              || left.speech.startS - right.speech.startS;
+          })
           .slice(0, selectedStyle === 'discurso'
-            ? Math.ceil(duration / 1.15) + 2
-            : Math.max(30, voiceMoments * 6));
+            ? Math.max(60, Math.ceil(duration / 1.0) + 10)
+            : Math.max(80, voiceMoments * 15));
         if (speechCandidates.length) {
           try {
-            const targetLanguage: Record<string, string> = {
-              'pt-BR': 'português brasileiro',
-              en: 'inglês',
-              es: 'espanhol',
-              fr: 'francês',
-              ja: 'japonês',
-              de: 'alemão',
-              it: 'italiano',
-              ko: 'coreano',
-              zh: 'chinês',
-            };
             setGenerationStep(`Traduzindo as falas para ${targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage}...`);
             setGenerationProgress(34);
             const translated = await translateTextsAuto(
@@ -1081,10 +1169,10 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               const candidate = speechCandidates[index]!;
               if (value?.trim()) speechTranslations[`${candidate.episodeInput.assetId}@${candidate.speech.startS}`] = value.trim();
             });
-            if (translated.failed) automaticSpeechWarnings.push(`${translated.failed} fala(s) não conseguiram ser traduzidas; essas aparecem no idioma original.`);
+            if (translated.failed) automaticSpeechWarnings.push(`${translated.failed} fala(s) não conseguiram ser traduzidas.`);
           } catch (error) {
             if ((error as Error).name === 'AbortError') throw error;
-            automaticSpeechWarnings.push(`Falha na tradução automática: ${(error as Error).message}. As falas não traduzidas aparecem no idioma original.`);
+            automaticSpeechWarnings.push(`Falha na tradução automática: ${(error as Error).message}.`);
           }
         }
       }
@@ -1117,7 +1205,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         effectiveLyricSceneMatches = { ...effectiveLyricSceneMatches };
         for (const [scene, cues] of Object.entries(suggestedMatches)) effectiveLyricSceneMatches[scene] = { ...(effectiveLyricSceneMatches[scene] ?? {}), ...cues };
       }
-      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: resolvedLyrics, lyricSceneMatches: effectiveLyricSceneMatches, lyricStyle, speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, showSpeechCaptions, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
+      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: resolvedLyrics, lyricSceneMatches: effectiveLyricSceneMatches, lyricStyle, lyricDisplayMode: musicDriveMode === 'lyric-kinetic' ? 'kinetic-words' : 'rhythmic-phrases', speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, showSpeechCaptions, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
       const m = musics.find((a) => a.id === musicId)!;
       const suggestedEditorialRange = chosenStart !== null
         ? null
@@ -1166,6 +1254,98 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         music: { assetId: m.id, name: m.name, analysis: music },
       });
       r.commands = editorialReview.commands;
+
+      // Passe de segurança pós-geração: garante que NENHUMA fala ou letra apareça no idioma errado na timeline.
+      const pendingSpeechClips = showText && speechCaptionLanguage !== 'original'
+        ? r.commands.flatMap((cmd) => (
+            cmd.type === 'clip.add'
+            && cmd.clip.text
+            && cmd.clip.reason?.startsWith('Legenda da fala')
+            && cmd.clip.text.textSource !== 'translation'
+              ? [cmd.clip]
+              : []
+          ))
+        : [];
+      const pendingLyricClips = showText && translateLyricsToPt && !lyricsTranslatedToPt
+        ? r.commands.flatMap((cmd) => (
+            cmd.type === 'clip.add'
+            && cmd.clip.text
+            && (cmd.clip.reason?.startsWith('Letra da música') || cmd.clip.reason?.startsWith('Palavra da letra'))
+            && cmd.clip.text.textSource !== 'translation'
+              ? [cmd.clip]
+              : []
+          ))
+        : [];
+      const translateGeneratedClips = async (clipsToFix: Clip[], targetLangCode: string, targetLangName: string) => {
+        if (!clipsToFix.length || !platform) return;
+        const postAbort = new AbortController();
+        transcriptionAbort.current = postAbort;
+        setGenerationStep(`Garantindo legendas em ${targetLangName}...`);
+        setGenerationProgress(82);
+        try {
+          const res = await translateTextsAuto(
+            platform,
+            clipsToFix.map((clip) => clip.text!.original ?? clip.text!.text),
+            targetLangName,
+            { batchSize: 20, signal: postAbort.signal },
+          );
+          res.translations.forEach((value, idx) => {
+            const translatedRaw = value?.trim();
+            const clip = clipsToFix[idx]!;
+            const textObj = clip.text;
+            if (!translatedRaw || !textObj) return;
+            const origRaw = textObj.original ?? textObj.text;
+            const wasUpper = textObj.text === textObj.text.toUpperCase() && /[A-Z]/.test(textObj.text);
+            const finalDisplay = wasUpper ? translatedRaw.toUpperCase() : translatedRaw;
+            const tokens = finalDisplay.trim().match(/\S+/gu) ?? [];
+            let rebuiltWordTimings = textObj.wordTimings;
+            if (textObj.wordTimings.length > 0 && tokens.length >= 2) {
+              const durUs = Math.max(40_000, clip.durationUs);
+              const weights = tokens.map((tok) => Math.max(1, Array.from(tok).length + 1));
+              const totalWeight = weights.reduce((acc, w) => acc + w, 0);
+              let cursorUs = 0;
+              rebuiltWordTimings = tokens.map((token, tIdx) => {
+                const shareUs = Math.round((weights[tIdx]! / totalWeight) * durUs);
+                const startUs = cursorUs;
+                const endUs = tIdx === tokens.length - 1 ? durUs : Math.min(durUs, Math.max(startUs + 20_000, startUs + shareUs));
+                cursorUs = endUs;
+                return {
+                  text: token,
+                  startUs,
+                  endUs,
+                  source: 'estimated' as const,
+                  confidence: 0.9,
+                  uncertain: false,
+                  color: null,
+                  scale: null,
+                  offsetX: null,
+                  offsetY: null,
+                  weight: null,
+                  syllables: [],
+                };
+              });
+            }
+            clip.text = {
+              ...textObj,
+              text: finalDisplay,
+              original: origRaw,
+              lang: targetLangCode,
+              textSource: 'translation',
+              translations: { ...textObj.translations, [targetLangCode]: finalDisplay },
+              wordTimings: rebuiltWordTimings,
+              timingPrecision: rebuiltWordTimings.length ? 'word' : textObj.timingPrecision,
+            };
+          });
+        } finally {
+          transcriptionAbort.current = null;
+        }
+      };
+      if (pendingSpeechClips.length) {
+        await translateGeneratedClips(pendingSpeechClips, speechCaptionLanguage, targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage);
+      }
+      if (pendingLyricClips.length) {
+        await translateGeneratedClips(pendingLyricClips, 'pt-BR', 'português brasileiro');
+      }
       const issueCounts = qualityIssueSummary(editorialReview.quality.issues);
       if (localVisionPending > 0) {
         r.warnings.push('Análise visual local concluída: ' + localVisionAnalyzed + ' cenas analisadas; ' + localVisionFailed + ' sem resultado; ' + localFrameFailures + ' falhas de extração.');
@@ -1610,14 +1790,17 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               style={{ width: `${generationProgress}%` }}
             />
           </div>
-          <p className="mt-2 text-2xs text-muted">As etapas verificam apenas sinais disponíveis; o que não tem evidência aparece como pendente de avaliação.</p>
-          {(generationStep.startsWith('Analisando cenas localmente')
+          {(generationStep.startsWith('Sincronizando a letra')
+            || generationStep.startsWith('Analisando música')
+            || generationStep.startsWith('Traduzindo a letra')
+            || generationStep.startsWith('Analisando cenas localmente')
             || generationStep.startsWith('Análise semântica profunda')
             || generationStep.startsWith('Preparando análise semântica')
             || generationStep.startsWith('Entendendo as falas do anime')
             || generationStep.startsWith('Extraindo áudio')
-            || generationStep.startsWith('Reconhecendo palavras')
-            || generationStep.startsWith('Traduzindo as falas')) && (
+            || generationStep.startsWith('Reconhecendo falas')
+            || generationStep.startsWith('Traduzindo as falas')
+            || generationStep.startsWith('Garantindo legendas')) && (
             <Button
               size="sm"
               variant="ghost"
@@ -1674,425 +1857,10 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         <p className="text-sm text-ink-soft">Importe pelo menos <b>uma música</b> e <b>um episódio</b>. O AMV Studio analisa os dois e monta o vídeo a partir deles.</p>
       ) : (
         <div className="generate-options grid max-h-[calc(100vh-210px)] gap-5 overflow-y-auto pr-1">
-          <div>
-            <p className="mb-2 text-xs font-medium text-ink-soft">Perfil criativo</p>
-            <select
-              aria-label="Perfil criativo"
-              className="h-9 w-full rounded-control border border-line bg-base px-2 text-sm"
-              value={activeProfileId}
-              onChange={(event) => {
-                const profile = creativeProfiles.find((item) => item.id === event.currentTarget.value);
-                if (profile) applyCreativeProfile(profile);
-                else {
-                  setActiveProfileId('');
-                  setProfileNameDraft('');
-                }
-              }}
-            >
-              <option value="">Opções atuais</option>
-              {creativeProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
-            </select>
-            <div className="mt-2 space-y-1.5 rounded-control border border-line-soft p-2">
-              <input
-                aria-label="Nome do novo perfil criativo"
-                className="h-7 w-full rounded-control border border-line bg-base px-2 text-xs"
-                placeholder="Nome do perfil para salvar"
-                value={profileNameDraft}
-                onChange={(event) => setProfileNameDraft(event.currentTarget.value)}
-                disabled={!profilesLoaded || profileStorageError}
-              />
-              <div className="flex flex-wrap gap-1">
-                <Button size="sm" onClick={saveNewCreativeProfile} disabled={!profilesLoaded || profileStorageError || !profileNameDraft.trim()}>
-                  Salvar como novo
-                </Button>
-                {activeProfileIsCustom && (
-                  <>
-                    <Button size="sm" onClick={updateCreativeProfile} disabled={!profilesLoaded || profileStorageError}>Atualizar</Button>
-                    <Button size="sm" variant="ghost" onClick={() => void deleteCreativeProfile()} disabled={!profilesLoaded || profileStorageError}>Excluir</Button>
-                  </>
-                )}
-              </div>
-              <p className="text-2xs text-muted">Perfis ficam neste computador. Ao aplicar um, você ainda pode ajustar as opções antes de gerar.</p>
-              {profileStorageError && <p className="text-2xs text-danger">Armazenamento inválido; perfis padrão ficam disponíveis, mas salvar está desativado para preservar o arquivo.</p>}
-            </div>
-
-            <p className="mb-2 text-xs font-medium text-ink-soft">Estilo</p>
-            <div className="mb-2 flex gap-1 rounded-control bg-base p-1">
-              <button type="button" aria-pressed={styleMode === 'auto'} onClick={() => setStyleMode('auto')} className={`flex-1 rounded-[4px] px-2 py-1.5 text-xs ${styleMode === 'auto' ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
-                Aberto · o app escolhe
-              </button>
-              <button type="button" aria-pressed={styleMode === 'manual'} onClick={() => setStyleMode('manual')} className={`flex-1 rounded-[4px] px-2 py-1.5 text-xs ${styleMode === 'manual' ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
-                Escolher estilo
-              </button>
-            </div>
-            {styleMode === 'auto' ? (
-              <div className="rounded-md border border-violet/40 bg-violet/10 p-3">
-                <div className="flex items-center gap-2">
-                  {(() => {
-                    const Icon = ICONS[selectedStyle];
-                    return <Icon size={17} className="shrink-0 text-violet-strong" />;
-                  })()}
-                  <span className="text-sm font-semibold text-ink">{STYLES.find((item) => item.id === selectedStyle)!.label}</span>
-                </div>
-                <p className="mt-1 text-xs text-ink-soft">{recommendation ? `Recomendado por: ${recommendation.reason}.` : 'Aguardando a análise da música e dos episódios selecionados.'}</p>
-                {smartPreset && (
-                  <div className="mt-2.5 pt-2 border-t border-violet/20">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-2xs font-medium text-violet-strong">Preset Automático do Episódio</span>
-                      <Button size="sm" variant="primary" onClick={applySmartPreset}>
-                        <Sparkles size={12} className="mr-1 inline" />
-                        Aplicar Tudo Ajustado
-                      </Button>
-                    </div>
-                    <ul className="mt-1.5 space-y-0.5 text-2xs text-muted list-disc list-inside">
-                      {smartPreset.explanation.reasons.map((r, i) => (
-                        <li key={i}>{r}</li>
-                      ))}
-                    </ul>
-                    {smartPreset.heroCover && (
-                      <p className="mt-1 text-2xs text-ink-soft">
-                        🖼️ <strong>Capa heroica:</strong> {smartPreset.heroCover.reason} ({smartPreset.heroCover.episodeName} aos {smartPreset.heroCover.timestampS.toFixed(1)}s)
-                      </p>
-                    )}
-                  </div>
-                )}
-                <p className="mt-1 text-2xs text-muted">A escolha usa BPM, energia, cenas, falas e letra carregada. É automática e local; você ainda pode mudar para um estilo manual.</p>
-              </div>
-            ) : (
-            <div className="grid grid-cols-1 gap-1.5">
-              {STYLES.map((s) => {
-                const Icon = ICONS[s.id];
-                const on = style === s.id;
-                return (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => setStyle(s.id)}
-                    className={`flex gap-3 rounded-md border px-3 py-2 text-left ${on ? 'border-violet bg-violet/10' : 'border-line hover:bg-raised'}`}
-                  >
-                    <Icon size={18} className={`mt-0.5 shrink-0 ${on ? 'text-violet-strong' : 'text-muted'}`} />
-                    <span>
-                      <span className="block text-sm font-semibold">{s.label}</span>
-                      <span className="block text-xs text-muted">{s.description}</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            )}
-
-            <p className="mt-4 mb-2 text-xs font-medium text-ink-soft">Direção de edição</p>
-            <div className="grid grid-cols-3 gap-1 rounded-control bg-base p-1">
-              {([
-                ['cinematic', 'Cinema'],
-                ['balanced', 'Balanceado'],
-                ['hype', 'Hype'],
-              ] as const).map(([mode, label]) => (
-                <button key={mode} type="button" aria-pressed={editorialDirection === mode} onClick={() => setEditorialDirection(mode)} className={`rounded-[4px] px-1 py-1.5 text-xs ${editorialDirection === mode ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            <p className="mt-1 text-2xs text-muted">
-              {editorialDirection === 'cinematic' ? 'Planos longos, mais continuidade, dissolves e efeitos discretos.' : editorialDirection === 'hype' ? 'Cortes mais curtos, prioridade a ação/impacto e efeitos mais fortes, sem abandonar a sequência.' : 'Mantém o ritmo do estilo escolhido, equilibrando música e continuidade.'}
-            </p>
-
-            <p className="mt-4 mb-2 text-xs font-medium text-ink-soft">Intensidade</p>
-            <div className="flex gap-1 rounded-control bg-base p-1">
-              {INTENSITY.map((label, i) => (
-                <button key={label} type="button" onClick={() => setIntensity(i as 0 | 1 | 2 | 3)} className={`flex-1 rounded-[4px] py-1.5 text-xs ${intensity === i ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            <label className="mt-3 block text-xs text-ink-soft">
-              Ênfase em ação <span className="tnum text-muted">{actionEmphasis}%</span>
-              <input
-                aria-label="Ênfase em ação"
-                className="mt-1 block w-full accent-violet"
-                type="range"
-                min={0}
-                max={100}
-                value={actionEmphasis}
-                onChange={(event) => setActionEmphasis(Number(event.currentTarget.value))}
-              />
-            </label>
-            <label className="mt-2 block text-xs text-ink-soft">
-              Ênfase emocional <span className="tnum text-muted">{emotionEmphasis}%</span>
-              <input
-                aria-label="Ênfase emocional"
-                className="mt-1 block w-full accent-violet"
-                type="range"
-                min={0}
-                max={100}
-                value={emotionEmphasis}
-                onChange={(event) => setEmotionEmphasis(Number(event.currentTarget.value))}
-              />
-            </label>
-            <p className="mt-1 text-2xs text-muted">Esses pesos só alteram a seleção quando há tags locais ou sinais visuais confiáveis; não são notas nem probabilidades.</p>
-            <label className="mt-2 block text-xs text-ink-soft">
-              Emoção principal
-              <select
-                aria-label="Emoção principal do perfil"
-                className="mt-1 h-8 w-full rounded-control border border-line bg-base px-2"
-                value={preferredEmotion}
-                onChange={(event) => setPreferredEmotion(event.currentTarget.value as SceneEmotion | '')}
-              >
-                <option value="">Sem preferência</option>
-                {SCENE_EMOTIONS.map((emotion) => <option key={emotion} value={emotion}>{emotion}</option>)}
-              </select>
-            </label>
-            <p className="mt-3 mb-1 text-xs font-medium text-ink-soft">Organização temporal</p>
-            <div className="grid grid-cols-3 gap-1 rounded-control bg-base p-1">
-              {([
-                ['chronological', 'Cronológico'],
-                ['narrative', 'Narrativo'],
-                ['free', 'Livre'],
-              ] as const).map(([mode, label]) => (
-                <button key={mode} type="button" aria-pressed={organizationMode === mode} onClick={() => setOrganizationMode(mode)} className={`rounded-[4px] px-1 py-1.5 text-2xs ${organizationMode === mode ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            <p className="mt-1 text-2xs text-muted">
-              {organizationMode === 'chronological' ? 'Avança pela ordem dos episódios selecionados e pelo tempo original.' : organizationMode === 'narrative' ? 'Preserva a progressão de cada episódio e planeja a sequência completa antes de montar.' : 'Permite saltos não lineares; saltos sem sinal musical ou visual recebem penalidade e justificativa.'}
-            </p>
-
-          </div>
-
-          <div>
-            <p className="mb-2 text-xs font-medium text-ink-soft">Cenas</p>
-            <div className="flex gap-1 rounded-control bg-base p-1">
-              {(
-                [
-                  ['fight', 'Focar na luta'],
-                  ['mix', 'Misturar cenas'],
-                ] as const
-              ).map(([k, label]) => (
-                <button key={k} type="button" onClick={() => setFocus(k)} className={`flex-1 rounded-[4px] py-1.5 text-xs ${focus === k ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            {focus === 'fight' ? (
-              <div className="mt-2">
-                <p className="mb-1 text-2xs text-muted">
-                  {seqIds.length ? 'Usando só as lutas marcadas.' : plan?.mode === 'fight' ? `O app escolheu: ${plan.pool.map((e) => `${e.ep.name} ${mmss(e.seq.startS)}–${mmss(e.seq.endS)}`).join(' + ')}. Marque para escolher você.` : 'Aguardando a análise ou sem luta clara nos episódios.'}
-                </p>
-                {fights.length > 0 && (
-                  <ul className="max-h-32 space-y-1 overflow-y-auto">
-                    {fights.map(({ ep, q }) => {
-                      const key = `${ep.assetId}#${q.id}`;
-                      return (
-                        <li key={key}>
-                          <label className="flex items-center gap-2 text-xs">
-                            <input type="checkbox" className="accent-violet" checked={seqIds.includes(key)} onChange={() => setSeqIds((xs) => (xs.includes(key) ? xs.filter((x) => x !== key) : [...xs, key]))} />
-                            <span className="min-w-0 flex-1 truncate">
-                              {ep.name} · {mmss(q.startS)}–{mmss(q.endS)}
-                            </span>
-                            <span className="tnum text-2xs text-faint">{q.shotCount} cenas · força {Math.round(q.intensity * 100)}%</span>
-                          </label>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-            ) : (
-              <p className="mt-2 text-2xs text-muted">Pega as cenas mais fortes de qualquer ponto dos episódios (pode misturar lutas diferentes).</p>
-            )}
-            <label className="mt-2 flex items-center gap-2 text-xs">
-              <input type="checkbox" className="accent-violet" checked={hitSync} onChange={(e) => setHitSync(e.target.checked)} /> Encaixar o golpe de cada cena na batida
-            </label>
-            <label className="mt-2 flex items-start gap-2 text-xs">
-              <input type="checkbox" className="mt-0.5 accent-violet" checked={adaptiveSpeed} onChange={(e) => setAdaptiveSpeed(e.target.checked)} />
-              <span>
-                Rampas de velocidade guiadas pela ação
-                <span className="mt-0.5 block text-2xs text-muted">Só usa slow motion em fontes de FPS alto e aceleração em preparações identificadas. VFR ou cadência insuficiente mantém a velocidade original.</span>
-              </span>
-            </label>
-            <label className="mt-2 flex items-center justify-between gap-2 text-xs">
-              <span title="Ajusta os cortes e o drop, sem deslocar o áudio da música.">Ajuste fino da sincronia</span>
-              <span className="flex items-center gap-1">
-                <input
-                  type="number"
-                  min={-500}
-                  max={500}
-                  step={10}
-                  value={beatOffsetMs}
-                  onChange={(e) => {
-                    const value = Number(e.currentTarget.value);
-                    setBeatOffsetMs(Number.isFinite(value) ? Math.max(-500, Math.min(500, value)) : 0);
-                  }}
-                  className="h-7 w-20 rounded-control border border-line bg-base px-2 text-right text-xs tnum"
-                  aria-label="Ajuste fino da sincronia em milissegundos"
-                />
-                <span className="text-muted">ms</span>
-              </span>
-            </label>
-            <p className="mt-1 text-2xs text-muted">Negativo antecipa os cortes; positivo atrasa. Não altera a faixa de áudio.</p>
-
-            <div className="mt-3 rounded-control border border-line-soft p-2">
-              <p className="mb-1 text-xs font-medium text-ink-soft">Personagens (análise com IA)</p>
-              {charList.length > 0 ? (
-                <div className="space-y-1">
-                  {charList.map((c) => {
-                    const profile = project.characterLibrary.find((item) =>
-                      [item.name, ...item.aliases].some((alias) => normLabel(alias) === normLabel(c.name)),
-                    );
-                    const canonical = profile?.name ?? c.displayName;
-                    const on = characters.some((x) => normLabel(x) === normLabel(canonical));
-                    return (
-                      <div key={c.name} className="flex items-center gap-1">
-                        <button type="button" aria-pressed={on} className={`rounded-full border px-2 py-0.5 text-2xs ${on ? 'border-violet bg-violet/20 text-ink' : 'border-line text-ink-soft hover:border-violet'}`} onClick={() => setCharacters((xs) => (on ? xs.filter((x) => normLabel(x) !== normLabel(canonical)) : [...xs, canonical]))}>
-                          {canonical} <span className="text-faint">{c.shots}</span>
-                        </button>
-                        <input
-                          aria-label={`Nome na biblioteca para ${c.name}`}
-                          value={characterDrafts[c.name] ?? canonical}
-                          onChange={(event) => setCharacterDrafts((drafts) => ({ ...drafts, [c.name]: event.currentTarget.value }))}
-                          className="h-6 min-w-0 flex-1 rounded-control border border-line bg-base px-1.5 text-2xs"
-                        />
-                        <Button size="sm" onClick={() => saveCharacterProfile(c.sources, characterDrafts[c.name] ?? canonical)}>
-                          {profile ? 'Salvar' : 'Adicionar'}
-                        </Button>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="text-2xs text-muted">A análise local não inventa identidades. Use o modelo de visão para sugerir personagens; depois salve/corrija os nomes na biblioteca deste projeto.</p>
-              )}
-              {project.characterLibrary.length > 0 && (
-                <p className="mt-1 text-2xs text-muted">
-                  Biblioteca do projeto: {project.characterLibrary.length} personagem(ns) · evidências vinculadas às cenas e salvas com undo.
-                </p>
-              )}
-              {characters.length > 0 && (
-                <p className="mt-1 text-2xs text-muted">
-                  Só cenas com {characters.join(' ou ')}. {plan?.warnings.find((warning) => warning.includes('Mantive o filtro'))}
-                </p>
-              )}
-              {vision ? (
-                <div className="mt-2 flex items-center gap-2 text-2xs text-muted">
-                  <span className="tnum">
-                    Analisando {vision.ep}: {vision.done}/{vision.total}
-                  </span>
-                  <Button size="sm" onClick={() => visionAbort.current?.abort()}>
-                    Cancelar
-                  </Button>
-                </div>
-              ) : (
-                <div className="mt-2">
-                  <p className="mb-1 text-2xs text-muted">Escopo da análise visual</p>
-                  <div className="flex flex-wrap gap-x-3 gap-y-1">
-                    <label className="flex items-center gap-1.5 text-2xs text-ink-soft">
-                      <input type="radio" name="vision-scope" className="accent-violet" checked={visionScope === 'fights'} onChange={() => setVisionScope('fights')} />
-                      Só cenas de luta
-                    </label>
-                    <label className="flex items-center gap-1.5 text-2xs text-ink-soft">
-                      <input type="radio" name="vision-scope" className="accent-violet" checked={visionScope === 'all'} onChange={() => setVisionScope('all')} />
-                      Todas as cenas, em detalhe
-                    </label>
-                  </div>
-                  <label className="mt-2 flex items-start gap-1.5 text-2xs text-ink-soft">
-                    <input type="checkbox" className="mt-0.5 accent-violet" checked={matchLyrics} disabled={!lyrics?.cues.length} onChange={(e) => setMatchLyrics(e.target.checked)} />
-                    <span>Relacionar o sentido da letra com as cenas (IA; opcional)</span>
-                  </label>
-                  <label className="mt-2 flex items-start gap-1.5 text-2xs text-ink-soft">
-                    <input type="checkbox" className="mt-0.5 accent-violet" checked={deepVisionBeforeGenerate} onChange={(event) => setDeepVisionBeforeGenerate(event.target.checked)} />
-                    <span>Análise semântica profunda antes de gerar (todas as cenas)</span>
-                  </label>
-                  <p className="mt-1 text-2xs text-faint">
-                    Usa o modelo de visão configurado para analisar até 3 quadros por cena e identificar ação, emoção, enquadramento e personagens. Pode demorar e consumir cota. Se o provedor for externo, os quadros amostrados serão enviados apenas com a autorização externa já habilitada nas configurações; o vídeo e o áudio completos não são enviados.
-                  </p>
-                  <p className="mt-1 text-2xs text-faint">
-                    Usa até 6 versos e reanalisa os quadros amostrados para sugerir combinações; pode consumir cota do modelo. Sem essa opção, a montagem continua local, pela batida, energia, ação e emoção.
-                  </p>
-                  <p className="mt-2 text-2xs text-faint">
-                    Ao clicar em Gerar, as cenas selecionadas que ainda não têm descritores visuais locais serão analisadas automaticamente, em detalhe e sem enviar quadros pela internet. A leitura semântica por IA (personagens, ações e emoções) continua opcional e exige o modelo configurado.
-                  </p>
-                  {localVisionTodo > 0 && (
-                    <>
-                      <Button size="sm" className="mt-2" onClick={runLocalVision} title="Analisa quadros localmente; nenhum dado sai do computador.">
-                        Analisar visual localmente ({localVisionTodo})
-                      </Button>
-                      <p className="mt-1 text-2xs text-faint">
-                        Usa fluxo óptico esparso em baixa resolução para medir câmera e movimento localizado, direção, velocidade e mudanças bruscas. Retoma do cache por cena; não reconhece personagens.
-                      </p>
-                    </>
-                  )}
-                  {visionTodo > 0 ? (
-                    <>
-                      <Button size="sm" className="mt-2" onClick={() => { void runVision(); }} title="Complementa a análise local com rótulos semânticos de um modelo de visão.">
-                        {matchLyrics ? 'Analisar cenas e sentido da letra' : 'Analisar cenas com IA'}
-                      </Button>
-                      <p className="mt-1 text-2xs text-faint">
-                        ≈ {visionTodo * (visionScope === 'all' ? 3 : 1)} quadros, até {Math.ceil((visionTodo * (visionScope === 'all' ? 3 : 1)) / 6)} chamadas.{' '}
-                        {visionScope === 'all' ? 'Usa 3 quadros por cena e inclui cenas escuras; pode demorar e gerar mais custo.' : 'Prioriza lutas e usa 1 quadro por cena.'}{' '}
-                        A análise combina quadros, ritmo/seções e letras/legendas fornecidas; não envia o áudio ou vídeo completos. Em serviço na nuvem esses dados e os quadros amostrados vão ao provedor; com Ollama ficam no seu PC.
-                      </p>
-                    </>
-                  ) : (
-                    <p className="mt-1 text-2xs text-faint">Não há cenas pendentes neste escopo.</p>
-                  )}
-                </div>
-              )}
-              {movementRows.length > 0 && (
-                <div className="mt-2 rounded-control border border-line-soft p-2">
-                  <p className="text-2xs font-medium text-ink-soft">
-                    Movimento confiável (confiança ≥ 60%) · {movementRows.length} intervalo(s)
-                  </p>
-                  <ul className="mt-1 space-y-0.5 text-2xs text-muted">
-                    {movementRows.slice(0, 6).map(({ episode, shotStartS, event }, index) => (
-                      <li key={`${episode}-${event.startS}-${index}`}>
-                        {episode} · {mmss(shotStartS)} · {CAMERA_MOTION_LABEL[event.cameraMotion]}
-                        {flowDirectionLabel(event.directionDeg) && ` · quadro → ${flowDirectionLabel(event.directionDeg)}`}
-                        {' · '}{event.speed.toFixed(3)} diag/s · {Math.round(event.confidence * 100)}%
-                        {event.subjectMotion.confidence >= 0.6 && ' · movimento localizado'}
-                        {event.apparentScaleChange === 'in' && ' · aproximação aparente'}
-                        {event.apparentScaleChange === 'out' && ' · afastamento aparente'}
-                        {event.abruptFramingChange && ' · mudança brusca'}
-                      </li>
-                    ))}
-                  </ul>
-                  <p className="mt-1 text-2xs text-faint">Zoom/aproximação são sinais aparentes; só esses quadros não distinguem movimento de câmera de movimento do objeto.</p>
-                </div>
-              )}
-            </div>
-
-            {ranges.length > 0 && (
-              <>
-                <p className="mt-4 mb-2 text-xs font-medium text-ink-soft">Trecho da música que combina</p>
-                <ul className="space-y-1">
-                  <li>
-                    <label className="flex items-start gap-2 text-xs">
-                      <input type="radio" name="mrange" className="mt-0.5 accent-violet" checked={chosenStart === null} onChange={() => setMusicStart(null)} />
-                      <span>Automático (o melhor para as cenas escolhidas)</span>
-                    </label>
-                  </li>
-                  {ranges.map((r) => (
-                    <li key={r.startS}>
-                      <label className="flex items-start gap-2 text-xs" title={r.reasons.join(' · ')}>
-                        <input type="radio" name="mrange" className="mt-0.5 accent-violet" checked={chosenStart === r.startS} onChange={() => setMusicStart(r.startS)} />
-                        <span className="min-w-0 flex-1">
-                          <span className="tnum">
-                            {mmss(r.startS)}–{mmss(r.endS)}
-                          </span>{' '}
-                          <span className="text-2xs text-faint">{Math.round(r.score * 100)}%</span>
-                          {r.reasons[0] && <span className="block truncate text-2xs text-muted">{r.reasons[0]}</span>}
-                        </span>
-                      </label>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-          </div>
-
+          {/* Coluna 1 — Música primeiro: ritmo, modo musical e letra */}
           <div className="space-y-4">
             <div>
-              <p className="mb-1.5 text-xs font-medium text-ink-soft">Música</p>
+              <p className="mb-1.5 text-xs font-medium text-ink-soft">1. Música (guia o corte e o ritmo)</p>
               <select className="h-9 w-full rounded-control border border-line bg-base px-2 text-sm" value={musicId} onChange={(e) => setMusicId(e.target.value)} disabled={!musics.length}>
                 {!musics.length && <option value="">Escolha uma abaixo</option>}
                 {musics.map((m) => (
@@ -2111,23 +1879,149 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               {music && musicMapRange && <MusicalMap analysis={music} range={musicMapRange} />}
             </div>
 
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-ink-soft">Modo guiado pela música</p>
+              <div className="grid grid-cols-2 gap-1.5">
+                {([
+                  ['lyric-kinetic', 'Batida + Letra Cinética', '1–2 palavras no centro · cortes na batida'],
+                  ['pure-rhythm', 'Puro Ritmo & Batida', 'Cortes rápidos/drop sem depender de texto'],
+                  ['lyric-verse', 'Batida + Versos', 'Versos completos sincronizados na cena'],
+                  ['narrative-climax', 'História + Clímax', 'Arco progressivo guiado pelas seções'],
+                ] as const).map(([mode, title, sub]) => {
+                  const active = musicDriveMode === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => applyMusicDriveMode(mode)}
+                      className={`rounded-md border px-2.5 py-2 text-left transition-colors ${active ? 'border-violet bg-violet/15 text-ink' : 'border-line text-ink-soft hover:bg-raised'}`}
+                    >
+                      <span className="block text-xs font-semibold">{title}</span>
+                      <span className="mt-0.5 block text-[10px] text-muted">{sub}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {!localizedRange && (
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-ink-soft">Duração</p>
+                <div className="flex flex-wrap gap-1">
+                  {DURATIONS.map((d) => (
+                    <button key={d} type="button" onClick={() => setDuration(d)} className={`tnum rounded-control border px-2.5 py-1 text-xs ${duration === d ? 'border-violet bg-violet/10' : 'border-line text-muted hover:text-ink'}`}>
+                      {d} s
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {ranges.length > 0 && (
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-ink-soft">Trecho da música</p>
+                <ul className="space-y-1">
+                  <li>
+                    <label className="flex items-start gap-2 text-xs">
+                      <input type="radio" name="mrange" className="mt-0.5 accent-violet" checked={chosenStart === null} onChange={() => setMusicStart(null)} />
+                      <span>Automático</span>
+                    </label>
+                  </li>
+                  {ranges.map((r) => (
+                    <li key={r.startS}>
+                      <label className="flex items-start gap-2 text-xs" title={r.reasons.join(' · ')}>
+                        <input type="radio" name="mrange" className="mt-0.5 accent-violet" checked={chosenStart === r.startS} onChange={() => setMusicStart(r.startS)} />
+                        <span className="min-w-0 flex-1">
+                          <span className="tnum">
+                            {mmss(r.startS)}–{mmss(r.endS)}
+                          </span>{' '}
+                          <span className="text-2xs text-faint">{Math.round(r.score * 100)}%</span>
+                        </span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="space-y-2 rounded-control border border-line-soft p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-ink-soft">Letra & Tipografia</p>
+                {lyrics && <span className="text-[10px] text-violet-strong">{lyrics.cues.length} linhas prontas</span>}
+              </div>
+              <textarea
+                disabled={lyricsSyncing}
+                className="min-h-20 w-full resize-y rounded-control border border-line bg-base p-2 text-xs text-ink placeholder:text-faint"
+                value={lyricDraft}
+                onChange={(event) => {
+                  setLyricDraft(event.target.value);
+                  setLyrics(null);
+                  setLyricSceneMatches({});
+                }}
+                placeholder="Cole a letra (ou deixe vazio para extrair automaticamente)..."
+                rows={4}
+              />
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Button size="sm" variant="secondary" disabled={lyricsSyncing || !selectedMusic} onClick={() => void extractLyricsFromMusic()}>
+                  {lyricsSyncing ? `${Math.round((lyricsSyncProgress?.progress ?? 0) * 100)}%` : 'Extrair da música'}
+                </Button>
+                <Button size="sm" disabled={!lyricDraft.trim() || lyricsSyncing || !selectedMusic} onClick={() => void syncWrittenLyrics()}>
+                  Sincronizar
+                </Button>
+                <Button size="sm" variant="ghost" disabled={lyricsSyncing} onClick={pickLyrics}>.LRC / .SRT</Button>
+                {lyricsSyncing && <Button size="sm" variant="ghost" onClick={() => transcriptionAbort.current?.abort()}>Cancelar</Button>}
+              </div>
+              <label className="flex items-center gap-2 text-2xs text-ink-soft">
+                <input
+                  type="checkbox"
+                  className="accent-violet"
+                  checked={autoExtractMusicLyrics}
+                  disabled={lyricsSyncing}
+                  onChange={(e) => setAutoExtractMusicLyrics(e.target.checked)}
+                />
+                Extrair e sincronizar letra automaticamente se vazia
+              </label>
+              <label className="flex items-center gap-2 text-2xs text-ink-soft">
+                <input
+                  type="checkbox"
+                  className="accent-violet"
+                  checked={translateLyricsToPt}
+                  disabled={lyricsSyncing}
+                  onChange={(e) => setTranslateLyricsToPt(e.target.checked)}
+                />
+                Traduzir / converter letra para Português (PT-BR)
+              </label>
+              <label className="flex items-center justify-between gap-2 text-2xs text-ink-soft">
+                <span>Tipografia:</span>
+                <select
+                  aria-label="Tipografia da letra na geração"
+                  value={lyricStyle}
+                  onChange={(e) => setLyricStyle(e.target.value as LyricTypographyStyle)}
+                  className="h-7 min-w-0 flex-1 rounded-control border border-line bg-base px-2 text-xs text-ink"
+                >
+                  <option value="anime-impact">Anime · impacto (pop + glow)</option>
+                  <option value="anime-neon">Anime · neon (ciano elétrico)</option>
+                  <option value="anime-gold-epic">Anime · ouro épico (Cinzel dourado)</option>
+                  <option value="anime-manga">Anime · mangá (contrastado)</option>
+                  <option value="lyrics-cinematic">Letras cinematográficas</option>
+                  <option value="anime-dialogue">Discreto (base da tela)</option>
+                </select>
+              </label>
+            </div>
+
             {recs.length > 0 && (
               <div>
-                <p className="mb-1 text-xs font-medium text-ink-soft">Melhor música para estas cenas (sua biblioteca)</p>
-                <p className="mb-2 text-2xs text-muted">Ranqueadas por BPM, intensidade, duração e compatibilidade da curva de energia com as cenas selecionadas.</p>
-                <Button size="sm" className="mb-2 w-full" onClick={() => void addFromLibrary(recs[0]!.track.id)}>
-                  Usar melhor: {displayTitle(recs[0]!.track)}
+                <p className="mb-1.5 text-xs font-medium text-ink-soft">Músicas sugeridas da biblioteca</p>
+                <Button size="sm" className="mb-1.5 w-full" onClick={() => void addFromLibrary(recs[0]!.track.id)}>
+                  Usar: {displayTitle(recs[0]!.track)}
                 </Button>
-                <p className="mb-2 text-2xs text-faint">{recs[0]!.reasons.join(' · ') || 'Compatibilidade baseada na análise local da faixa.'}</p>
                 <ul className="space-y-1">
                   {recs.map((r) => (
                     <li key={r.track.id}>
                       <button type="button" title={r.reasons.join(' · ')} onClick={() => void addFromLibrary(r.track.id)} className="flex w-full items-center gap-2 rounded border border-line px-2 py-1 text-left text-2xs hover:bg-raised">
                         <Music2 size={11} className="shrink-0 text-violet-strong" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate">{displayTitle(r.track)}</span>
-                          {r.reasons[0] && <span className="block truncate text-faint">{r.reasons[0]}</span>}
-                        </span>
+                        <span className="min-w-0 flex-1 truncate">{displayTitle(r.track)}</span>
                         <span className="tnum text-faint">{Math.round(r.score * 100)}%</span>
                       </button>
                     </li>
@@ -2135,32 +2029,19 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                 </ul>
               </div>
             )}
+          </div>
 
+          {/* Coluna 2 — Episódios, Cenas e Personagens */}
+          <div className="space-y-4">
             <div>
-              {!localizedRange && (
-                <>
-                  <p className="mb-1.5 text-xs font-medium text-ink-soft">Duração</p>
-                  <div className="flex flex-wrap gap-1">
-                    {DURATIONS.map((d) => (
-                      <button key={d} type="button" onClick={() => setDuration(d)} className={`tnum rounded-control border px-2.5 py-1 text-xs ${duration === d ? 'border-violet bg-violet/10' : 'border-line text-muted hover:text-ink'}`}>
-                        {d} s
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div>
-              <div className="mb-1 flex items-center justify-between">
-                <p className="text-xs font-medium text-ink-soft">Episódios</p>
+              <div className="mb-1.5 flex items-center justify-between">
+                <p className="text-xs font-medium text-ink-soft">2. Episódios</p>
                 <span className="flex gap-2">
                   <button type="button" className="text-2xs text-muted underline hover:text-ink" onClick={() => setEpIds(episodes.map((episode) => episode.id))}>Todos</button>
                   <button type="button" className="text-2xs text-muted underline hover:text-ink" onClick={() => setEpIds([])}>Nenhum</button>
                 </span>
               </div>
-              <p className="mb-1.5 text-2xs text-muted">O app analisa os momentos dos episódios marcados e prioriza as melhores lutas; desmarque o que não quer misturar.</p>
-              <ul className="max-h-32 space-y-1 overflow-y-auto">
+              <ul className="max-h-28 space-y-1 overflow-y-auto">
                 {episodes.map((e) => {
                   const a = session.assetRuntime(e.id);
                   const fightsInEpisode = a.episode?.sequences.filter((sequence) => sequence.kind === 'luta').length ?? 0;
@@ -2177,119 +2058,134 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               </ul>
             </div>
 
-            <div className="space-y-1.5 text-xs">
-              <label className="flex items-center gap-2">
-                Falas dos personagens
-                <select className="h-7 rounded-control border border-line bg-base px-1.5 text-xs" value={voiceMoments} onChange={(e) => setVoiceMoments(Number(e.target.value))}>
-                  <option value={0}>Nenhuma</option>
-                  <option value={1}>1 (antes do drop)</option>
-                  <option value={2}>2</option>
-                  <option value={3}>3</option>
-                  <option value={4}>4</option>
-                </select>
-              </label>
-              {(voiceMoments > 0 || selectedStyle === 'discurso') && <p className="text-2xs text-muted">A música abaixa sozinha durante cada fala e volta depois.</p>}
-              {hasTwoAudio && voiceMoments > 0 && (
-                <label className="flex items-center gap-2">
-                  Áudio da fala
-                  <select className="h-7 rounded-control border border-line bg-base px-1.5 text-xs" value={voiceLang} onChange={(e) => setVoiceLang(e.target.value as 'original' | 'pt')}>
-                    <option value="original">Original (japonês)</option>
-                    <option value="pt">Português (dublagem)</option>
-                  </select>
-                </label>
+            <div>
+              <p className="mb-2 text-xs font-medium text-ink-soft">Foco das cenas</p>
+              <div className="flex gap-1 rounded-control bg-base p-1">
+                {(
+                  [
+                    ['fight', 'Focar na luta'],
+                    ['mix', 'Misturar cenas'],
+                  ] as const
+                ).map(([k, label]) => (
+                  <button key={k} type="button" onClick={() => setFocus(k)} className={`flex-1 rounded-[4px] py-1.5 text-xs ${focus === k ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {focus === 'fight' && fights.length > 0 && (
+                <ul className="mt-2 max-h-32 space-y-1 overflow-y-auto">
+                  {fights.map(({ ep, q }) => {
+                    const key = `${ep.assetId}#${q.id}`;
+                    return (
+                      <li key={key}>
+                        <label className="flex items-center gap-2 text-xs">
+                          <input type="checkbox" className="accent-violet" checked={seqIds.includes(key)} onChange={() => setSeqIds((xs) => (xs.includes(key) ? xs.filter((x) => x !== key) : [...xs, key]))} />
+                          <span className="min-w-0 flex-1 truncate">
+                            {ep.name} · {mmss(q.startS)}–{mmss(q.endS)}
+                          </span>
+                          <span className="tnum text-2xs text-faint">{q.shotCount} · {Math.round(q.intensity * 100)}%</span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
               )}
-              {hasTwoAudio && voiceMoments > 0 && (
-                <p className="text-2xs text-muted">Seus episódios têm 2 faixas de áudio (idiomas). Elas são do anime, não da música.{noOriginal ? ' Em algum episódio não achei a faixa desse idioma: usei a padrão.' : ''}</p>
-              )}
-              {(voiceMoments > 0 || selectedStyle === 'discurso') && (
-                <label className="flex items-center gap-2">
-                  Idioma das legendas das falas
-                  <select className="h-7 rounded-control border border-line bg-base px-1.5 text-xs" value={speechCaptionLanguage} onChange={(e) => setSpeechCaptionLanguage(e.target.value)}>
-                    <option value="pt-BR">Português (Brasil)</option>
-                    <option value="en">Inglês</option>
-                    <option value="es">Espanhol</option>
-                    <option value="fr">Francês</option>
-                    <option value="ja">Japonês</option>
-                    <option value="de">Alemão</option>
-                    <option value="it">Italiano</option>
-                    <option value="ko">Coreano</option>
-                    <option value="zh">Chinês</option>
-                    <option value="original">Idioma original</option>
-                  </select>
-                </label>
-              )}
-              {(voiceMoments > 0 || selectedStyle === 'discurso') && <p className="text-2xs text-muted">O app transcreve o áudio localmente e traduz as frases escolhidas pelo modelo configurado no Assistente.</p>}
-              <label className="flex items-center gap-2" title="Subida até o drop, impacto no drop, golpes nas pancadas e whoosh nos cortes. Gerados pelo app, sem direitos autorais.">
-                <input type="checkbox" className="accent-violet" checked={useSfx} onChange={(e) => setUseSfx(e.target.checked)} /> Efeitos sonoros (impacto, subida, whoosh)
+              <label className="mt-2.5 flex items-center gap-2 text-xs">
+                <input type="checkbox" className="accent-violet" checked={hitSync} onChange={(e) => setHitSync(e.target.checked)} /> Encaixar golpes na batida
               </label>
-              <label className="flex items-center gap-2">
-                <input type="checkbox" className="accent-violet" checked={useEffects} onChange={(e) => setUseEffects(e.target.checked)} />
-                {localizedRange ? 'Adicionar efeitos do estilo (os existentes são preservados)' : 'Efeitos (clarão, tremida, zoom)'}
+              <label className="mt-1.5 flex items-center gap-2 text-xs">
+                <input type="checkbox" className="accent-violet" checked={adaptiveSpeed} onChange={(e) => setAdaptiveSpeed(e.target.checked)} /> Rampas de velocidade na ação
               </label>
-              <label className="flex items-center gap-2">
-                <input type="checkbox" className="accent-violet" checked={showText} onChange={(e) => setShowText(e.target.checked)} /> Legendas e letras na tela
+              <label className="mt-2 flex items-center justify-between gap-2 text-xs">
+                <span>Ajuste de sincronia</span>
+                <span className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min={-500}
+                    max={500}
+                    step={10}
+                    value={beatOffsetMs}
+                    onChange={(e) => {
+                      const value = Number(e.currentTarget.value);
+                      setBeatOffsetMs(Number.isFinite(value) ? Math.max(-500, Math.min(500, value)) : 0);
+                    }}
+                    className="h-7 w-20 rounded-control border border-line bg-base px-2 text-right text-xs tnum"
+                    aria-label="Ajuste fino da sincronia em milissegundos"
+                  />
+                  <span className="text-muted">ms</span>
+                </span>
               </label>
-              {showText && (voiceMoments > 0 || selectedStyle === 'discurso') && (
-                <label className="ml-5 flex items-start gap-2 text-2xs text-ink-soft">
-                  <input type="checkbox" className="mt-0.5 accent-violet" checked={showSpeechCaptions} onChange={(e) => setShowSpeechCaptions(e.target.checked)} />
-                  <span>Escrever legenda das falas na tela (desmarque se o vídeo já tiver legenda gravada)</span>
-                </label>
-              )}
             </div>
 
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-ink-soft">Letra da música</p>
-              <textarea
-                disabled={lyricsSyncing}
-                className="min-h-24 w-full resize-y rounded-control border border-line bg-base p-2 text-xs text-ink placeholder:text-faint"
-                value={lyricDraft}
-                onChange={(event) => {
-                  setLyricDraft(event.target.value);
-                  setLyrics(null);
-                  setLyricSceneMatches({});
-                }}
-                placeholder="Cole ou escreva a letra aqui, uma linha por verso..."
-                rows={5}
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" disabled={!lyricDraft.trim() || lyricsSyncing || !selectedMusic} onClick={() => void syncWrittenLyrics()}>
-                  {lyricsSyncing ? `${lyricsSyncProgress?.stage ?? 'Sincronizando'} · ${Math.round((lyricsSyncProgress?.progress ?? 0) * 100)}%` : 'Sincronizar texto com a música'}
-                </Button>
-                <Button size="sm" variant="secondary" disabled={lyricsSyncing || !selectedMusic} onClick={() => void extractLyricsFromMusic()} title="Transcreve os vocais da música e preenche a letra sincronizada">
-                  Extrair letra do áudio (PT-BR)
-                </Button>
-                {lyricsSyncing && <Button size="sm" variant="ghost" onClick={() => transcriptionAbort.current?.abort()}>Cancelar</Button>}
-                <Button size="sm" variant="ghost" disabled={lyricsSyncing} onClick={pickLyrics}>Importar .LRC / .SRT</Button>
-                {lyrics && <span className="text-2xs text-muted">Ativa: {lyrics.name} · {lyrics.cues.length} linhas</span>}
-              </div>
-              <label className="flex items-center gap-2 text-2xs text-ink-soft">
-                <input
-                  type="checkbox"
-                  className="accent-violet"
-                  checked={translateLyricsToPt}
-                  disabled={lyricsSyncing}
-                  onChange={(e) => setTranslateLyricsToPt(e.target.checked)}
-                />
-                Exibir letra traduzida em Português (Brasil)
-              </label>
-              <label className="flex flex-wrap items-center gap-2 text-2xs text-ink-soft">
-                <span>Tipografia da letra:</span>
-                <select
-                  aria-label="Tipografia da letra na geração"
-                  value={lyricStyle}
-                  onChange={(e) => setLyricStyle(e.target.value as LyricTypographyStyle)}
-                  className="h-7 rounded-control border border-line bg-base px-2 text-xs text-ink"
-                >
-                  <option value="lyrics-cinematic">Letras cinematográficas (padrão)</option>
-                  <option value="anime-impact">Anime · impacto (caixa alta + glow vermelho)</option>
-                  <option value="anime-neon">Anime · neon (gradiente ciano elétrico)</option>
-                  <option value="anime-manga">Anime · mangá (painel contrastado)</option>
-                  <option value="anime-gold-epic">Anime · ouro épico (gradiente dourado)</option>
-                  <option value="anime-dialogue">Anime · diálogo (limpo e discreto)</option>
-                </select>
-              </label>
-              {lyricDraft.trim() && !lyrics && !lyricsSyncing && <p className="text-2xs text-ink-soft">O texto ainda não foi sincronizado. Sincronize antes de gerar para as linhas aparecerem no vídeo.</p>}
-              <p className="text-2xs text-muted">O Whisper reconhece as palavras cantadas e alinha cada verso no áudio. Na primeira utilização, o modelo pode baixar os pesos necessários; depois a transcrição roda localmente. Linhas sem correspondência não recebem um tempo inventado.</p>
+            <div className="rounded-control border border-line-soft p-2.5">
+              <p className="mb-1.5 text-xs font-medium text-ink-soft">Personagens & Visão</p>
+              {charList.length > 0 && (
+                <div className="mb-2 space-y-1">
+                  {charList.map((c) => {
+                    const profile = project.characterLibrary.find((item) =>
+                      [item.name, ...item.aliases].some((alias) => normLabel(alias) === normLabel(c.name)),
+                    );
+                    const canonical = profile?.name ?? c.displayName;
+                    const on = characters.some((x) => normLabel(x) === normLabel(canonical));
+                    return (
+                      <div key={c.name} className="flex items-center gap-1">
+                        <button type="button" aria-pressed={on} className={`rounded-full border px-2 py-0.5 text-2xs ${on ? 'border-violet bg-violet/20 text-ink' : 'border-line text-ink-soft hover:border-violet'}`} onClick={() => setCharacters((xs) => (on ? xs.filter((x) => normLabel(x) !== normLabel(canonical)) : [...xs, canonical]))}>
+                          {canonical} <span className="text-faint">{c.shots}</span>
+                        </button>
+                        <input
+                          aria-label={`Nome na biblioteca para ${c.name}`}
+                          value={characterDrafts[c.name] ?? canonical}
+                          onChange={(event) => setCharacterDrafts((drafts) => ({ ...drafts, [c.name]: event.currentTarget.value }))}
+                          className="h-6 min-w-0 flex-1 rounded-control border border-line bg-base px-1.5 text-2xs"
+                        />
+                        <Button size="sm" onClick={() => saveCharacterProfile(c.sources, characterDrafts[c.name] ?? canonical)}>
+                          {profile ? 'Salvar' : 'Add'}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {vision ? (
+                <div className="flex items-center gap-2 text-2xs text-muted">
+                  <span className="tnum">Analisando {vision.ep}: {vision.done}/{vision.total}</span>
+                  <Button size="sm" onClick={() => visionAbort.current?.abort()}>Cancelar</Button>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <div className="flex flex-wrap gap-x-3 gap-y-1">
+                    <label className="flex items-center gap-1.5 text-2xs text-ink-soft">
+                      <input type="radio" name="vision-scope" className="accent-violet" checked={visionScope === 'fights'} onChange={() => setVisionScope('fights')} />
+                      Só lutas
+                    </label>
+                    <label className="flex items-center gap-1.5 text-2xs text-ink-soft">
+                      <input type="radio" name="vision-scope" className="accent-violet" checked={visionScope === 'all'} onChange={() => setVisionScope('all')} />
+                      Todas as cenas
+                    </label>
+                  </div>
+                  <label className="flex items-center gap-1.5 text-2xs text-ink-soft">
+                    <input type="checkbox" className="accent-violet" checked={matchLyrics} disabled={!lyrics?.cues.length} onChange={(e) => setMatchLyrics(e.target.checked)} />
+                    Cruzar sentido da letra com IA
+                  </label>
+                  <label className="flex items-center gap-1.5 text-2xs text-ink-soft">
+                    <input type="checkbox" className="accent-violet" checked={deepVisionBeforeGenerate} onChange={(event) => setDeepVisionBeforeGenerate(event.target.checked)} />
+                    Análise semântica com IA antes de gerar
+                  </label>
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {localVisionTodo > 0 && (
+                      <Button size="sm" onClick={runLocalVision}>Visão local ({localVisionTodo})</Button>
+                    )}
+                    {visionTodo > 0 && (
+                      <Button size="sm" variant="secondary" onClick={() => { void runVision(); }}>
+                        {matchLyrics ? 'IA: cenas + letra' : 'IA: personagens'}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+              {movementRows.length > 0 && (
+                <p className="mt-1.5 text-2xs text-muted">Movimento rastreado em {movementRows.length} cena(s).</p>
+              )}
             </div>
 
             <SceneSuggestions
@@ -2300,6 +2196,203 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               musicRange={music ? chooseMusicRange(music, duration, chosenStart) : null}
               onApply={setSuggestedMatches}
             />
+          </div>
+
+          {/* Coluna 3 — Estilo, Falas & Direção Criativa */}
+          <div className="space-y-4">
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-ink-soft">3. Perfil & Estilo</p>
+              <select
+                aria-label="Perfil criativo"
+                className="h-8 w-full rounded-control border border-line bg-base px-2 text-xs"
+                value={activeProfileId}
+                onChange={(event) => {
+                  const profile = creativeProfiles.find((item) => item.id === event.currentTarget.value);
+                  if (profile) applyCreativeProfile(profile);
+                  else {
+                    setActiveProfileId('');
+                    setProfileNameDraft('');
+                  }
+                }}
+              >
+                <option value="">Opções atuais</option>
+                {creativeProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+              </select>
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                <input
+                  aria-label="Nome do novo perfil criativo"
+                  className="h-7 min-w-0 flex-1 rounded-control border border-line bg-base px-2 text-xs"
+                  placeholder="Nome do perfil..."
+                  value={profileNameDraft}
+                  onChange={(event) => setProfileNameDraft(event.currentTarget.value)}
+                  disabled={!profilesLoaded || profileStorageError}
+                />
+                <Button size="sm" onClick={saveNewCreativeProfile} disabled={!profilesLoaded || profileStorageError || !profileNameDraft.trim()}>Salvar</Button>
+                {activeProfileIsCustom && (
+                  <>
+                    <Button size="sm" onClick={updateCreativeProfile} disabled={!profilesLoaded || profileStorageError}>Atualizar</Button>
+                    <Button size="sm" variant="ghost" onClick={() => void deleteCreativeProfile()} disabled={!profilesLoaded || profileStorageError}>Excluir</Button>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-2 flex gap-1 rounded-control bg-base p-1">
+                <button type="button" aria-pressed={styleMode === 'auto'} onClick={() => setStyleMode('auto')} className={`flex-1 rounded-[4px] px-2 py-1 text-xs ${styleMode === 'auto' ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
+                  Automático
+                </button>
+                <button type="button" aria-pressed={styleMode === 'manual'} onClick={() => setStyleMode('manual')} className={`flex-1 rounded-[4px] px-2 py-1 text-xs ${styleMode === 'manual' ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
+                  Manual
+                </button>
+              </div>
+              {styleMode === 'auto' ? (
+                <div className="rounded-md border border-violet/40 bg-violet/10 p-2.5">
+                  <div className="flex items-center gap-2">
+                    {(() => {
+                      const Icon = ICONS[selectedStyle];
+                      return <Icon size={16} className="shrink-0 text-violet-strong" />;
+                    })()}
+                    <span className="text-xs font-semibold text-ink">{STYLES.find((item) => item.id === selectedStyle)!.label}</span>
+                  </div>
+                  {recommendation && <p className="mt-1 text-2xs text-ink-soft">{recommendation.reason}</p>}
+                  {smartPreset && (
+                    <div className="mt-2 border-t border-violet/20 pt-2">
+                      <Button size="sm" variant="primary" className="w-full" onClick={applySmartPreset}>
+                        <Sparkles size={12} className="mr-1 inline" />
+                        Aplicar Preset Sugerido
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-1">
+                  {STYLES.map((s) => {
+                    const Icon = ICONS[s.id];
+                    const on = style === s.id;
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => setStyle(s.id)}
+                        className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-left ${on ? 'border-violet bg-violet/10' : 'border-line hover:bg-raised'}`}
+                      >
+                        <Icon size={15} className={`shrink-0 ${on ? 'text-violet-strong' : 'text-muted'}`} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-xs font-semibold">{s.label}</span>
+                          <span className="block truncate text-[10px] text-muted">{s.description}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2 text-xs">
+              <p className="font-medium text-ink-soft">Falas & Efeitos</p>
+              <label className="flex items-center justify-between gap-2">
+                <span>Falas de anime</span>
+                <select className="h-7 rounded-control border border-line bg-base px-1.5 text-xs" value={voiceMoments} onChange={(e) => setVoiceMoments(Number(e.target.value))}>
+                  <option value={0}>Nenhuma</option>
+                  <option value={1}>1 (antes do drop)</option>
+                  <option value={2}>2</option>
+                  <option value={3}>3</option>
+                  <option value={4}>4</option>
+                </select>
+              </label>
+              {hasTwoAudio && voiceMoments > 0 && (
+                <label className="flex items-center justify-between gap-2">
+                  <span>Áudio da fala</span>
+                  <select className="h-7 rounded-control border border-line bg-base px-1.5 text-xs" value={voiceLang} onChange={(e) => setVoiceLang(e.target.value as 'original' | 'pt')}>
+                    <option value="original">Original (JP)</option>
+                    <option value="pt">Português (dub)</option>
+                  </select>
+                </label>
+              )}
+              {(voiceMoments > 0 || selectedStyle === 'discurso') && (
+                <label className="flex items-center justify-between gap-2">
+                  <span>Legenda das falas</span>
+                  <select className="h-7 rounded-control border border-line bg-base px-1.5 text-xs" value={speechCaptionLanguage} onChange={(e) => setSpeechCaptionLanguage(e.target.value)}>
+                    <option value="pt-BR">Português (Brasil)</option>
+                    <option value="en">Inglês</option>
+                    <option value="es">Espanhol</option>
+                    <option value="fr">Francês</option>
+                    <option value="ja">Japonês</option>
+                    <option value="original">Original</option>
+                  </select>
+                </label>
+              )}
+              <label className="flex items-center gap-2">
+                <input type="checkbox" className="accent-violet" checked={useSfx} onChange={(e) => setUseSfx(e.target.checked)} /> Efeitos sonoros (impacto, subida, whoosh)
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" className="accent-violet" checked={useEffects} onChange={(e) => setUseEffects(e.target.checked)} />
+                {localizedRange ? 'Adicionar efeitos do estilo' : 'Efeitos (clarão, tremida, zoom, RGB)'}
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" className="accent-violet" checked={showText} onChange={(e) => setShowText(e.target.checked)} /> Letras e legendas na tela
+              </label>
+              {showText && (voiceMoments > 0 || selectedStyle === 'discurso') && (
+                <label className="ml-5 flex items-center gap-2 text-2xs text-ink-soft">
+                  <input type="checkbox" className="accent-violet" checked={showSpeechCaptions} onChange={(e) => setShowSpeechCaptions(e.target.checked)} />
+                  Legenda das falas dos personagens
+                </label>
+              )}
+            </div>
+
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-ink-soft">Direção & Intensidade</p>
+              <div className="grid grid-cols-3 gap-1 rounded-control bg-base p-1">
+                {([
+                  ['cinematic', 'Cinema'],
+                  ['balanced', 'Balanceado'],
+                  ['hype', 'Hype'],
+                ] as const).map(([mode, label]) => (
+                  <button key={mode} type="button" aria-pressed={editorialDirection === mode} onClick={() => setEditorialDirection(mode)} className={`rounded-[4px] px-1 py-1 text-xs ${editorialDirection === mode ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-1.5 flex gap-1 rounded-control bg-base p-1">
+                {INTENSITY.map((label, i) => (
+                  <button key={label} type="button" onClick={() => setIntensity(i as 0 | 1 | 2 | 3)} className={`flex-1 rounded-[4px] py-1 text-xs ${intensity === i ? 'bg-raised font-semibold text-ink' : 'text-muted hover:text-ink'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <label className="text-2xs text-ink-soft">
+                  Ação <span className="tnum text-muted">{actionEmphasis}%</span>
+                  <input aria-label="Ênfase em ação" className="mt-1 block w-full accent-violet" type="range" min={0} max={100} value={actionEmphasis} onChange={(event) => setActionEmphasis(Number(event.currentTarget.value))} />
+                </label>
+                <label className="text-2xs text-ink-soft">
+                  Emoção <span className="tnum text-muted">{emotionEmphasis}%</span>
+                  <input aria-label="Ênfase emocional" className="mt-1 block w-full accent-violet" type="range" min={0} max={100} value={emotionEmphasis} onChange={(event) => setEmotionEmphasis(Number(event.currentTarget.value))} />
+                </label>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                <select
+                  aria-label="Emoção principal do perfil"
+                  className="h-7 rounded-control border border-line bg-base px-1.5 text-2xs"
+                  value={preferredEmotion}
+                  onChange={(event) => setPreferredEmotion(event.currentTarget.value as SceneEmotion | '')}
+                >
+                  <option value="">Emoção: livre</option>
+                  {SCENE_EMOTIONS.map((emotion) => <option key={emotion} value={emotion}>{emotion}</option>)}
+                </select>
+                <select
+                  aria-label="Organização temporal"
+                  className="h-7 rounded-control border border-line bg-base px-1.5 text-2xs"
+                  value={organizationMode}
+                  onChange={(event) => setOrganizationMode(event.currentTarget.value as OrganizationMode)}
+                >
+                  <option value="narrative">Ordem: Narrativo</option>
+                  <option value="chronological">Ordem: Cronológico</option>
+                  <option value="free">Ordem: Livre</option>
+                </select>
+              </div>
+            </div>
           </div>
         </div>
       )}

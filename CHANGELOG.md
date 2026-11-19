@@ -1,5 +1,15 @@
 # Novidades
 
+## 0.6.29
+
+**Arquitetura Music-First, tipografia cinética explosiva na batida, tradução PT-BR garantida em 5 camadas e prévias completas de Cenas e Falas.**
+
+- **Arquitetura Music-First:** a fila de processamento (`session.ts`) prioriza a análise musical antes dos vídeos; o diálogo de geração agora coloca **1. Música (guia o corte e o ritmo)** e o **Modo guiado pela música** (`Batida + Letra Cinética`, `Puro Ritmo & Batida`, `Batida + Versos`, `História + Clímax`) no topo, extraindo, sincronizando e traduzindo a letra antes de escolher cenas visuais compatíveis em bilíngue (EN + PT-BR).
+- **Tipografia Cinética Explosiva (`kinetic-words`):** modo de explosão por palavras-chave (1–2 palavras em caixa alta centralizadas na tela, `transform.y = 0`) cravadas na batida com animação punch de escala (`1.28 → 1.0`), fontes de impacto (`Impact`, `Cinzel`, `Trebuchet MS`), contorno espaçado alinhado (`strokeSpaced`) e brilho neon sem caixa preta.
+- **Tradução PT-BR Garantida em 5 Camadas:** escopo HTTP ampliado (`https://**`) em `capabilities/default.json`, fallback `globalThis.fetch` no wrapper Tauri, endpoint secundário (`clients5.google.com`) em `translate.ts`, tradução automática ao importar/extrair em `SubtitlesPanel.tsx` e passe de verificação pós-`generateAmv` (`translateGeneratedClips`) garantindo que nenhuma legenda ou letra fique sem conversão para Português quando PT-BR está ativo.
+- **Prévias de Cenas e Falas Completas:** sidebar da Biblioteca ampliada para `300px`, timestamps/durações preservados sem corte pelo nome do arquivo, fusão de falas curtas fragmentadas (`<= 0,85 s`) e player de prévia customizado (`Só trecho` / `Contínuo`, expansão `-0.5s` / `+1s`, `Início`/`Fim` desbloqueados e botão `Ampliar` em modal).
+- **Limpeza de UI:** remoção de blocos de texto explicativos redundantes no gerador e seletor compacto de estilos de legenda.
+
 ## 0.6.28
 
 **Prévia em 1080p nativo, áudio contínuo sem efeito gangorra nas falas, narrativa com início/meio/fim e legendas sem tarja preta.**

@@ -493,14 +493,16 @@ export class ProjectSession {
     );
 
     if (added.length) {
-      // ordem estável: a mesma em que o usuário escolheu
+      // ordem estável na timeline, mas músicas entram primeiro na fila de análise
+      // para que BPM/batidas/drop guiem a seleção de cenas o quanto antes.
       added.sort((a, b) => paths.indexOf(a.path) - paths.indexOf(b.path));
       this.history.transaction(
         added.length === 1 ? `Importar ${added[0]!.name}` : `Importar ${added.length} arquivos`,
         added.map((asset) => ({ type: 'asset.add', asset })),
       );
       report.imported = added.map((a) => a.path);
-      for (const a of added) void this.process(a);
+      const processingOrder = [...added].sort((a, b) => (a.kind === 'audio' ? 0 : 1) - (b.kind === 'audio' ? 0 : 1));
+      for (const a of processingOrder) void this.process(a);
     }
     this.emit();
     return report;
@@ -949,6 +951,10 @@ export class ProjectSession {
     }
     const env = await this.mediaEnv();
     this.setStatus(asset.id, 'processing', null);
+    // Músicas iniciam a análise musical imediatamente sem esperar proxies de vídeo na fila.
+    if (asset.kind === 'audio' && !isSfxAsset(asset)) {
+      void this.analyze(asset, { posterPath: null, stripPath: null, waveformPath: null, proxyPath: null, audioProxyPath: null, audioStreamProxyPaths: {} });
+    }
     const { artifacts, errors } = prepareArtifacts(env, { ...asset, probe: asset.probe });
     const result = await artifacts;
     const errs = await errors;
@@ -966,8 +972,8 @@ export class ProjectSession {
       await updateRecent(this.platform, this.path, { posterPath: result.posterPath }).catch(() => undefined);
     }
     this.emit();
-    // efeitos sonoros do app não passam pela análise de música
-    if (!cancelled && !essentialFailed && !isSfxAsset(asset)) void this.analyze(asset, result);
+    // efeitos sonoros do app não passam pela análise; áudios musicais já foram disparados acima
+    if (!cancelled && !essentialFailed && !isSfxAsset(asset) && asset.kind !== 'audio') void this.analyze(asset, result);
   }
 
   /**
@@ -1032,7 +1038,8 @@ export class ProjectSession {
   /** Marca mídias ausentes e processa as presentes. Devolve quantas estão ausentes. */
   async checkAssets(): Promise<number> {
     let missing = 0;
-    for (const a of this.project.assets) {
+    const ordered = [...this.project.assets].sort((a, b) => (a.kind === 'audio' ? 0 : 1) - (b.kind === 'audio' ? 0 : 1));
+    for (const a of ordered) {
       const exists = await this.platform.fs.exists(a.path);
       if (!exists) {
         missing++;

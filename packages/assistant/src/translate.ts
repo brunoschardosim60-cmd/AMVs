@@ -154,6 +154,41 @@ function parseGtxTranslation(payload: string): string | null {
   }
 }
 
+function parseClients5Translation(payload: string): string | null {
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const chunks: string[] = [];
+    for (const entry of parsed) {
+      if (typeof entry === 'string' && entry.trim()) chunks.push(entry);
+      else if (Array.isArray(entry) && typeof entry[0] === 'string') chunks.push(entry[0]);
+    }
+    const joined = chunks.join('').trim();
+    return joined || null;
+  } catch {
+    return null;
+  }
+}
+
+async function tryTranslateUrl(
+  fetchImpl: FetchLike,
+  url: string,
+  parser: (payload: string) => string | null,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  if (signal?.aborted) throw Object.assign(new Error('cancelado'), { name: 'AbortError' });
+  try {
+    const response = await fetchImpl(url, { method: 'GET', headers: {}, body: '', signal });
+    if (!response.ok) return null;
+    return parser(await response.text());
+  } catch (error) {
+    if ((error as Error)?.name === 'AbortError' || signal?.aborted) {
+      throw Object.assign(new Error('cancelado'), { name: 'AbortError' });
+    }
+    return null;
+  }
+}
+
 async function fetchGtxText(
   fetch: FetchLike,
   text: string,
@@ -164,17 +199,12 @@ async function fetchGtxText(
   if (signal?.aborted) throw Object.assign(new Error('cancelado'), { name: 'AbortError' });
   const trimmed = text.trim();
   if (!trimmed) return '';
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${encodeURIComponent(sourceCode)}&tl=${encodeURIComponent(targetCode)}&dt=t&q=${encodeURIComponent(trimmed)}`;
-  try {
-    const response = await fetch(url, { method: 'GET', headers: {}, body: '', signal });
-    if (!response.ok) return null;
-    return parseGtxTranslation(await response.text());
-  } catch (error) {
-    if ((error as Error)?.name === 'AbortError' || signal?.aborted) {
-      throw Object.assign(new Error('cancelado'), { name: 'AbortError' });
-    }
-    return null;
-  }
+  const gtxUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${encodeURIComponent(sourceCode)}&tl=${encodeURIComponent(targetCode)}&dt=t&q=${encodeURIComponent(trimmed)}`;
+  const gtx = await tryTranslateUrl(fetch, gtxUrl, parseGtxTranslation, signal);
+  if (gtx) return gtx;
+
+  const fallbackUrl = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=${encodeURIComponent(sourceCode)}&tl=${encodeURIComponent(targetCode)}&q=${encodeURIComponent(trimmed)}`;
+  return tryTranslateUrl(fetch, fallbackUrl, parseClients5Translation, signal);
 }
 
 /** Tradução gratuita e sem chave via endpoint público translate.googleapis.com. */

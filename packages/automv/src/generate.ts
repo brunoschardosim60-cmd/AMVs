@@ -109,6 +109,8 @@ export interface GenerateOptions {
   creativeEmphasis?: CreativeEmphasis;
   /** Estilo tipográfico opcional para letras da música na geração automática. */
   lyricStyle?: LyricTypographyStyle;
+  /** Exibição das letras na tela: explosão cinética (1-2 palavras no centro) ou versos rítmicos. */
+  lyricDisplayMode?: 'kinetic-words' | 'rhythmic-phrases';
 }
 
 export interface GenerateResult {
@@ -776,6 +778,64 @@ function gradeFx(grade: StyleDef['grade']): EffectInstance[] {
   return [];
 }
 
+function buildProportionalWordTimings(
+  text: string,
+  durUs: number,
+  source: NonNullable<Clip['text']>['wordTimings'][number]['source'],
+) {
+  const tokens = text.trim().match(/\S+/gu) ?? [];
+  if (tokens.length < 2 || durUs <= 40_000) return [];
+  const weights = tokens.map((tok) => Math.max(1, Array.from(tok).length + 1));
+  const totalWeight = weights.reduce((acc, w) => acc + w, 0);
+  let cursorUs = 0;
+  return tokens.map((token, idx) => {
+    const shareUs = Math.round((weights[idx]! / totalWeight) * durUs);
+    const startUs = cursorUs;
+    const endUs = idx === tokens.length - 1 ? durUs : Math.min(durUs, Math.max(startUs + 20_000, startUs + shareUs));
+    cursorUs = endUs;
+    return {
+      text: token,
+      startUs,
+      endUs,
+      source,
+      confidence: 0.9,
+      uncertain: false,
+    };
+  });
+}
+
+function splitKineticChunks(text: string, durS: number): string[] {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (words.length <= 1 || durS < 0.32) return words.length ? [words.join(' ')] : [];
+  const canDoSingleWords = words.length <= 4 && durS / words.length >= 0.24;
+  if (canDoSingleWords) {
+    // Une apenas preposições/artigos muito curtos (<= 2 letras) para manter ritmo forte
+    const merged: string[] = [];
+    for (let i = 0; i < words.length; i++) {
+      const curr = words[i]!;
+      if (curr.length <= 2 && i + 1 < words.length && words.length > 2) {
+        merged.push(`${curr} ${words[i + 1]!}`);
+        i++;
+      } else {
+        merged.push(curr);
+      }
+    }
+    return merged;
+  }
+  const chunks: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const w1 = words[i]!;
+    const w2 = words[i + 1];
+    if (w2 && w1.length + w2.length <= 12) {
+      chunks.push(`${w1} ${w2}`);
+      i++;
+    } else {
+      chunks.push(w1);
+    }
+  }
+  return chunks;
+}
+
 function textClip(
   trackId: string,
   startS: number,
@@ -789,10 +849,12 @@ function textClip(
   timing?: NonNullable<Cue['words']>[number][],
   preset: LyricTypographyStyle | 'dialogue-dramatic' = kind === 'word' ? 'lyrics-cinematic' : 'dialogue-dramatic',
   translation?: SubtitleTranslations | string | null,
+  useEffects = true,
 ): Clip {
   const word = kind === 'word';
   const startUs = Math.round(startS * 1e6);
-  const endUs = startUs + Math.max(40_000, Math.round(durS * 1e6));
+  const durUs = Math.max(40_000, Math.round(durS * 1e6));
+  const endUs = startUs + durUs;
   const wordTimings = (timing ?? []).flatMap((item) => {
     const a = Math.max(startUs, Math.round(item.startS * 1e6));
     const b = Math.min(endUs, Math.round(item.endS * 1e6));
@@ -819,10 +881,10 @@ function textClip(
     'anime-manga': 0.088,
     'anime-gold-epic': 0.11,
   };
-  const baseSize = word ? 0.105 : presetBaseSize[preset];
-  const glowIntensity = preset === 'anime-neon' ? 12
-    : preset === 'anime-gold-epic' ? 11
-      : preset === 'anime-impact' ? 6
+  const baseSize = word ? 0.115 : presetBaseSize[preset];
+  const glowIntensity = preset === 'anime-neon' ? 14
+    : preset === 'anime-gold-epic' ? 12
+      : preset === 'anime-impact' ? 8
         : isClimaxImpact ? Math.round(12 + 16 * Math.max(0, Math.min(1, impact))) : 0;
   const transObj: Record<string, string> | undefined = typeof translation === 'string'
     ? { pt: translation }
@@ -866,12 +928,35 @@ function textClip(
         : highlight ? '#ffd166' : '#ff7a00';
   const useGradient = preset === 'anime-neon' || preset === 'anime-gold-epic' || (isClimaxImpact && !word && preset !== 'anime-manga' && preset !== 'anime-dialogue');
   const useBox = preset === 'anime-manga';
+  const font = preset === 'anime-gold-epic'
+    ? 'Cinzel'
+    : preset === 'anime-impact' || preset === 'anime-manga'
+      ? 'Impact'
+      : preset === 'anime-neon'
+        ? 'Trebuchet MS'
+        : 'Manrope Variable';
+
+  const renderedText = uppercase ? displayText.toUpperCase() : displayText;
+  const effectiveWordTimings = displayText === text
+    ? wordTimings
+    : wordTimings.length > 0 && !word
+      ? buildProportionalWordTimings(renderedText, durUs, wordTimings[0]?.source ?? 'estimated')
+      : [];
+
+  const textScaleKeyframes: Keyframe[] | undefined = useEffects && ((word && durUs >= 140_000) || (isLyrics && isClimaxImpact && durUs >= 400_000))
+    ? [
+        { atUs: 0, value: word ? 1.28 : 1.12, easing: 'ease-out' },
+        { atUs: Math.min(durUs, word ? 120_000 : 180_000), value: 1, easing: 'ease-in-out' },
+        { atUs: durUs, value: 1, easing: 'linear' },
+      ]
+    : undefined;
 
   return baseClip(trackId, null, startS, durS, 0, reason, {
     transform: { x: 0, y: Math.round(H * yRatio), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
+    ...(textScaleKeyframes ? { keyframes: { 'transform.scale': textScaleKeyframes } } : {}),
     text: TextContentSchema.parse({
-      text: uppercase ? displayText.toUpperCase() : displayText,
-      font: 'Manrope Variable',
+      text: renderedText,
+      font,
       size: Math.round(H * baseSize * sizeMultiplier),
       weight: word || isClimaxImpact || preset === 'anime-neon' || preset === 'anime-manga' ? 900 : isLyrics ? 800 : 700,
       color,
@@ -896,8 +981,8 @@ function textClip(
       glowIntensity,
       section: isClimaxImpact ? 'climax' : word || preset === 'anime-neon' ? 'chorus' : 'verse',
       letterSpacing: word || preset === 'anime-neon' || preset === 'anime-manga' ? 2 : preset === 'anime-gold-epic' ? 3 : 0,
-      timingPrecision: displayText === text && wordTimings.length ? 'word' : 'segment',
-      wordTimings: displayText === text ? wordTimings : [],
+      timingPrecision: effectiveWordTimings.length ? 'word' : 'segment',
+      wordTimings: effectiveWordTimings,
       ...(transObj
         ? {
             textSource: chosenTranslation && chosenTranslation !== text ? ('translation' as const) : ('original' as const),
@@ -955,11 +1040,12 @@ function addCaptionPhrases(
   impact = 0,
   translations?: SubtitleTranslations | string | null,
   preset: LyricTypographyStyle | 'dialogue-dramatic' = 'dialogue-dramatic',
+  useEffects = true,
 ): void {
   if (!text.trim() || durationS <= 0) return;
   commands.push({
     type: 'clip.add',
-    clip: textClip(trackId, startS, durationS, text, height, 'line', reason, false, impact, undefined, preset, translations),
+    clip: textClip(trackId, startS, durationS, text, height, 'line', reason, false, impact, undefined, preset, translations, useEffects),
   });
 }
 
@@ -1246,7 +1332,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: voiceGainDb(2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
       const subtitleTranslations = speechTranslation(ep, s, opts);
       const speechPreset = opts.lyricStyle && opts.lyricStyle !== 'lyrics-cinematic' ? opts.lyricStyle : 'dialogue-dramatic';
-      if (opts.showText && opts.showSpeechCaptions !== false && text && sourceText) addCaptionPhrases(cmds, text.id, t, len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset);
+      if (opts.showText && opts.showSpeechCaptions !== false && text && sourceText) addCaptionPhrases(cmds, text.id, t, len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset, opts.useEffects);
       used.add(`${ep.assetId}@${s.startS}`);
       clipsMade++;
       t += len + 0.35;
@@ -1998,7 +2084,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const timing = sl.wordTiming
         ? [{ ...sl.wordTiming, startS: sl.startS, endS: sl.endS }]
         : undefined;
-      cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra', sl.isDrop, 0, timing, opts.lyricStyle ?? 'lyrics-cinematic') });
+      cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra', sl.isDrop, sl.energy, timing, opts.lyricStyle ?? 'lyrics-cinematic', undefined, opts.useEffects) });
     }
     used.add(c.id);
     // Mantém o mesmo histórico usado pelo planejador para justificar a escolha.
@@ -2104,8 +2190,10 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     }
     cmds.push({ type: 'clip.add', clip: voiceClip });
     cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: voiceGainDb(b.preDrop ? 3 : 2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
-    const speechPreset = opts.lyricStyle && opts.lyricStyle !== 'lyrics-cinematic' ? opts.lyricStyle : 'dialogue-dramatic';
-    if (opts.showText && opts.showSpeechCaptions !== false && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset);
+    const speechPreset = opts.lyricStyle === 'anime-dialogue' || !opts.lyrics?.length && opts.lyricStyle && opts.lyricStyle !== 'lyrics-cinematic'
+      ? opts.lyricStyle
+      : 'dialogue-dramatic';
+    if (opts.showText && opts.showSpeechCaptions !== false && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset, opts.useEffects);
     clipsMade++;
   }
 
@@ -2113,6 +2201,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   if (opts.showText && text && opts.lyrics?.length && style.subtitles !== 'none') {
     const timedWordCueKeys = new Set(slots.filter((slot) => slot.word && slot.lyricCueKey).map((slot) => slot.lyricCueKey));
     const chosenLyricStyle = opts.lyricStyle ?? 'lyrics-cinematic';
+    const timelineBeats = m.beats.map((t) => t + beatOffsetS - range[0]).filter((t) => t >= 0 && t <= D);
     for (const cue of layoutLyrics(opts.lyrics, range, blocks)) {
       const originalCue = opts.lyrics.find((item) => item.text === cue.text && item.startS - range[0] <= cue.startS + 1e-6 && item.endS - range[0] >= cue.endS - 1e-6);
       const cueKey = originalCue ? lyricCueKey(originalCue) : undefined;
@@ -2120,6 +2209,75 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const lyricSceneMatch = cueKey
         ? cutsLog.find((cut) => cut.lyricCueKey === cueKey && (cut.lyricMatchScore ?? 0) >= 0.65 && cut.startS < cue.endS && cut.startS + cut.len > cue.startS)
         : undefined;
+      const cueDur = cue.endS - cue.startS;
+      const cueImpact = Math.max(impactScore(cue.text), lyricSceneMatch?.lyricMatchScore ?? 0);
+
+      if (opts.lyricDisplayMode === 'kinetic-words' && cueDur >= 0.25) {
+        const chunks = splitKineticChunks(cue.text, cueDur);
+        if (chunks.length >= 2) {
+          const tokens = cue.text.trim().split(/\s+/).filter(Boolean);
+          const timedWords = cue.words?.length === tokens.length ? cue.words : null;
+          const kineticPreset: LyricTypographyStyle = chosenLyricStyle === 'lyrics-cinematic' ? 'anime-impact' : chosenLyricStyle;
+          const boundaries: number[] = [cue.startS];
+          if (timedWords) {
+            let tokenOffset = 0;
+            for (let i = 0; i < chunks.length - 1; i++) {
+              const chunkTokens = chunks[i]!.split(/\s+/).filter(Boolean).length;
+              tokenOffset += chunkTokens;
+              const boundaryWord = timedWords[tokenOffset];
+              const rawBoundary = boundaryWord ? boundaryWord.startS : boundaries[i]! + cueDur / chunks.length;
+              boundaries.push(rawBoundary);
+            }
+          } else {
+            const weights = chunks.map((chunk) => Math.max(2, Array.from(chunk).length + 2));
+            const totalWeight = weights.reduce((acc, w) => acc + w, 0);
+            let cursor = cue.startS;
+            for (let i = 0; i < chunks.length - 1; i++) {
+              cursor += (weights[i]! / totalWeight) * cueDur;
+              boundaries.push(cursor);
+            }
+          }
+          boundaries.push(cue.endS);
+
+          // Ajusta divisões internas à batida mais próxima (até 80 ms) sem comprimir palavras.
+          for (let i = 1; i < boundaries.length - 1; i++) {
+            const current = boundaries[i]!;
+            const nearestBeat = timelineBeats.find((b) => Math.abs(b - current) <= 0.08);
+            if (nearestBeat !== undefined && nearestBeat - boundaries[i - 1]! >= 0.18 && boundaries[i + 1]! - nearestBeat >= 0.18) {
+              boundaries[i] = nearestBeat;
+            }
+          }
+
+          for (let i = 0; i < chunks.length; i++) {
+            const cStart = boundaries[i]!;
+            const cEnd = boundaries[i + 1]!;
+            const cDur = cEnd - cStart;
+            if (cDur < 0.08) continue;
+            const hasDrop = dropT !== null && cStart <= dropT + 0.15 && cEnd >= dropT - 0.15;
+            const kineticReason = lyricSceneMatch ? `Palavra da letra · ${lyricSceneMatch.lyricMatchReason}` : 'Palavra da letra';
+            cmds.push({
+              type: 'clip.add',
+              clip: textClip(
+                text.id,
+                cStart,
+                cDur,
+                chunks[i]!,
+                H,
+                'word',
+                kineticReason,
+                true,
+                Math.max(0.65, cueImpact, hasDrop ? 1 : 0),
+                undefined,
+                kineticPreset,
+                undefined,
+                opts.useEffects,
+              ),
+            });
+          }
+          continue;
+        }
+      }
+
       const reason = lyricSceneMatch ? `Letra da música · ${lyricSceneMatch.lyricMatchReason}` : 'Letra da música';
       const wordTimings = cue.words?.filter(hasReliableWordTiming);
       cmds.push({
@@ -2127,15 +2285,17 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         clip: textClip(
           text.id,
           cue.startS,
-          cue.endS - cue.startS,
+          cueDur,
           cue.text,
           H,
           'line',
           reason,
           true,
-          Math.max(impactScore(cue.text), lyricSceneMatch?.lyricMatchScore ?? 0),
+          cueImpact,
           wordTimings,
           chosenLyricStyle,
+          undefined,
+          opts.useEffects,
         ),
       });
     }

@@ -116,5 +116,24 @@ describe('tradução de legendas', () => {
     const fb = await translateLinesWithFallback(cfg, null, partialFetch, ['Hello'], { target: 'pt-BR' });
     expect(fb.failed).toBe(0);
     expect(fb.translations).toEqual(['PT:Hello']);
+
+    // fallback secundário para clients5 quando translate.googleapis.com falha
+    const clients5Fetch: FetchLike = async (url) => {
+      if (url.includes('translate.googleapis.com')) {
+        return { ok: false, status: 429, text: async () => '' };
+      }
+      if (url.includes('clients5.google.com')) {
+        const q = new URL(url).searchParams.get('q') ?? '';
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify([[`PT5:${q}`, 'en']]),
+        };
+      }
+      return { ok: false, status: 500, text: async () => '' };
+    };
+    const fb2 = await translateLinesFree(clients5Fetch, ['What the hell are you?!'], { target: 'pt-BR' });
+    expect(fb2.failed).toBe(0);
+    expect(fb2.translations).toEqual(['PT5:What the hell are you?!']);
   });
 });

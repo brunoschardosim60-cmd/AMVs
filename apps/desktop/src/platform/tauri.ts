@@ -281,7 +281,23 @@ export function createTauriPlatform(): Platform {
       delete: (name) => invoke<void>('secret_delete', { name }),
     },
     analyzer,
-    http: (url, init) => tauriFetch(url, { method: init.method, headers: init.headers, body: init.method === 'GET' ? undefined : init.body, signal: init.signal, connectTimeout: 15_000 }),
+    http: async (url, init) => {
+      const requestInit = {
+        method: init.method,
+        headers: init.headers,
+        body: init.method === 'GET' ? undefined : init.body,
+        signal: init.signal,
+      };
+      try {
+        return await tauriFetch(url, { ...requestInit, connectTimeout: 15_000 });
+      } catch (error) {
+        if ((error as Error)?.name === 'AbortError' || init.signal?.aborted) throw error;
+        if (typeof globalThis.fetch === 'function') {
+          return globalThis.fetch(url, requestInit);
+        }
+        throw error;
+      }
+    },
     reveal: (p) => revealItemInDir(p),
     openFile: (p) => openPath(p),
     async listFiles(dir, depth) {

@@ -29,7 +29,11 @@ function keywordMatches(text: string, keyword: string): boolean {
   const needle = normalizeText(keyword).match(/[\p{L}\p{N}]+/gu) ?? [];
   if (!needle.length || needle.length > tokens.length) return false;
   for (let start = 0; start <= tokens.length - needle.length; start++) {
-    if (needle.every((part, index) => tokens[start + index]!.startsWith(part))) return true;
+    if (needle.every((part, index) => (
+      part.length <= 3
+        ? tokens[start + index] === part
+        : tokens[start + index]!.startsWith(part)
+    ))) return true;
   }
   return false;
 }
@@ -53,7 +57,9 @@ const THEMES: SemanticTheme[] = [
       'fight', 'luta', 'batalh', 'war', 'guerra', 'hit', 'golpe', 'strike',
       'punch', 'soco', 'kick', 'chute', 'sword', 'espada', 'blade', 'lamina',
       'blood', 'sangue', 'kill', 'matar', 'destroy', 'destruir', 'enemy', 'inimigo',
-      'smash', 'crush', 'esmagar', 'battle', 'clash',
+      'smash', 'crush', 'esmagar', 'battle', 'clash', 'demon', 'demonio', 'devil',
+      'magic', 'magia', 'spell', 'feitico', 'attack', 'ataque', 'slash', 'cortar',
+      'defeat', 'derrotar', 'confronto', 'corrente', 'chain',
     ],
     test: (candidate, vision) => {
       const semanticCombat = trustedVision(vision) && vision.action === 'combate';
@@ -72,19 +78,30 @@ const THEMES: SemanticTheme[] = [
     name: 'poder_determinacao',
     keywords: [
       'power', 'poder', 'strong', 'forte', 'god', 'deus', 'king', 'rei',
-      'rise', 'ergue', 'levanta', 'stand', 'never give up', 'nao vou desistir',
+      'rise', 'ergue', 'erga', 'levanta', 'stand', 'never give up', 'nao vou desistir',
+      'arise', 'despert', 'surpass', 'superar',
       'hope', 'esperanc', 'dream', 'sonho', 'alive', 'vivo', 'win', 'venc',
       'champion', 'campeao', 'faith', 'fe', 'destiny', 'destino', 'unleash',
+      'limit', 'limite', 'courage', 'coragem', 'force', 'forca', 'glory', 'gloria',
     ],
-    test: (_candidate, vision) => {
+    test: (candidate, vision) => {
       const emotion = trustedVision(vision) && vision.emotion === 'determinação';
       const expression = hasDeterminedExpression(vision);
-      if (emotion || expression) return {
+      const localHighImpact = Boolean(
+        vision?.local
+        && (vision.confidence === undefined || vision.confidence >= 0.55)
+        && vision.local.entropy >= 0.58
+        && vision.local.saturation >= 0.5
+        && candidate.shot.intensity >= 0.72,
+      );
+      if (emotion || expression || localHighImpact) return {
         match: true,
-        boost: emotion ? 0.88 : 0.78,
+        boost: emotion ? 0.88 : expression ? 0.78 : 0.68,
         reason: emotion
           ? 'emoção de determinação identificada com confiança suficiente'
-          : 'expressão de determinação identificada com confiança suficiente',
+          : expression
+            ? 'expressão de determinação identificada com confiança suficiente'
+            : 'energia visual e contraste altos combinam com verso de superação/poder',
       };
       return { match: false, boost: 0, reason: '' };
     },
@@ -100,17 +117,36 @@ const THEMES: SemanticTheme[] = [
         vision.note,
         ['fire', 'fogo', 'flame', 'chama', 'queim', 'incendio', 'lava', 'brasa', 'explos'],
       );
-      if (explicit) return {
+      const hasWarmPalette = (vision?.local?.dominantColors ?? []).some((hex) => {
+        if (!/^#[0-9a-f]{6}$/i.test(hex)) return false;
+        const r = Number.parseInt(hex.slice(1, 3), 16);
+        const b = Number.parseInt(hex.slice(5, 7), 16);
+        return r >= 160 && r > b * 1.45;
+      });
+      const localWarmth = Boolean(
+        vision?.local
+        && (vision.confidence === undefined || vision.confidence >= 0.55)
+        && vision.local.saturation >= 0.55
+        && vision.local.brightness >= 0.42
+        && hasWarmPalette,
+      );
+      if (explicit || localWarmth) return {
         match: true,
-        boost: 0.78,
-        reason: 'descrição visual confiável menciona fogo, chama ou explosão',
+        boost: explicit ? 0.78 : 0.7,
+        reason: explicit
+          ? 'descrição visual confiável menciona fogo, chama ou explosão'
+          : 'paleta quente e saturada local combina com cena de fogo/energia',
       };
       return { match: false, boost: 0, reason: '' };
     },
   },
   {
     name: 'escuridao_noite',
-    keywords: ['dark', 'escur', 'shadow', 'sombr', 'night', 'noite', 'black', 'negro', 'preto', 'abyss', 'abismo', 'void', 'vazio'],
+    keywords: [
+      'dark', 'escur', 'shadow', 'sombr', 'night', 'noite', 'black', 'negro', 'preto',
+      'abyss', 'abismo', 'void', 'vazio', 'fear', 'medo', 'death', 'morte', 'die', 'morrer',
+      'monster', 'monstro', 'nightmare', 'pesadelo', 'trevas', 'despair', 'desespero',
+    ],
     test: (candidate, vision) => {
       const brightness = vision?.local?.brightness ?? candidate.shot.brightness;
       if (Number.isFinite(brightness) && brightness < 0.38) return {
@@ -123,7 +159,11 @@ const THEMES: SemanticTheme[] = [
   },
   {
     name: 'luz_brilho',
-    keywords: ['light', 'luz', 'shine', 'brilh', 'sun', 'sol', 'gold', 'ouro', 'star', 'estrel', 'beam', 'raio', 'flash', 'clarao', 'lightning', 'trovao', 'relampag', 'white', 'branco'],
+    keywords: [
+      'light', 'luz', 'shine', 'brilh', 'sun', 'sol', 'gold', 'ouro', 'star', 'estrel',
+      'beam', 'raio', 'flash', 'clarao', 'lightning', 'trovao', 'relampag', 'white', 'branco',
+      'sacred', 'sagrado', 'heaven', 'divin',
+    ],
     test: (candidate, vision) => {
       const brightness = vision?.local?.brightness ?? candidate.shot.brightness;
       if (Number.isFinite(brightness) && brightness > 0.68) return {
@@ -136,16 +176,30 @@ const THEMES: SemanticTheme[] = [
   },
   {
     name: 'emocao_dor_lagrimas',
-    keywords: ['cry', 'chora', 'tear', 'lagrima', 'pain', 'dor', 'hurt', 'ferid', 'suffer', 'sofr', 'alone', 'sozinh', 'sad', 'triste', 'grief', 'luto', 'heart', 'coracao', 'bleed', 'sangr', 'broken', 'quebrad'],
-    test: (_candidate, vision) => {
+    keywords: [
+      'cry', 'chora', 'tear', 'lagrima', 'pain', 'dor', 'hurt', 'ferid', 'suffer', 'sofr',
+      'alone', 'sozinh', 'sad', 'triste', 'grief', 'luto', 'heart', 'coracao',
+      'bleed', 'sangr', 'broken', 'quebrad', 'solidao', 'adeus', 'goodbye', 'scar', 'cicatriz',
+      'scream', 'gritar', 'angust', 'salvar', 'save',
+    ],
+    test: (candidate, vision) => {
       const emotion = trustedVision(vision) && vision.emotion === 'tristeza';
       const expression = trustedVision(vision) && (vision.expressions ?? []).some((item) =>
         item.confidence >= 0.55 && ['tristeza', 'sad', 'crying', 'chorando'].includes(normalizeText(item.label)),
       );
-      if (emotion || expression) return {
+      const localQuietDrama = Boolean(
+        vision?.local
+        && (vision.confidence === undefined || vision.confidence >= 0.55)
+        && candidate.shot.tags.includes('calma')
+        && (vision.local.brightness ?? candidate.shot.brightness) < 0.45
+        && (vision.local.saturation ?? 0.5) < 0.45,
+      );
+      if (emotion || expression || localQuietDrama) return {
         match: true,
-        boost: emotion ? 0.9 : 0.8,
-        reason: 'tristeza reconhecida por emoção ou expressão visual confiável',
+        boost: emotion ? 0.9 : expression ? 0.8 : 0.66,
+        reason: emotion || expression
+          ? 'tristeza reconhecida por emoção ou expressão visual confiável'
+          : 'tom contido e dessaturado combina com verso dramático/emocional',
       };
       return { match: false, boost: 0, reason: '' };
     },
@@ -153,7 +207,11 @@ const THEMES: SemanticTheme[] = [
   {
     name: 'velocidade_movimento',
     // 'drop' sozinho costuma indicar o drop musical, não uma queda física do personagem.
-    keywords: ['run', 'corr', 'fast', 'rapid', 'speed', 'velocidad', 'fly', 'voa', 'soar', 'sky', 'ceu', 'wind', 'vento', 'storm', 'tempestade', 'fall', 'cai', 'queda', 'jump', 'pula', 'salt', 'escape', 'fugir'],
+    keywords: [
+      'run', 'corr', 'fast', 'rapid', 'speed', 'velocidad', 'fly', 'voa', 'soar', 'sky', 'ceu',
+      'wind', 'vento', 'storm', 'tempestade', 'fall', 'cai', 'queda', 'jump', 'pula', 'salt',
+      'escape', 'fugir', 'come on', 'rush', 'dash',
+    ],
     test: (candidate, vision) => {
       const chase = trustedVision(vision) && vision.action === 'perseguição';
       const motion = Number.isFinite(candidate.shot.motion) && candidate.shot.motion >= 0.55;

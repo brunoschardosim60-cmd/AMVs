@@ -1,11 +1,12 @@
 import { pickAudioStreamByLanguage, type Shot, type ShotTag, type SpeechSegment } from '@amv/analysis';
 import { clipEndUs, insertAsset, type Asset, type Command } from '@amv/project';
 import { subtitleClip, textTracks } from '@amv/subtitles';
-import { Check, Languages, Loader2, Megaphone, MessageSquareQuote, Mic, Pause, Play, Plus, RotateCcw, Scissors, Volume2, X } from 'lucide-react';
+import { Check, Languages, Loader2, Maximize2, Megaphone, MessageSquareQuote, Mic, Pause, Play, Plus, RotateCcw, Scissors, Volume2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { mergeSpeechSegments, transcribeMediaAsset, translateTextsAuto } from '../../core/transcription';
 import { useApp, useSessionVersion } from '../../store';
+import { Dialog } from '../../ui/controls';
 import { useEditor } from './editorStore';
 import { useStrip } from './mediaCache';
 import { canPlayOriginalDirectly } from './Preview';
@@ -74,6 +75,7 @@ export function ClipRangePreview({
   title,
   subtitleText,
   autoPlay = false,
+  onAdjustRange,
   onAdd,
   addLabel = 'Adicionar na timeline',
   onClose,
@@ -85,6 +87,7 @@ export function ClipRangePreview({
   title?: string;
   subtitleText?: string | null;
   autoPlay?: boolean;
+  onAdjustRange?: (next: { inS: number; outS: number }) => void;
   onAdd?: () => void;
   addLabel?: string;
   onClose?: () => void;
@@ -92,6 +95,9 @@ export function ClipRangePreview({
   const platform = useApp((s) => s.platform)!;
   const videoRef = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false);
+  const [continuous, setContinuous] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [currentS, setCurrentS] = useState(startS);
   const proxyPath = session.assetRuntime(asset.id).artifacts?.proxyPath;
   const mediaPath = asset.status === 'missing'
     ? null
@@ -99,13 +105,17 @@ export function ClipRangePreview({
       ? asset.path
       : (proxyPath ?? asset.path);
   const mediaUrl = mediaPath ? platform.fileUrl(mediaPath) : null;
+  const assetMaxS = asset.probe?.durationUs ? asset.probe.durationUs / 1_000_000 : Math.max(endS + 30, 3600);
+  const tailPadS = endS - startS < 2.2 ? 0.35 : 0.1;
+  const playEndS = Math.min(assetMaxS, endS + tailPadS);
 
   useEffect(() => {
+    setCurrentS(startS);
     const video = videoRef.current;
     if (!video || !mediaUrl) return;
     const seekAndPlay = () => {
       video.currentTime = startS;
-      if (autoPlay) {
+      if (autoPlay && !expanded) {
         void video.play().catch(() => undefined);
       } else {
         video.pause();
@@ -114,7 +124,7 @@ export function ClipRangePreview({
     if (video.readyState >= 1) {
       seekAndPlay();
     }
-  }, [asset.id, startS, endS, mediaUrl, autoPlay]);
+  }, [asset.id, startS, endS, mediaUrl, autoPlay, expanded]);
 
   const togglePlay = () => {
     const video = videoRef.current;
@@ -123,7 +133,7 @@ export function ClipRangePreview({
       video.pause();
       return;
     }
-    if (video.currentTime < startS - 0.1 || video.currentTime >= endS - 0.05) {
+    if (!continuous && (video.currentTime < startS - 0.15 || video.currentTime >= playEndS - 0.05)) {
       video.currentTime = startS;
     }
     void video.play().catch(() => undefined);
@@ -133,8 +143,13 @@ export function ClipRangePreview({
     const video = videoRef.current;
     if (!video) return;
     video.currentTime = startS;
+    setCurrentS(startS);
     void video.play().catch(() => undefined);
   };
+
+  const sliderMin = continuous ? 0 : startS;
+  const sliderMax = continuous ? assetMaxS : Math.max(startS + 0.1, playEndS);
+  const clampedCurrent = Math.max(sliderMin, Math.min(sliderMax, currentS));
 
   if (!mediaUrl) {
     return (
@@ -145,87 +160,209 @@ export function ClipRangePreview({
   }
 
   return (
-    <div className="space-y-1.5 rounded-md border border-line-soft bg-base p-1.5">
-      {(title || onClose) && (
-        <div className="flex items-center gap-1">
-          <Volume2 size={12} className="shrink-0 text-violet-strong" />
-          <span className="min-w-0 flex-1 truncate text-2xs font-medium text-ink-soft">{title ?? asset.name}</span>
-          <span className="tnum shrink-0 text-[10px] text-faint">
-            {fmt(startS)}–{fmt(endS)}
-          </span>
-          {onClose && (
-            <button type="button" onClick={onClose} title="Fechar prévia" className="rounded p-0.5 text-muted hover:bg-raised hover:text-ink">
-              <X size={12} />
+    <>
+      <div className="space-y-1.5 rounded-md border border-line-soft bg-base p-1.5">
+        {(title || onClose) && (
+          <div className="flex items-center gap-1">
+            <Volume2 size={12} className="shrink-0 text-violet-strong" />
+            <span className="min-w-0 flex-1 truncate text-2xs font-medium text-ink-soft">{title ?? asset.name}</span>
+            <span className="tnum shrink-0 text-[10px] font-medium text-muted">
+              {fmt(startS)}–{fmt(endS)} ({(endS - startS).toFixed(1)}s)
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                videoRef.current?.pause();
+                setExpanded(true);
+              }}
+              title="Ampliar prévia em tela grande"
+              aria-label="Ampliar prévia"
+              className="rounded p-0.5 text-muted hover:bg-raised hover:text-ink"
+            >
+              <Maximize2 size={12} />
+            </button>
+            {onClose && (
+              <button type="button" onClick={onClose} title="Fechar prévia" className="rounded p-0.5 text-muted hover:bg-raised hover:text-ink">
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        )}
+        <div className="relative overflow-hidden rounded bg-black">
+          <video
+            ref={videoRef}
+            key={mediaUrl}
+            src={mediaUrl}
+            muted={false}
+            playsInline
+            preload="metadata"
+            onClick={togglePlay}
+            className="aspect-video w-full cursor-pointer bg-black object-contain"
+            onLoadedMetadata={(e) => {
+              e.currentTarget.currentTime = startS;
+              if (autoPlay && !expanded) void e.currentTarget.play().catch(() => undefined);
+            }}
+            onPlay={(e) => {
+              setPlaying(true);
+              if (!continuous && (e.currentTarget.currentTime < startS - 0.15 || e.currentTarget.currentTime >= playEndS - 0.05)) {
+                e.currentTarget.currentTime = startS;
+              }
+            }}
+            onPause={() => setPlaying(false)}
+            onEnded={() => setPlaying(false)}
+            onTimeUpdate={(e) => {
+              const t = e.currentTarget.currentTime;
+              setCurrentS(t);
+              if (!continuous && t >= playEndS) {
+                e.currentTarget.pause();
+              }
+            }}
+          />
+          {subtitleText && (
+            <div className="pointer-events-none absolute inset-x-2 bottom-2 flex justify-center">
+              <span className="rounded bg-black/80 px-2 py-0.5 text-center text-[11px] font-semibold leading-snug text-white shadow">
+                {subtitleText}
+              </span>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 px-0.5">
+          <span className="tnum shrink-0 text-[10px] text-faint">{fmt(clampedCurrent)}</span>
+          <input
+            type="range"
+            aria-label="Posição da prévia"
+            className="h-1 min-w-0 flex-1 accent-violet"
+            min={sliderMin}
+            max={sliderMax}
+            step={0.05}
+            value={clampedCurrent}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setCurrentS(v);
+              if (videoRef.current) videoRef.current.currentTime = v;
+            }}
+          />
+          <span className="tnum shrink-0 text-[10px] text-faint">{fmt(sliderMax)}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1">
+          <button
+            type="button"
+            onClick={togglePlay}
+            className="inline-flex h-6 items-center gap-1 rounded border border-line bg-panel px-2 text-2xs text-ink-soft hover:bg-raised hover:text-ink"
+          >
+            {playing ? <Pause size={11} /> : <Play size={11} />}
+            {playing ? 'Pausar' : 'Tocar'}
+          </button>
+          <button
+            type="button"
+            onClick={replay}
+            title="Repetir do início do trecho"
+            className="inline-flex h-6 items-center gap-1 rounded border border-line bg-panel px-1.5 text-2xs text-ink-soft hover:bg-raised hover:text-ink"
+          >
+            <RotateCcw size={11} />
+          </button>
+          <button
+            type="button"
+            aria-pressed={continuous}
+            onClick={() => setContinuous((v) => !v)}
+            title={continuous ? 'Tocando continuamente além do corte' : 'Pausa ao fim do trecho (clique para assistir contínuo)'}
+            className={`inline-flex h-6 items-center rounded border px-1.5 text-[10px] ${continuous ? 'border-violet bg-violet/15 text-ink' : 'border-line bg-panel text-muted hover:text-ink'}`}
+          >
+            {continuous ? 'Contínuo' : 'Só trecho'}
+          </button>
+          {onAdjustRange && (
+            <>
+              <button
+                type="button"
+                title="Expandir 0,5 s antes"
+                onClick={() => onAdjustRange({ inS: Math.max(0, Math.round((startS - 0.5) * 10) / 10), outS: endS })}
+                className="inline-flex h-6 items-center rounded border border-line bg-panel px-1.5 text-[10px] text-muted hover:bg-raised hover:text-ink"
+              >
+                -0.5s
+              </button>
+              <button
+                type="button"
+                title="Expandir 1 s depois"
+                onClick={() => onAdjustRange({ inS: startS, outS: Math.min(assetMaxS, Math.round((endS + 1) * 10) / 10) })}
+                className="inline-flex h-6 items-center rounded border border-line bg-panel px-1.5 text-[10px] text-muted hover:bg-raised hover:text-ink"
+              >
+                +1s
+              </button>
+            </>
+          )}
+          {onAdd && (
+            <button
+              type="button"
+              onClick={onAdd}
+              className="ml-auto inline-flex h-6 items-center gap-1 rounded bg-violet px-2 text-2xs font-medium text-white hover:bg-violet-strong"
+            >
+              <Plus size={11} />
+              {addLabel}
             </button>
           )}
         </div>
-      )}
-      <div className="relative overflow-hidden rounded bg-black">
-        <video
-          ref={videoRef}
-          key={mediaUrl}
-          src={mediaUrl}
-          muted={false}
-          playsInline
-          controls
-          preload="metadata"
-          className="aspect-video w-full bg-black object-contain"
-          onLoadedMetadata={(e) => {
-            e.currentTarget.currentTime = startS;
-            if (autoPlay) void e.currentTarget.play().catch(() => undefined);
-          }}
-          onPlay={(e) => {
-            setPlaying(true);
-            if (e.currentTarget.currentTime < startS - 0.1 || e.currentTarget.currentTime >= endS - 0.05) {
-              e.currentTarget.currentTime = startS;
-            }
-          }}
-          onPause={() => setPlaying(false)}
-          onEnded={() => setPlaying(false)}
-          onTimeUpdate={(e) => {
-            if (e.currentTarget.currentTime >= endS) {
-              e.currentTarget.pause();
-            }
-          }}
-        />
-        {subtitleText && (
-          <div className="pointer-events-none absolute inset-x-2 bottom-9 flex justify-center">
-            <span className="rounded bg-black/75 px-2 py-0.5 text-center text-[11px] font-semibold text-white shadow">
-              {subtitleText}
-            </span>
+      </div>
+      {expanded && (
+        <Dialog title={title ?? asset.name} width="w-[820px]" onClose={() => setExpanded(false)}>
+          <div className="space-y-3">
+            <div className="relative overflow-hidden rounded-md bg-black">
+              <video
+                src={mediaUrl}
+                controls
+                autoPlay
+                playsInline
+                preload="metadata"
+                className="aspect-video w-full bg-black object-contain"
+                onLoadedMetadata={(e) => {
+                  e.currentTarget.currentTime = startS;
+                }}
+              />
+              {subtitleText && (
+                <div className="pointer-events-none absolute inset-x-4 bottom-12 flex justify-center">
+                  <span className="rounded bg-black/80 px-3 py-1 text-center text-sm font-semibold text-white shadow">
+                    {subtitleText}
+                  </span>
+                </div>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+              <span className="tnum">Trecho: {fmt(startS)}–{fmt(endS)} ({(endS - startS).toFixed(1)}s)</span>
+              {onAdjustRange && (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => onAdjustRange({ inS: Math.max(0, Math.round((startS - 0.5) * 10) / 10), outS: endS })}
+                    className="rounded border border-line bg-panel px-2 py-1 text-xs text-ink-soft hover:bg-raised"
+                  >
+                    Início -0.5s
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onAdjustRange({ inS: startS, outS: Math.min(assetMaxS, Math.round((endS + 1) * 10) / 10) })}
+                    className="rounded border border-line bg-panel px-2 py-1 text-xs text-ink-soft hover:bg-raised"
+                  >
+                    Fim +1s
+                  </button>
+                </div>
+              )}
+              {onAdd && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onAdd();
+                    setExpanded(false);
+                  }}
+                  className="inline-flex h-8 items-center gap-1.5 rounded bg-violet px-3 text-xs font-medium text-white hover:bg-violet-strong"
+                >
+                  <Plus size={13} />
+                  {addLabel}
+                </button>
+              )}
+            </div>
           </div>
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-1">
-        <button
-          type="button"
-          onClick={togglePlay}
-          className="inline-flex h-6 items-center gap-1 rounded border border-line bg-panel px-2 text-2xs text-ink-soft hover:bg-raised hover:text-ink"
-        >
-          {playing ? <Pause size={11} /> : <Play size={11} />}
-          {playing ? 'Pausar' : 'Tocar trecho'}
-        </button>
-        <button
-          type="button"
-          onClick={replay}
-          title="Repetir do início do trecho"
-          className="inline-flex h-6 items-center gap-1 rounded border border-line bg-panel px-2 text-2xs text-ink-soft hover:bg-raised hover:text-ink"
-        >
-          <RotateCcw size={11} />
-          Repetir
-        </button>
-        {onAdd && (
-          <button
-            type="button"
-            onClick={onAdd}
-            className="ml-auto inline-flex h-6 items-center gap-1 rounded bg-violet px-2 text-2xs font-medium text-white hover:bg-violet-strong"
-          >
-            <Plus size={11} />
-            {addLabel}
-          </button>
-        )}
-      </div>
-    </div>
+        </Dialog>
+      )}
+    </>
   );
 }
 
@@ -362,15 +499,18 @@ export function ScenesPanel({ session }: { session: ProjectSession }) {
                 <ShotThumb session={session} asset={asset} shot={shot} />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5">
-                    <span className="h-1 w-10 overflow-hidden rounded-full bg-base">
+                    <span className="h-1 w-8 shrink-0 overflow-hidden rounded-full bg-base">
                       <span className="block h-full rounded-full bg-violet" style={{ width: `${shot.intensity * 100}%` }} />
                     </span>
-                    <span className="truncate text-2xs text-muted">{shot.tags.join(' · ') || 'cena'}</span>
+                    <span className="tnum shrink-0 text-2xs font-semibold text-ink">
+                      {fmt(shot.startS)} · {(shot.endS - shot.startS).toFixed(1)}s
+                    </span>
+                    <span className="truncate text-[10px] text-muted">{shot.tags.join(' · ') || 'cena'}</span>
                   </span>
-                  <span className="tnum block truncate text-2xs text-ink-soft">
-                    {asset.name} · {fmt(shot.startS)} · {(shot.endS - shot.startS).toFixed(1)} s
+                  <span className="block truncate text-[10px] text-faint">
+                    {asset.name}
                   </span>
-                  {shot.line && <span className="block truncate text-2xs text-faint italic">“{shot.line.replace(/\n/g, ' ')}”</span>}
+                  {shot.line && <span className="line-clamp-2 text-2xs text-muted italic">“{shot.line.replace(/\n/g, ' ')}”</span>}
                 </span>
                 <button
                   type="button"
@@ -405,9 +545,10 @@ export function ScenesPanel({ session }: { session: ProjectSession }) {
             asset={inspectorItem.asset}
             startS={inspectorItem.range.inS}
             endS={inspectorItem.range.outS}
-            title={`Prévia · ${inspectorItem.asset.name}`}
+            title={inspectorItem.asset.name}
             subtitleText={inspectorItem.shot.line}
             autoPlay={autoPlayPreview}
+            onAdjustRange={(next) => setRanges((current) => ({ ...current, [inspectorItem.id]: next }))}
             onAdd={selected.length === 0 ? () => appendScenes([{ asset: inspectorItem.asset, range: inspectorItem.range }]) : undefined}
             addLabel="Na timeline"
             onClose={selected.length === 0 ? () => setPreviewTarget(null) : undefined}
@@ -419,15 +560,15 @@ export function ScenesPanel({ session }: { session: ProjectSession }) {
                 type="number"
                 aria-label="Início do trecho em segundos"
                 className="mt-0.5 h-7 w-full rounded border border-line bg-panel px-1.5 text-xs text-ink"
-                min={inspectorItem.shot.startS}
-                max={inspectorItem.range.outS - 0.4}
+                min={0}
+                max={inspectorItem.range.outS - 0.3}
                 step="0.1"
                 value={inspectorItem.range.inS}
                 onChange={(e) => {
                   if (e.target.value === '') return;
                   const value = Number(e.target.value);
                   if (!Number.isFinite(value)) return;
-                  setRanges((current) => ({ ...current, [inspectorItem.id]: { ...inspectorItem.range, inS: Math.max(inspectorItem.shot.startS, Math.min(value, inspectorItem.range.outS - 0.4)) } }));
+                  setRanges((current) => ({ ...current, [inspectorItem.id]: { ...inspectorItem.range, inS: Math.max(0, Math.min(value, inspectorItem.range.outS - 0.3)) } }));
                 }}
               />
             </label>
@@ -437,15 +578,16 @@ export function ScenesPanel({ session }: { session: ProjectSession }) {
                 type="number"
                 aria-label="Fim do trecho em segundos"
                 className="mt-0.5 h-7 w-full rounded border border-line bg-panel px-1.5 text-xs text-ink"
-                min={inspectorItem.range.inS + 0.4}
-                max={inspectorItem.shot.endS}
+                min={inspectorItem.range.inS + 0.3}
+                max={inspectorItem.asset.probe?.durationUs ? inspectorItem.asset.probe.durationUs / 1_000_000 : 3600}
                 step="0.1"
                 value={inspectorItem.range.outS}
                 onChange={(e) => {
                   if (e.target.value === '') return;
                   const value = Number(e.target.value);
                   if (!Number.isFinite(value)) return;
-                  setRanges((current) => ({ ...current, [inspectorItem.id]: { ...inspectorItem.range, outS: Math.min(inspectorItem.shot.endS, Math.max(value, inspectorItem.range.inS + 0.4)) } }));
+                  const maxDur = inspectorItem.asset.probe?.durationUs ? inspectorItem.asset.probe.durationUs / 1_000_000 : 3600;
+                  setRanges((current) => ({ ...current, [inspectorItem.id]: { ...inspectorItem.range, outS: Math.min(maxDur, Math.max(value, inspectorItem.range.inS + 0.3)) } }));
                 }}
               />
             </label>
@@ -477,6 +619,7 @@ export function LinesPanel({ session }: { session: ProjectSession }) {
   const [onlyImpact, setOnlyImpact] = useState(false);
   const [activeSpeechKey, setActiveSpeechKey] = useState<string | null>(null);
   const [autoPlaySpeech, setAutoPlaySpeech] = useState(false);
+  const [speechRanges, setSpeechRanges] = useState<Record<string, { inS: number; outS: number }>>({});
   const assets = session.project.assets.filter((a) => a.kind === 'video');
   const [speechAssetId, setSpeechAssetId] = useState(assets[0]?.id ?? '');
   const [progress, setProgress] = useState<{ label: string; fraction: number } | null>(null);
@@ -487,14 +630,42 @@ export function LinesPanel({ session }: { session: ProjectSession }) {
   const targetAssetId = assets.some((a) => a.id === speechAssetId) ? speechAssetId : (assets[0]?.id ?? '');
 
   const lines = useMemo(() => {
-    const all: { asset: Asset; s: SpeechSegment }[] = [];
-    for (const a of assets) for (const s of session.assetRuntime(a.id).episode?.speech ?? []) all.push({ asset: a, s });
-    const list = onlyImpact ? all.filter((x) => x.s.impact >= 0.55 || x.s.kind === 'grito') : all;
+    const coalesced: { asset: Asset; s: SpeechSegment }[] = [];
+    for (const a of assets) {
+      const ordered = [...(session.assetRuntime(a.id).episode?.speech ?? [])].sort((x, y) => x.startS - y.startS);
+      for (const seg of ordered) {
+        const prev = coalesced.at(-1);
+        if (
+          prev
+          && prev.asset.id === a.id
+          && seg.startS - prev.s.endS <= 0.85
+          && seg.endS - prev.s.startS <= 4.5
+          && (prev.s.endS - prev.s.startS < 1.8 || !prev.s.text?.trim() || !seg.text?.trim())
+        ) {
+          const mergedText = [prev.s.text?.trim(), seg.text?.trim()].filter(Boolean).join(' ').trim();
+          prev.s = {
+            ...prev.s,
+            endS: Math.max(prev.s.endS, seg.endS),
+            kind: prev.s.kind === 'grito' || seg.kind === 'grito' ? 'grito' : prev.s.kind,
+            impact: Math.max(prev.s.impact, seg.impact),
+            confidence: Math.max(prev.s.confidence, seg.confidence),
+            ...(mergedText ? { text: mergedText } : {}),
+            language: prev.s.language ?? seg.language ?? null,
+          };
+        } else {
+          coalesced.push({ asset: a, s: { ...seg } });
+        }
+      }
+    }
+    const list = onlyImpact ? coalesced.filter((x) => x.s.impact >= 0.55 || x.s.kind === 'grito') : coalesced;
     return list.sort((x, y) => (onlyImpact ? y.s.impact - x.s.impact : 0)).slice(0, 400);
   }, [assets, session, session.changes, onlyImpact]);
 
   const activeItem = activeSpeechKey
     ? lines.find(({ asset, s }) => `${asset.id}-${s.startS}` === activeSpeechKey) ?? null
+    : null;
+  const activeSpeechRange = activeItem && activeSpeechKey
+    ? (speechRanges[activeSpeechKey] ?? { inS: Math.max(0, activeItem.s.startS - 0.2), outS: activeItem.s.endS + 0.4 })
     : null;
 
   const missingOrForeign = lines.some(({ s }) => !s.text?.trim() || (s.language && !s.language.toLowerCase().startsWith('pt')));
@@ -579,7 +750,7 @@ export function LinesPanel({ session }: { session: ProjectSession }) {
     }
   };
 
-  const addSpeechToTimeline = (asset: Asset, s: SpeechSegment) => {
+  const addSpeechToTimeline = (asset: Asset, s: SpeechSegment, customRange?: { inS: number; outS: number }) => {
     const voiceTrack = session.project.tracks.find((t) => t.kind === 'audio' && t.role === 'voice' && !t.locked)
       ?? session.project.tracks.find((t) => t.kind === 'audio' && !t.locked);
     if (!voiceTrack) {
@@ -590,8 +761,8 @@ export function LinesPanel({ session }: { session: ProjectSession }) {
       const startUs = session.project.clips
         .filter((clip) => clip.trackId === voiceTrack.id)
         .reduce((endUs, clip) => Math.max(endUs, clipEndUs(clip)), 0);
-      const sourceInS = Math.max(0, s.startS - 0.1);
-      const sourceOutS = s.endS + 0.15;
+      const sourceInS = customRange ? customRange.inS : Math.max(0, s.startS - 0.1);
+      const sourceOutS = customRange ? customRange.outS : s.endS + 0.15;
       const sourceInUs = Math.round(sourceInS * 1_000_000);
       const sourceOutUs = Math.round(sourceOutS * 1_000_000);
       const cmds: Command[] = insertAsset(session.project, {
@@ -706,9 +877,14 @@ export function LinesPanel({ session }: { session: ProjectSession }) {
               >
                 {s.kind === 'grito' ? <Megaphone size={14} className="mt-0.5 shrink-0 text-warn" /> : <MessageSquareQuote size={14} className="mt-0.5 shrink-0 text-azure" />}
                 <span className="min-w-0 flex-1">
-                  <span className="block text-xs text-ink">{s.text ? s.text.replace(/\n/g, ' ') : s.kind === 'grito' ? 'Grito' : 'Fala (sem legenda)'}</span>
-                  <span className="tnum block text-2xs text-muted">
-                    {asset.name} · {fmt(s.startS)} · {(s.endS - s.startS).toFixed(1)} s{s.impact >= 0.55 ? ' · marcante' : ''}
+                  <span className="flex items-center gap-1.5 text-[10px] text-muted">
+                    <span className="tnum shrink-0 font-semibold text-ink">
+                      {fmt(s.startS)} · {(s.endS - s.startS).toFixed(1)}s{s.impact >= 0.55 ? ' · marcante' : ''}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-faint">{asset.name}</span>
+                  </span>
+                  <span className="line-clamp-3 text-xs text-ink-soft">
+                    {s.text ? s.text.replace(/\n/g, ' ') : s.kind === 'grito' ? 'Grito' : 'Fala (clique em Transcrever acima para gerar legenda PT-BR)'}
                   </span>
                 </span>
                 <button
@@ -730,18 +906,19 @@ export function LinesPanel({ session }: { session: ProjectSession }) {
           );
         })}
       </ul>
-      {activeItem && (
+      {activeItem && activeSpeechRange && activeSpeechKey && (
         <div className="shrink-0 border-t border-line px-2 py-2">
           <ClipRangePreview
             session={session}
             asset={activeItem.asset}
-            startS={Math.max(0, activeItem.s.startS - 0.15)}
-            endS={activeItem.s.endS + 0.25}
-            title={`Prévia da fala · ${activeItem.asset.name}`}
+            startS={activeSpeechRange.inS}
+            endS={activeSpeechRange.outS}
+            title={activeItem.asset.name}
             subtitleText={activeItem.s.text}
             autoPlay={autoPlaySpeech}
-            onAdd={() => addSpeechToTimeline(activeItem.asset, activeItem.s)}
-            addLabel="Adicionar fala na timeline"
+            onAdjustRange={(next) => setSpeechRanges((current) => ({ ...current, [activeSpeechKey]: next }))}
+            onAdd={() => addSpeechToTimeline(activeItem.asset, activeItem.s, activeSpeechRange)}
+            addLabel="Na timeline"
             onClose={() => setActiveSpeechKey(null)}
           />
         </div>

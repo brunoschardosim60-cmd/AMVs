@@ -86,17 +86,35 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
         const plainText = text.replace(/^\uFEFF/, '').trim();
         if (/\.txt$/i.test(path) && plainText) {
           setUntimedLyrics({ name: path.split(/[\\/]/).pop() ?? 'Letra', text: plainText });
-          toast({ tone: 'ok', title: 'Letra carregada', body: 'Agora escolha o clipe da música e sincronize com a transcrição local.' });
+          toast({ tone: 'ok', title: 'Letra carregada', body: 'Sincronize com a música abaixo.' });
           return;
         }
-        toast({ tone: 'warn', title: 'Esse arquivo não tem tempos', body: 'Importe um .txt com uma linha por verso ou sincronize as linhas manualmente.' });
+        toast({ tone: 'warn', title: 'Esse arquivo não tem tempos', body: 'Importe um .txt com uma linha por verso ou .srt/.lrc com tempos.' });
         return;
       }
       setUntimedLyrics(null);
       // letra (.lrc) acompanha a música: alinha com o começo do clipe de música
       const isLyrics = /\.lrc$/i.test(path);
       const musicClip = lyricsClip;
-      const mappedCues = isLyrics && musicClip ? cuesForClip(musicClip, cues) : cues;
+      let mappedCues = isLyrics && musicClip ? cuesForClip(musicClip, cues) : cues;
+      if (((isLyrics && translateLyricsToPt) || (!isLyrics && autoTranslateSpeech)) && platform && mappedCues.length) {
+        const targetCode = isLyrics ? 'pt-BR' : lang;
+        const targetLabel = isLyrics ? 'português brasileiro' : langLabel(lang);
+        setTranslating({ done: 0, total: mappedCues.length });
+        try {
+          const r = await translateTextsAuto(platform, mappedCues.map((c) => c.text), targetLabel, {
+            onProgress: (done, total) => setTranslating({ done, total }),
+          });
+          mappedCues = promoteAlignedCuesForTypography(
+            mappedCues.map((c, idx) => ({ ...c, text: r.translations[idx]?.trim() || c.text })),
+          );
+          if (targetCode !== 'original') {
+            mappedCues = mappedCues.map((c) => ({ ...c, language: targetCode }));
+          }
+        } finally {
+          setTranslating(null);
+        }
+      }
       const offsetUs = isLyrics && musicClip ? 0 : playheadUs;
       const cmds = placeCues(project, mappedCues, { trackId, offsetUs, look: isLyrics && look === 'legenda' ? 'karaoke' : look, windowUs: isLyrics && musicClip ? [musicClip.timelineStartUs, clipEndUs(musicClip)] : undefined, label: path.split(/[\\/]/).pop() });
       if (!cmds.length) {
@@ -104,32 +122,74 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
         return;
       }
       session.history.transaction(`Importar legenda (${cues.length} linhas)`, cmds);
-      toast({ tone: 'ok', title: `${cmds.filter((c) => c.type === 'clip.add').length} legendas na timeline`, body: isLyrics ? 'Letra alinhada com a música.' : `A partir de ${fmt(offsetUs)} (playhead).` });
+      toast({ tone: 'ok', title: `${cmds.filter((c) => c.type === 'clip.add').length} legendas na timeline` });
     } catch (e) {
       fail('Não deu para importar a legenda', e);
     }
   };
 
-  const pull = () => {
+  const pull = async () => {
     const videoClips = project.clips.filter((c) => c.assetId && project.tracks.find((t) => t.id === c.trackId)?.kind === 'video');
     const chosen = videoClips.filter((c) => selection.includes(c.id));
     const from = chosen.length ? chosen : videoClips;
-    const byAsset = new Map<string, { startS: number; endS: number; text: string }[]>();
+    const rawByAsset = new Map<string, { startS: number; endS: number; text: string; language?: string | null }[]>();
     for (const c of from) {
       const ep = session.assetRuntime(c.assetId!).episode;
-      if (ep?.subtitles.length) byAsset.set(c.assetId!, ep.subtitles);
+      if (ep?.subtitles.length) rawByAsset.set(c.assetId!, ep.subtitles);
     }
-    if (!byAsset.size) {
-      toast({ tone: 'warn', title: 'Esses episódios não têm legenda embutida', body: 'Episódios .mkv costumam ter. Você pode importar o .srt/.ass do episódio aqui mesmo.' });
+    if (!rawByAsset.size) {
+      toast({ tone: 'warn', title: 'Sem legenda embutida', body: 'Use "Transcrever" ou importe um .srt/.ass.' });
       return;
     }
+
+    const byAsset = new Map<string, { startS: number; endS: number; text: string }[]>();
+    if (autoTranslateSpeech && platform) {
+      const targetPrefix = lang.toLowerCase().split('-')[0]!;
+      const cuesToTranslate: { assetId: string; index: number; text: string }[] = [];
+      for (const [assetId, list] of rawByAsset.entries()) {
+        list.forEach((cue, index) => {
+          const inAnyClip = from.some((c) => c.assetId === assetId && cue.startS < c.sourceOutUs / 1e6 && cue.endS > c.sourceInUs / 1e6);
+          const alreadyTarget = cue.language?.toLowerCase().startsWith(targetPrefix);
+          if (inAnyClip && cue.text.trim() && !alreadyTarget) {
+            cuesToTranslate.push({ assetId, index, text: cue.text });
+          }
+        });
+      }
+      const translatedMap = new Map<string, string>();
+      if (cuesToTranslate.length) {
+        setTranslating({ done: 0, total: cuesToTranslate.length });
+        try {
+          const tr = await translateTextsAuto(platform, cuesToTranslate.map((item) => item.text), langLabel(lang), {
+            onProgress: (done, total) => setTranslating({ done, total }),
+          });
+          tr.translations.forEach((val, idx) => {
+            const item = cuesToTranslate[idx]!;
+            if (val?.trim()) translatedMap.set(`${item.assetId}:${item.index}`, val.trim());
+          });
+        } finally {
+          setTranslating(null);
+        }
+      }
+      for (const [assetId, list] of rawByAsset.entries()) {
+        byAsset.set(
+          assetId,
+          list.map((cue, index) => ({
+            ...cue,
+            text: translatedMap.get(`${assetId}:${index}`) ?? cue.text,
+          })),
+        );
+      }
+    } else {
+      for (const [assetId, list] of rawByAsset.entries()) byAsset.set(assetId, list);
+    }
+
     const r = pullClipSubtitles(project, from, byAsset, trackId, look);
     if (!r.count) {
       toast({ tone: 'info', title: 'Ninguém fala nesses trechos', body: 'Os clipes escolhidos não têm falas na legenda do episódio.' });
       return;
     }
     session.history.transaction('Puxar falas do episódio', r.commands);
-    toast({ tone: 'ok', title: `${r.count} fala(s) encaixada(s)`, body: chosen.length ? 'Dos clipes selecionados.' : 'De todos os clipes do vídeo.' });
+    toast({ tone: 'ok', title: `${r.count} fala(s) adicionada(s)` });
   };
 
   const transcribe = async () => {
@@ -434,10 +494,10 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
           </select>
         )}
         <div className="grid grid-cols-2 gap-1">
-          <Button size="sm" icon={<FileText size={13} />} onClick={importFile} title="SRT, ASS, VTT, LRC ou TXT sem tempos">
+          <Button size="sm" icon={<FileText size={13} />} onClick={() => void importFile()} title="SRT, ASS, VTT, LRC ou TXT sem tempos">
             Importar
           </Button>
-          <Button size="sm" icon={<Film size={13} />} onClick={pull} title="Coloca as falas certas embaixo dos clipes de episódio (selecionados, ou todos)">
+          <Button size="sm" icon={<Film size={13} />} onClick={() => void pull()} title="Coloca as falas certas embaixo dos clipes de episódio (selecionados, ou todos)">
             Do episódio
           </Button>
         </div>
@@ -505,12 +565,9 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
                   <input type="checkbox" className="accent-violet" checked={translateLyricsToPt} onChange={(e) => setTranslateLyricsToPt(e.target.checked)} disabled={transcribing} />
                   Traduzir letra para Português na tela
                 </label>
-                <p className="text-2xs text-faint">
-                  O app transcreve a música localmente e alinha versos (inclusive se a letra estiver em PT e a música em EN).
-                </p>
               </>
             ) : (
-              <p className="text-2xs text-faint">Adicione um arquivo de música local à trilha Música para sincronizar esta letra.</p>
+              <p className="text-2xs text-faint">Adicione uma música na timeline.</p>
             )}
           </div>
         )}
@@ -592,19 +649,22 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
             </div>
             <label className="flex items-center gap-1.5 text-2xs text-ink-soft">
               <input type="checkbox" className="accent-violet" checked={autoTranslateSpeech} onChange={(e) => setAutoTranslateSpeech(e.target.checked)} disabled={transcribing} />
-              Traduzir automaticamente para {langLabel(lang)}
+              Traduzir para {langLabel(lang)}
             </label>
-            <p className="text-2xs text-faint">
-              Local, sem enviar áudio. As falas são salvas no episódio e traduzidas para {langLabel(lang)}.
-            </p>
           </div>
         )}
-        <div className="flex flex-wrap gap-1">
-          {LOOKS.map((l) => (
-            <Button size="sm" key={l.id} aria-pressed={look === l.id} title={`${l.description}${target.length ? ` Aplica em ${selectedSubs.length ? 'selecionadas' : 'todas'}.` : ''}`} onClick={() => restyle(l.id)} className={`px-2 text-2xs ${look === l.id ? 'border-violet bg-violet/10 text-ink' : 'border-line text-muted hover:text-ink'}`}>
-              {l.label}
-            </Button>
-          ))}
+        <div className="flex items-center gap-1.5">
+          <span className="text-2xs text-muted">Estilo:</span>
+          <select
+            aria-label="Estilo das legendas"
+            value={look}
+            onChange={(e) => restyle(e.target.value as SubtitleLook)}
+            className="h-7 min-w-0 flex-1 rounded-control border border-line bg-base px-1.5 text-xs text-ink"
+          >
+            {LOOKS.map((l) => (
+              <option key={l.id} value={l.id}>{l.label}</option>
+            ))}
+          </select>
         </div>
         {clips.length > 0 && (
           <div className="space-y-1">
