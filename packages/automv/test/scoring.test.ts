@@ -418,4 +418,48 @@ describe('qualidade técnica básica da cena', () => {
     const ordinary = scoreSceneCandidate({ ...base, shot: { ...shot, brightness: 0.48, motion: 0.7 } });
     expect(ordinary.total).toBeCloseTo(normal.total, 5);
   });
+
+  it('avalia paleta de cor, encaixe de duração e respiro após sequência intensa', () => {
+    const baseLocal = {
+      version: 3 as const,
+      samples: 3, brightness: 0.5, contrast: 0.4, saturation: 0.5, edgeDensity: 0.4, entropy: 0.5,
+      lumaGrid: [0.5, 0.5, 0.5, 0.5], edgeGrid: [0.4, 0.4, 0.4, 0.4],
+      centerOfVisualMass: [0.5, 0.5] as [number, number],
+      temporalMotion: 0.4, globalShift: [0, 0] as [number, number], globalMotion: 0.3,
+      motionEvents: [], motionConfidence: 0.5, fingerprint: 'a',
+      sceneType: 'action' as const, sceneTypeConfidence: 0.8,
+      colorHistogram: [0.9, 0.05, 0.05, 0],
+    };
+    const clashingLocal = { ...baseLocal, fingerprint: 'b', colorHistogram: [0.05, 0.05, 0.9, 0] };
+    const calmClash = scoreSceneCandidate({
+      ...base,
+      musicEnergy: 0.3,
+      isDrop: false,
+      local: clashingLocal,
+      previous: { assetId: 'ep', sequenceId: 'fight-1', sourceEndS: 3.9, local: baseLocal },
+    });
+    expect(calmClash.reasons).toContain('mudança brusca de paleta de cor em trecho calmo');
+
+    const dropContrast = scoreSceneCandidate({
+      ...base,
+      musicEnergy: 0.9,
+      isDrop: true,
+      local: clashingLocal,
+      previous: { assetId: 'ep', sequenceId: 'fight-1', sourceEndS: 3.9, local: baseLocal },
+    });
+    expect(dropContrast.reasons).toContain('contraste de paleta expressivo na entrada do drop');
+
+    const tooShort = scoreSceneCandidate({ ...base, slotDurationS: 5 });
+    expect(tooShort.reasons).toContain('cena curta demais para a duração do trecho');
+
+    const breather = scoreSceneCandidate({
+      ...base,
+      isDrop: false,
+      narrativeRole: 'development',
+      shot: { ...shot, intensity: 0.3, tags: ['calma'] },
+      recentIntensities: [0.85, 0.82, 0.88, 0.84],
+    });
+    expect(breather.reasons).toContain('respiro visual após sequência intensa');
+    expect(breather.reasons).toContain('variação dinâmica de intensidade após trechos uniformes');
+  });
 });

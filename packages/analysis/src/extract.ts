@@ -134,7 +134,7 @@ export async function embeddedSubtitles(runner: ProcessRunner, path: string, pro
     o += c.length;
   }
   const text = decodeSubtitleBytes(all);
-  const cues = asAss ? parseAss(text) : parseSrt(text);
+  const cues = asAss ? parseAss(text, true) : parseSrt(text);
   const language = pick.language ?? pick.title ?? null;
   return cues.map((cue) => ({ ...cue, language }));
 }

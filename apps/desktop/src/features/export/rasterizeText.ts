@@ -11,10 +11,14 @@ async function png(canvas: OffscreenCanvas): Promise<Uint8Array> {
 
 /** Desenha o texto com o mesmo código do preview e grava em PNG(s). */
 export const rasterizeText: TextRasterizer = async (clip: Clip, project: Project, W: number, H: number, dir: string, fps) => {
-  const fs = useApp.getState().platform!.fs;
+  const platform = useApp.getState().platform;
+  if (!platform) throw new Error('Plataforma indisponível para exportar texto.');
+  const fs = platform.fs;
+  await document.fonts.ready;
   const k = W / project.settings.width;
   const canvas = new OffscreenCanvas(W, H);
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Não foi possível desenhar as legendas.');
   if (!textIsAnimated(clip)) {
     ctx.clearRect(0, 0, W, H);
     drawTextLayer(ctx, clip, project.settings.width, project.settings.height, k, staticLook(clip), 0.5);
@@ -22,7 +26,7 @@ export const rasterizeText: TextRasterizer = async (clip: Clip, project: Project
     await fs.writeFile(path, await png(canvas));
     return { path, sequence: false };
   }
-  const frames = Math.max(1, Math.round((clip.durationUs / 1e6) * (fps.num / fps.den)));
+  const frames = Math.max(1, Math.ceil((clip.durationUs / 1e6) * (fps.num / fps.den)));
   for (let f = 0; f < frames; f++) {
     const localS = (f * fps.den) / fps.num;
     const look = evalClipLook(clip, localS, clip.durationUs / 1e6);

@@ -52,7 +52,7 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
             ['subs', 'Legendas'],
           ] as const
         ).map(([k, label]) => (
-          <button
+          <Button size="sm" variant="ghost"
             key={k}
             type="button"
             role="tab"
@@ -61,7 +61,7 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
             className={`shrink-0 rounded-md px-2 py-1.5 text-[11px] transition-colors ${tab === k ? 'bg-raised font-semibold text-ink shadow-sm' : 'text-muted hover:bg-raised/50 hover:text-ink'}`}
           >
             {label}
-          </button>
+          </Button>
         ))}
       </div>
       {tab === 'media' && (
@@ -95,7 +95,7 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
                   className={`group flex cursor-grab items-center gap-2 rounded-lg border px-1.5 py-1.5 transition-colors active:cursor-grabbing ${sel ? 'border-violet/35 bg-violet/10' : 'border-transparent hover:border-line-soft hover:bg-raised/70'} ${a.status === 'missing' ? 'opacity-55' : ''}`}
                 >
                   {poster && a.status !== 'missing' ? (
-                    <img src={platform!.fileUrl(poster)} alt="" draggable={false} className="h-9 w-14 shrink-0 rounded-md bg-black object-cover" />
+                    <img src={platform?.fileUrl(poster)} alt="" draggable={false} className="h-9 w-14 shrink-0 rounded-md bg-base object-cover" />
                   ) : (
                     <span className={`grid h-9 w-14 shrink-0 place-items-center rounded-md ${a.kind === 'audio' ? 'bg-azure-deep/70 text-azure' : 'bg-raised text-faint'}`}>
                       <Icon size={14} />

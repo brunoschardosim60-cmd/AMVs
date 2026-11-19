@@ -1,5 +1,7 @@
 import {
   clearRange,
+  splitAllAt,
+  deleteClips,
   newId,
   clipEndUs,
   EditError,
@@ -21,11 +23,12 @@ import {
   type Project,
   type Track,
 } from '@amv/project';
-import { ChevronDown, ChevronUp, Eye, EyeOff, Layers3, Lock, LockOpen, Magnet, Plus, ScanSearch, SlidersHorizontal, Sparkles, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronDown, ChevronUp, Eye, EyeOff, Layers3, Lock, LockOpen, Magnet, Plus, ScanSearch, Scissors, SlidersHorizontal, Sparkles, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
-import { IconButton } from '../../ui/controls';
+import { Button, IconButton } from '../../ui/controls';
+import { nextTextStart } from './textPlacement';
 import { ignoreEditorKey, pxToUs, useEditor, usToPx, ZOOM_MAX, ZOOM_MIN } from './editorStore';
 import { useStrip, useWaveform } from './mediaCache';
 import { pickLevel } from '@amv/media';
@@ -52,7 +55,7 @@ function trackColor(t: Track): string {
     ? 'bg-violet-deep/85 border-violet/55'
     : t.kind === 'audio'
       ? 'bg-azure-deep/85 border-azure/45'
-      : 'bg-[#34453f] border-[#82b79c]/50';
+      : 'bg-violet-deep border-ok/50';
 }
 
 // --------------------------------------------------------------------------- régua
@@ -499,13 +502,13 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
       return;
     }
     const id = newId('clp');
+    const startUs = nextTextStart(project, track.id, playheadUs, 3_000_000);
     const P = project.settings;
     const cmds: Command[] = [
-      ...clearRange(project, track.id, playheadUs, playheadUs + 3_000_000),
       {
         type: 'clip.add',
         clip: {
-          id, trackId: track.id, assetId: null, timelineStartUs: playheadUs, durationUs: 3_000_000, sourceInUs: 0, sourceOutUs: 3_000_000, speed: 1, reverse: false,
+          id, trackId: track.id, assetId: null, timelineStartUs: startUs, durationUs: 3_000_000, sourceInUs: 0, sourceOutUs: 3_000_000, speed: 1, reverse: false,
           transform: { x: 0, y: Math.round(P.height * 0.36), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
           blendMode: 'normal', mask: 'none', groupId: null,
           audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null },
@@ -517,6 +520,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
     ];
     run('Adicionar texto', cmds);
     select([id]);
+    if (startUs !== playheadUs) toast({ tone: 'info', title: 'Texto adicionado depois da legenda existente' });
   };
 
   const addTrack = (kind: Track['kind']) => {
@@ -591,14 +595,18 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
     return { start, dur, trackId, dragging: !!pv };
   };
 
+  const editableSelection = project.clips.filter((clip) => selection.includes(clip.id) && tracks.some((track) => track.id === clip.trackId && !track.locked));
+  const splittable = (selection.length ? editableSelection : project.clips.filter((clip) => tracks.some((track) => track.id === clip.trackId && !track.locked)))
+    .filter((clip) => clip.timelineStartUs < playheadUs && clipEndUs(clip) > playheadUs);
+
   return (
     <>
     <section className="editor-timeline-panel flex min-h-0 flex-1 flex-col border-t border-line" aria-label="Timeline">
       <div className="shrink-0 border-b border-line-soft bg-panel">
-        <div className="flex h-9 items-center gap-1 px-2">
+        <div className="timeline-primary-tools flex h-9 items-center gap-1 overflow-x-auto px-2">
           <div className="mr-2 flex shrink-0 items-center gap-2 pl-1">
             <Layers3 size={14} className="text-violet-strong" />
-            <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-ink-soft">Timeline</span>
+            <span className="text-2xs font-semibold text-ink-soft">Timeline</span>
           </div>
           <span className="h-4 w-px shrink-0 bg-line" />
           <IconButton label={snapping ? 'Encaixe ligado (segure Alt para ignorar)' : 'Encaixe desligado'} aria-pressed={snapping} className={`size-7 ${snapping ? 'text-violet-strong' : ''}`} onClick={() => setSnapping(!snapping)}>
@@ -621,18 +629,17 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
           <IconButton label="Aumentar zoom (+)" className="size-7" onClick={() => setZoom(zoom * 1.4)}>
             <ZoomIn size={14} />
           </IconButton>
-          <button type="button" className="ml-1 shrink-0 rounded-md px-2 py-1 text-[11px] text-muted transition-colors hover:bg-raised hover:text-ink" onClick={fitAll}>
-            Ajustar tudo
-          </button>
+          <Button variant="ghost" size="sm" className="shrink-0" disabled={durationUs <= 0} onClick={fitAll}>Ajustar tudo</Button>
+          <span className="mx-1 h-4 w-px shrink-0 bg-line" />
+          <IconButton label="Dividir no cursor" className="size-7 shrink-0" disabled={!splittable.length} onClick={() => run('Dividir', splitAllAt(project, playheadUs, splittable.map((clip) => clip.id)))}><Scissors size={14} /></IconButton>
+          <IconButton label="Excluir seleção" className="size-7 shrink-0" disabled={!editableSelection.length} onClick={() => { run('Excluir', deleteClips(project, editableSelection.map((clip) => clip.id))); select([]); }}><Trash2 size={14} /></IconButton>
           <span className="tnum ml-auto shrink-0 pr-2 text-[10px] text-muted">
             {selection.length ? `${selection.length} selecionado(s) · ` : ''}{formatTimecode(durationUs, project.settings.fps)}
           </span>
         </div>
         <div className="flex h-9 items-center gap-1 overflow-x-auto border-t border-line-soft/60 px-2">
           <span className="mr-1 shrink-0 text-[9px] font-bold uppercase tracking-[0.12em] text-faint">Adicionar</span>
-          <button type="button" className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-ink-soft transition-colors hover:bg-raised hover:text-ink" onClick={addText} title="Adicionar texto no playhead (T)">
-            <Type size={13} /> Texto
-          </button>
+          <Button variant="ghost" size="sm" className="shrink-0" icon={<Type size={13} />} onClick={addText} title="Adicionar texto no playhead (T)">Texto</Button>
           <button type="button" className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-ink-soft transition-colors hover:bg-raised hover:text-ink" onClick={() => addTrack('text')} title="Adicionar trilha de texto">
             <Plus size={12} /> Trilha de texto
           </button>

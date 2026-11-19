@@ -19,11 +19,14 @@ export function getPlayer(session: ProjectSession): Player {
   return p;
 }
 
-export function createPlayer(session: ProjectSession, project: Project): Player {
-  const platform = useApp.getState().platform!;
+export function createPlayer(session: ProjectSession, project: Project, original?: boolean): Player {
+  const platform = useApp.getState().platform;
+  if (!platform) throw new Error('Plataforma indisponível');
   return new Player(project, {
     videoUrl: (id) => {
-      const path = session.assetRuntime(id).artifacts?.proxyPath;
+      const asset = session.project.assets.find((a) => a.id === id);
+      if (!asset || asset.status === 'missing') return null;
+      const path = (original ?? useEditor.getState().previewOriginal) ? asset.path : session.assetRuntime(id).artifacts?.proxyPath ?? asset.path;
       return path ? platform.fileUrl(path) : null;
     },
     audioUrl: (id, streamIndex) => {
@@ -56,7 +59,7 @@ export function Preview({ session, project }: { session: ProjectSession; project
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
-  const { playheadUs, setPlayhead, playing, setPlaying, previewScale, setPreviewScale, selection } = useEditor();
+  const { playheadUs, setPlayhead, playing, setPlaying, previewScale, previewOriginal, setPreviewScale, selection } = useEditor();
   const player = getPlayer(session);
   const P = project.settings;
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
@@ -250,8 +253,14 @@ export function Preview({ session, project }: { session: ProjectSession; project
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line-soft px-4">
         <MonitorPlay size={15} className="text-violet-strong" />
         <span className="text-[11px] font-semibold tracking-wide text-ink">Prévia</span>
-        <span className="rounded border border-line-soft bg-base px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-muted">Proxy</span>
-        <span className="ml-auto tnum text-[10px] text-muted">{P.width}×{P.height} · {aspectLabel} · {P.fps.num}/{P.fps.den} fps</span>
+        <select aria-label="Fonte da prévia" className="min-w-0 rounded border border-line bg-base text-xs text-ink" value={previewOriginal ? 'original' : 'proxy'} onChange={(e) => { setPlaying(false); useEditor.setState({ previewOriginal: e.target.value === 'original' }); player.seek(playheadUs); }}>
+          <option value="proxy">Proxy leve</option>
+          <option value="original">Original</option>
+        </select>
+        <select aria-label="Resolução da prévia" className="min-w-0 rounded border border-line bg-base text-xs text-ink" value={previewScale} onChange={(e) => { const n = Number(e.target.value); if (n === 1 || n === 0.5 || n === 0.25) setPreviewScale(n); }}>
+          <option value={1}>100%</option><option value={0.5}>50%</option><option value={0.25}>25%</option>
+        </select>
+        <span className="ml-auto hidden tnum text-[10px] text-muted sm:block">{P.width}×{P.height} · {aspectLabel} · {P.fps.num}/{P.fps.den} fps</span>
       </div>
       <div ref={boxRef} className="preview-stage grid min-h-0 flex-1 place-items-center overflow-hidden p-4">
         <div ref={frameRef} className="relative shrink-0">
@@ -287,7 +296,7 @@ export function Preview({ session, project }: { session: ProjectSession; project
         </div>
       </div>
       <div className="flex min-h-[68px] shrink-0 flex-col justify-center gap-1 border-t border-line-soft bg-panel px-3 py-1.5">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="preview-transport flex min-w-0 items-center gap-2">
           <span className="tnum w-[92px] shrink-0 font-mono text-[13px] font-semibold tracking-tight text-ink">{formatTimecode(playheadUs, P.fps)}</span>
           <div className="flex min-w-0 flex-1 items-center justify-center gap-0.5">
             <div className="flex items-center rounded-lg border border-line-soft bg-base/80 p-0.5">

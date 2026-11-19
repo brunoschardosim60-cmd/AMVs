@@ -1,5 +1,5 @@
 import type { EpisodeAnalysis, EpisodeVision, MusicAnalysis } from '@amv/analysis';
-import { clipEndUs, sourceTimeAt, type Clip, type Command, type Project } from '@amv/project';
+import { clipEndUs, newId, sourceTimeAt, type Clip, type Command, type Project } from '@amv/project';
 
 export type QualitySeverity = 'low' | 'medium' | 'high';
 export type QualityDimension =
@@ -38,6 +38,8 @@ export interface QualityIssue {
 export interface QualityCoverage {
   status: 'checked' | 'partial' | 'unavailable';
   evidence: string[];
+  /** Síntese 0..1 dos achados objetivos nesta dimensão (ausente quando unavailable). */
+  score?: number;
 }
 
 export interface QualityReport {
@@ -281,6 +283,138 @@ export function evaluateAudiovisualQuality(input: QualityInputs): QualityReport 
       }
       start = end;
     }
+
+    // Início atrasado (quadros pretos inesperados antes do primeiro clipe visual)
+    const firstClip = ordered[0]!;
+    if (firstClip.timelineStartUs > 150_000) {
+      const coveredAtStart = video.some((clip) => clip.trackId !== primaryTrack.track.id && clip.timelineStartUs <= 150_000);
+      if (!coveredAtStart) {
+        issues.push(issue(
+          'temporal',
+          0,
+          firstClip.timelineStartUs,
+          firstClip.timelineStartUs > 500_000 ? 'medium' : 'low',
+          'início atrasado',
+          [`Primeiro clipe visual começa em ${(firstClip.timelineStartUs / 1e6).toFixed(2)} s`],
+          'Há um trecho preto antes do primeiro plano na trilha principal.',
+          'Mova o primeiro clipe para 0:00 se a abertura em preto não for intencional.',
+          [firstClip.id],
+        ));
+      }
+    }
+
+    // Encerramento abrupto em montagens com >= 5 s (sem fade_out no último clipe visual)
+    const lastClip = ordered.at(-1)!;
+    if (durationUs >= 5_000_000 && lastClip.durationUs >= 450_000) {
+      const hasFadeOut = lastClip.effects.some((effect) => effect.enabled && effect.effect === 'fade_out');
+      const hasOpacityFade = (lastClip.keyframes['transform.opacity']?.length ?? 0) >= 2
+        && (lastClip.keyframes['transform.opacity']!.at(-1)?.value ?? 1) <= 0.1;
+      if (!hasFadeOut && !hasOpacityFade) {
+        const fadeDur = Math.min(0.45, Math.round((lastClip.durationUs / 1e6) * 0.35 * 100) / 100);
+        const fadeEffect = { id: newId('fx'), effect: 'fade_out', enabled: true, params: { duration: Math.max(0.15, fadeDur) } };
+        issues.push(issue(
+          'temporal',
+          Math.max(lastClip.timelineStartUs, clipEndUs(lastClip) - 500_000),
+          clipEndUs(lastClip),
+          'low',
+          'encerramento abrupto',
+          [`Último clipe termina em ${(clipEndUs(lastClip) / 1e6).toFixed(2)} s sem fade de saída`],
+          'O último plano visual corta a seco no final do vídeo.',
+          'Adicione um fade de saída curto ou mantenha o corte seco se combinar com o final da música.',
+          [lastClip.id],
+          {
+            label: 'Adicionar fade de saída (0,4 s)',
+            commands: [{ type: 'clip.update' as const, clipId: lastClip.id, patch: { effects: [...lastClip.effects, fadeEffect] } }],
+          },
+        ));
+      }
+    }
+
+    // Quebra brusca de cadência entre planos consecutivos sem mudança de seção/energia musical
+    for (let i = 1; i < ordered.length; i++) {
+      const prevClip = ordered[i - 1]!;
+      const curClip = ordered[i]!;
+      const prevDur = Math.max(1, prevClip.durationUs);
+      const curDur = Math.max(1, curClip.durationUs);
+      const ratio = Math.max(prevDur / curDur, curDur / prevDur);
+      if (ratio < 4.5 || Math.min(prevDur, curDur) >= 800_000) continue;
+      const musicClip = audio.find((clip) => {
+        const track = project.tracks.find((item) => item.id === clip.trackId);
+        return track?.role === 'music' && curClip.timelineStartUs >= clip.timelineStartUs && curClip.timelineStartUs < clipEndUs(clip);
+      });
+      const mAnalysis = musicClip?.assetId ? input.music?.get(musicClip.assetId) : undefined;
+      if (!musicClip || !mAnalysis) continue;
+      const prevTime = clipMusicTime(musicClip, Math.max(musicClip.timelineStartUs, prevClip.timelineStartUs));
+      const curTime = clipMusicTime(musicClip, curClip.timelineStartUs);
+      const prevSec = mAnalysis.sections.find((s) => prevTime >= s.startS && prevTime < s.endS);
+      const curSec = mAnalysis.sections.find((s) => curTime >= s.startS && curTime < s.endS);
+      const nearDrop = mAnalysis.drops.some((d) => Math.abs(d - curTime) <= 0.45);
+      if (!nearDrop && prevSec && curSec && prevSec.label === curSec.label && Math.abs(prevSec.energy - curSec.energy) < 0.15) {
+        issues.push(issue(
+          'cut-density',
+          prevClip.timelineStartUs,
+          clipEndUs(curClip),
+          'low',
+          'quebra brusca de ritmo',
+          [`Duração muda ${ratio.toFixed(1)}× (${(prevDur / 1e6).toFixed(2)} s → ${(curDur / 1e6).toFixed(2)} s) dentro da mesma seção (${curSec.label})`],
+          'A cadência entre dois cortes consecutivos mudou bruscamente sem mudança de seção musical ou drop.',
+          'Confira se o contraste de duração é intencional ou divida o plano longo numa batida intermediária.',
+          [prevClip.id, curClip.id],
+        ));
+      }
+    }
+
+    // Troca constante de personagens sem continuidade (quando visão confiável existe)
+    const charSequence = ordered.map((clip) => {
+      const shot = shotFor(input.episodes.get(clip.assetId!), clip);
+      const v = shot && input.visions?.get(clip.assetId!)?.shots[`t${Math.round(shot.startS * 100)}`];
+      const names = v && (v.confidence ?? 0) >= 0.55
+        ? new Set(v.characters.map((n) => n.trim().toLocaleLowerCase()).filter(Boolean))
+        : null;
+      return { clip, names };
+    });
+    let jumpStreak = 0;
+    let streakStart = 0;
+    for (let i = 1; i < charSequence.length; i++) {
+      const prevC = charSequence[i - 1]!;
+      const curC = charSequence[i]!;
+      const bothKnown = prevC.names && curC.names && prevC.names.size > 0 && curC.names.size > 0;
+      const shares = bothKnown && [...curC.names!].some((name) => prevC.names!.has(name));
+      if (bothKnown && !shares) {
+        if (jumpStreak === 0) streakStart = i - 1;
+        jumpStreak++;
+      } else {
+        if (jumpStreak >= 4) {
+          const group = charSequence.slice(streakStart, i);
+          issues.push(issue(
+            'narrative',
+            group[0]!.clip.timelineStartUs,
+            clipEndUs(group.at(-1)!.clip),
+            'low',
+            'troca constante de personagens',
+            [`${jumpStreak + 1} planos consecutivos com personagens distintos entre cortes vizinhos (visão com confiança ≥ 55%)`],
+            'O foco de personagens alterna a cada corte sem continuidade de elenco.',
+            'Agrupe 2 ou mais planos do mesmo personagem para dar legibilidade narrativa, se não for uma montagem rápida de elenco.',
+            group.map((g) => g.clip.id),
+          ));
+        }
+        jumpStreak = 0;
+      }
+    }
+    if (jumpStreak >= 4) {
+      const group = charSequence.slice(streakStart);
+      issues.push(issue(
+        'narrative',
+        group[0]!.clip.timelineStartUs,
+        clipEndUs(group.at(-1)!.clip),
+        'low',
+        'troca constante de personagens',
+        [`${jumpStreak + 1} planos consecutivos com personagens distintos entre cortes vizinhos (visão com confiança ≥ 55%)`],
+        'O foco de personagens alterna a cada corte sem continuidade de elenco.',
+        'Agrupe 2 ou mais planos do mesmo personagem para dar legibilidade narrativa, se não for uma montagem rápida de elenco.',
+        group.map((g) => g.clip.id),
+      ));
+    }
   }
 
   for (const clip of video) {
@@ -290,6 +424,9 @@ export function evaluateAudiovisualQuality(input: QualityInputs): QualityReport 
     const rgb = enabled.some((effect) => effect.effect === 'rgb_split');
     if (flash > 1 || (shake && rgb && clip.durationUs < 250_000)) {
       issues.push(issue('effects', clip.timelineStartUs, clipEndUs(clip), 'low', 'efeitos sobrepostos em trecho curto', [`${flash} clarões ativos; tremida=${shake ? 'sim' : 'não'}; separação RGB=${rgb ? 'sim' : 'não'}`, `Duração do clipe: ${(clip.durationUs / 1e6).toFixed(2)} s`], 'A combinação pode reduzir a legibilidade do quadro, especialmente num clipe curto.', 'Desative ou reduza um dos efeitos e confira o trecho no preview.', [clip.id]));
+    }
+    if ((clip.keyframes.speed?.length ?? 0) >= 2 && clip.durationUs < 300_000) {
+      issues.push(issue('effects', clip.timelineStartUs, clipEndUs(clip), 'low', 'rampa em clipe muito curto', [`Rampa de velocidade com ${clip.keyframes.speed!.length} pontos em clipe de ${(clip.durationUs / 1e6).toFixed(2)} s`], 'Curvas de velocidade em planos menores que 0,30 s raramente são percebidas e podem causar variação brusca de quadros.', 'Use velocidade constante em clipes muito curtos ou alongue o plano.', [clip.id]));
     }
   }
 
@@ -369,7 +506,12 @@ export function evaluateAudiovisualQuality(input: QualityInputs): QualityReport 
   }
 
   for (const dimension of DIMENSIONS) {
-    if (issues.some((item) => item.dimension === dimension)) continue;
+    const dimIssues = issues.filter((item) => item.dimension === dimension);
+    if (coverage[dimension].status !== 'unavailable') {
+      const penalty = dimIssues.reduce((sum, item) => sum + (item.severity === 'high' ? 0.35 : item.severity === 'medium' ? 0.18 : 0.08), 0);
+      coverage[dimension].score = Math.round(Math.max(0, 1 - penalty) * 100) / 100;
+    }
+    if (dimIssues.length) continue;
     coverage[dimension].evidence.push(`Nenhum problema objetivo foi encontrado com os dados disponíveis para ${dimensionLabel[dimension]}.`);
   }
   issues.sort((a, b) => ({ high: 0, medium: 1, low: 2 }[a.severity] - { high: 0, medium: 1, low: 2 }[b.severity]) || a.startUs - b.startUs);

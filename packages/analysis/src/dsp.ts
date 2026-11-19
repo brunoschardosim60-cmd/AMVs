@@ -52,11 +52,18 @@ export interface Spectrogram {
 
 /** STFT de magnitude. */
 export function stft(samples: Float32Array, sampleRate: number, size = 1024, hop = 512): Spectrogram {
+  const mags: Float32Array[] = [];
+  forEachSpectrum(samples, size, hop, (spectrum) => mags.push(spectrum.slice()));
+  return { mags, hop, size, sampleRate };
+}
+
+/** Reuse one spectrum buffer; episode voice analysis does not need a full spectrogram. */
+export function forEachSpectrum(samples: Float32Array, size: number, hop: number, consume: (spectrum: Float32Array, frame: number) => void): void {
   const win = hann(size);
   const frames = Math.max(0, Math.floor((samples.length - size) / hop) + 1);
-  const mags: Float32Array[] = [];
   const re = new Float32Array(size);
   const im = new Float32Array(size);
+  const m = new Float32Array(size / 2);
   for (let f = 0; f < frames; f++) {
     const o = f * hop;
     for (let i = 0; i < size; i++) {
@@ -64,11 +71,9 @@ export function stft(samples: Float32Array, sampleRate: number, size = 1024, hop
       im[i] = 0;
     }
     fft(re, im);
-    const m = new Float32Array(size / 2);
     for (let i = 0; i < size / 2; i++) m[i] = Math.hypot(re[i]!, im[i]!);
-    mags.push(m);
+    consume(m, f);
   }
-  return { mags, hop, size, sampleRate };
 }
 
 export function movingAverage(x: ArrayLike<number>, radius: number): Float32Array {

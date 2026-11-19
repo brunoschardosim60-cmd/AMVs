@@ -183,8 +183,8 @@ export function ProjectScreen() {
     <div className="flex h-full min-w-0 flex-col">
       {assistantOpen && <AssistantPanel session={s} onClose={() => setAssistantOpen(false)} />}
       <header className="z-20 shrink-0 border-b border-line bg-panel/95 shadow-[0_4px_18px_rgba(0,0,0,0.1)]">
-        <div className="flex min-h-14 items-center gap-3 px-4">
-          <div className="flex min-w-0 items-center gap-2">
+        <div className="project-main-toolbar flex min-h-14 items-center gap-3 px-4">
+          <div className="project-identity flex min-w-0 items-center gap-2">
             {editingName ? (
               <input
                 autoFocus
@@ -213,7 +213,7 @@ export function ProjectScreen() {
               {s.dirty ? 'Não salvo' : 'Salvo'}
             </span>
           </div>
-          <div className="ml-2 flex gap-0.5 rounded-lg border border-line-soft bg-base p-0.5 text-xs" role="tablist" aria-label="Modo">
+          <div className="project-view-tabs ml-2 flex gap-0.5 rounded-lg border border-line-soft bg-base p-0.5 text-xs" role="tablist" aria-label="Modo">
             {(
               [
                 ['edit', 'Edição'],
@@ -233,7 +233,7 @@ export function ProjectScreen() {
             ))}
           </div>
 
-          <div className="ml-auto flex shrink-0 items-center gap-1">
+          <div className="project-save-actions ml-auto flex shrink-0 items-center gap-1">
           <IconButton label={s.history.undoLabel ? `Desfazer: ${s.history.undoLabel} (Ctrl+Z)` : 'Nada para desfazer'} disabled={!s.history.canUndo} onClick={() => s.undo()}>
             <Undo2 size={16} />
           </IconButton>

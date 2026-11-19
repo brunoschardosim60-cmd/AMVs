@@ -15,6 +15,11 @@ import { Inspector } from './Inspector';
 import { AssetDragGhost, MediaPanel } from './MediaPanel';
 import { Preview, getPlayer, stepFrames } from './Preview';
 import { Timeline, TRACK_H } from './Timeline';
+import { clampTimelineHeight } from './editorLayout';
+import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { IconButton } from '../../ui/controls';
+import { CompareDialog } from './CompareDialog';
+import { Columns2 } from 'lucide-react';
 
 const TIMELINE_MIN = 160;
 
@@ -146,6 +151,32 @@ export function EditorView({ session }: { session: ProjectSession }) {
     return Math.round(Math.max(TIMELINE_MIN, Math.min(need, (window.innerHeight - 90) * 0.56)));
   });
   const dragRef = useRef<{ y: number; h: number } | null>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const [showMedia, setShowMedia] = useState(() => window.innerWidth > 1100);
+  const [showInspector, setShowInspector] = useState(() => window.innerWidth > 1100);
+  const [comparing, setComparing] = useState(false);
+  const compareClip = selection.length === 1 ? project.clips.find((c) => c.id === selection[0]) : undefined;
+  const compareTrack = project.tracks.find((t) => t.id === compareClip?.trackId);
+
+  useEffect(() => {
+    const compact = window.matchMedia('(max-width: 1100px)');
+    const resizePanels = () => {
+      setShowMedia(!compact.matches);
+      setShowInspector(!compact.matches);
+    };
+    compact.addEventListener('change', resizePanels);
+    return () => compact.removeEventListener('change', resizePanels);
+  }, []);
+
+  useEffect(() => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setTimelineH((height) => clampTimelineHeight(height, entry.contentRect.height));
+    });
+    observer.observe(workspace);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => bind(project.id), [bind, project.id]);
   useShortcutsOnce(session);
@@ -157,17 +188,36 @@ export function EditorView({ session }: { session: ProjectSession }) {
   }, [project.clips, selection, select]);
 
   return (
-    <div className="editor-workspace flex h-full min-h-0">
-      <MediaPanel session={session} />
+    <div ref={workspaceRef} className="editor-workspace flex h-full min-h-0 min-w-0">
+      {showMedia && <MediaPanel session={session} />}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex min-h-0 flex-1">
+        <div className="flex h-9 shrink-0 items-center justify-between border-b border-line-soft bg-panel px-2">
+          <IconButton label={showMedia ? 'Recolher biblioteca' : 'Abrir biblioteca'} aria-pressed={showMedia} onClick={() => { setShowMedia((value) => !value); if (window.innerWidth <= 1100) setShowInspector(false); }}>
+            {showMedia ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+          </IconButton>
+          <span className="min-w-0 truncate px-2 text-2xs font-semibold text-muted">{project.name}</span>
+          <IconButton label="Comparar trecho" disabled={!compareClip || compareTrack?.kind !== 'video' || compareTrack.locked} onClick={() => { useEditor.getState().setPlaying(false); setComparing(true); }}><Columns2 size={16} /></IconButton>
+          <IconButton label={showInspector ? 'Recolher propriedades' : 'Abrir propriedades'} aria-pressed={showInspector} onClick={() => { setShowInspector((value) => !value); if (window.innerWidth <= 1100) setShowMedia(false); }}>
+            {showInspector ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+          </IconButton>
+        </div>
+        <div className="editor-upper flex min-h-0 flex-1">
           <Preview session={session} project={project} />
-          <Inspector session={session} project={project} selectedAssetId={selection.length ? null : selectedAssetId} />
+          {showInspector && <Inspector session={session} project={project} selectedAssetId={selection.length ? null : selectedAssetId} />}
         </div>
         <div
           role="separator"
           aria-orientation="horizontal"
           aria-label="Redimensionar timeline"
+          tabIndex={0}
+          aria-valuenow={timelineH}
+          aria-valuemin={96}
+          aria-valuemax={workspaceRef.current?.clientHeight ?? timelineH}
+          onKeyDown={(e) => {
+            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+            e.preventDefault();
+            setTimelineH((height) => clampTimelineHeight(height + (e.key === 'ArrowUp' ? 24 : -24), workspaceRef.current?.clientHeight ?? window.innerHeight));
+          }}
           className="editor-resize-grip h-1.5 shrink-0 cursor-row-resize"
           onPointerDown={(e) => {
             (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -175,15 +225,18 @@ export function EditorView({ session }: { session: ProjectSession }) {
           }}
           onPointerMove={(e) => {
             const d = dragRef.current;
-            if (d) setTimelineH(Math.max(TIMELINE_MIN, Math.min(window.innerHeight - 260, d.h - (e.clientY - d.y))));
+            if (d) setTimelineH(clampTimelineHeight(d.h - (e.clientY - d.y), workspaceRef.current?.clientHeight ?? window.innerHeight));
           }}
           onPointerUp={() => (dragRef.current = null)}
+          onPointerCancel={() => (dragRef.current = null)}
+          onLostPointerCapture={() => (dragRef.current = null)}
         />
         <div className="editor-timeline flex shrink-0 flex-col" style={{ height: timelineH }}>
           <Timeline session={session} project={project} />
         </div>
       </div>
       <AssetDragGhost />
+      {comparing && compareClip && <CompareDialog session={session} clip={compareClip} onClose={() => setComparing(false)} />}
     </div>
   );
 }

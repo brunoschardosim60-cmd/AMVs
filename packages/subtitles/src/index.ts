@@ -12,9 +12,15 @@ const us = (s: number) => Math.round(s * S);
 
 export type SubtitleLook =
   | 'legenda' | 'destaque' | 'palavra' | 'karaoke' | 'lyrics-cinematic' | 'dialogue-dramatic' | 'impact-typography'
+  | 'anime-dialogue' | 'anime-impact' | 'anime-neon' | 'anime-manga' | 'anime-gold-epic'
   | 'section-intro' | 'section-verse' | 'section-chorus' | 'section-climax';
 
 export const LOOKS: { id: SubtitleLook; label: string; description: string }[] = [
+  { id: 'anime-dialogue', label: 'Anime · diálogo', description: 'Branco com contorno forte, sombra discreta e margem segura.' },
+  { id: 'anime-impact', label: 'Anime · impacto', description: 'Letras pesadas, contraste vermelho e entrada pop.' },
+  { id: 'anime-neon', label: 'Anime · neon', description: 'Gradiente ciano/elétrico com glow intenso e destaque no refrão.' },
+  { id: 'anime-manga', label: 'Anime · mangá', description: 'Painel contrastado de mangá em caixa alta e contorno marcado.' },
+  { id: 'anime-gold-epic', label: 'Anime · ouro épico', description: 'Gradiente dourado cinematográfico com brilho âmbar para clímax.' },
   { id: 'legenda', label: 'Legenda', description: 'Embaixo, contorno preto, discreta.' },
   { id: 'destaque', label: 'Destaque', description: 'No meio, grande, com sombra. Para frases de impacto.' },
   { id: 'palavra', label: 'Palavra', description: 'Maiúsculas enormes, entra com pulo. Estilo letra na tela.' },
@@ -65,6 +71,9 @@ export function alignUntimedLyrics(
   transcriptWords: { start: number; end: number; text: string }[],
 ): UntimedLyricAlignment {
   const lines = lyrics.replace(/\r/g, '').split('\n').map((line) => line.trim()).filter(Boolean);
+  transcriptWords = transcriptWords
+    .filter((word) => Number.isFinite(word.start) && Number.isFinite(word.end) && word.start >= 0 && word.end > word.start && word.text.trim())
+    .sort((a, b) => a.start - b.start);
   const script = `${lyrics} ${transcriptWords.map((word) => word.text).join(' ')}`;
   const characters = /[\u3040-\u30ff\u3400-\u9fff]/u.test(script);
   const spoken = transcriptWords.flatMap((word, wordIndex) =>
@@ -96,8 +105,7 @@ export function alignUntimedLyrics(
     }
     if (!best || best.score < 0.55) continue;
     const matchedWords = [...new Set(spoken.slice(best.start, best.end).map((word) => word.wordIndex))]
-      .map((wordIndex) => transcriptWords[wordIndex]!)
-      .filter((word) => word.end > word.start);
+      .flatMap((wordIndex) => transcriptWords[wordIndex] ? [transcriptWords[wordIndex]] : []);
     const first = matchedWords[0];
     const last = matchedWords.at(-1);
     if (!first || !last) continue;
@@ -111,13 +119,16 @@ export function alignUntimedLyrics(
         endS: word.end,
         text: word.text,
         source: 'whisper',
-        confidence: best!.score,
-        uncertain: best!.score < 0.78,
+        confidence: best.score,
+        uncertain: best.score < 0.78,
       })),
     });
     matched++;
     if (best.score < 0.78) uncertain++;
+    const lastWordIndex = spoken[best.end - 1]?.wordIndex;
     cursor = best.end;
+    // A transcribed word must never supply timestamps to two different lyric lines.
+    while (lastWordIndex !== undefined && spoken[cursor]?.wordIndex === lastWordIndex) cursor++;
   }
 
   return { cues, matched, uncertain, unmatched: lines.length - matched };
@@ -127,6 +138,16 @@ export function lookText(look: SubtitleLook, H: number, text: string): { transfo
   const t = (y: number) => ({ x: 0, y: Math.round(H * y), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } });
   const content = (values: Partial<NonNullable<Clip['text']>> & { text: string }) => TextContentSchema.parse(values);
   switch (look) {
+    case 'anime-dialogue':
+      return { transform: t(0.35), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.048), weight: 800, color: '#ffffff', outlineColor: '#08090c', outlineWidth: 3, shadow: true, animationIn: 'fade', animationOut: 'fade', animationInUs: 120_000, animationOutUs: 100_000, marginX: Math.round(H * 0.07), marginY: Math.round(H * 0.05), maxWidthRatio: 0.86, lineSpacing: 1.2, background: 'none' }) };
+    case 'anime-impact':
+      return { transform: t(0), text: content({ text: text.toUpperCase(), font: 'Manrope Variable', size: Math.round(H * 0.12), weight: 900, color: '#fff4e6', outlineColor: '#14090d', outlineWidth: 5, shadow: true, animationIn: 'pop', animationOut: 'fade', animationInUs: 180_000, animationOutUs: 120_000, highlightColor: '#ff5364', highlightScale: 1.12, glowColor: '#ff5364', glowIntensity: 3, marginX: Math.round(H * 0.07), marginY: Math.round(H * 0.06), maxWidthRatio: 0.84, background: 'none' }) };
+    case 'anime-neon':
+      return { transform: t(0.14), text: content({ text: text.toUpperCase(), font: 'Manrope Variable', size: Math.round(H * 0.105), weight: 900, color: '#d8fbff', outlineColor: '#05121d', outlineWidth: 4, shadow: true, animationIn: 'pop', animationOut: 'fade', animationInUs: 160_000, animationOutUs: 120_000, fillStyle: 'linear-gradient', gradientStartColor: '#e0ffff', gradientEndColor: '#38bdf8', highlightColor: '#ff4d9d', highlightScale: 1.18, wordAnimation: 'pop', glowColor: '#00d4ff', glowIntensity: 12, letterSpacing: 2, marginX: Math.round(H * 0.06), marginY: Math.round(H * 0.05), maxWidthRatio: 0.86, background: 'none', section: 'chorus' }) };
+    case 'anime-manga':
+      return { transform: t(0.24), text: content({ text: text.toUpperCase(), font: 'Manrope Variable', size: Math.round(H * 0.088), weight: 900, color: '#ffffff', outlineColor: '#090a0d', outlineWidth: 5, shadow: true, animationIn: 'slide', animationOut: 'fade', animationInUs: 140_000, animationOutUs: 100_000, background: 'box', backgroundOpacity: 0.88, highlightColor: '#ffe047', highlightScale: 1.15, letterSpacing: 2, padding: Math.round(H * 0.026), marginX: Math.round(H * 0.07), marginY: Math.round(H * 0.05), maxWidthRatio: 0.84 }) };
+    case 'anime-gold-epic':
+      return { transform: t(0), text: content({ text: text.toUpperCase(), font: 'Manrope Variable', size: Math.round(H * 0.115), weight: 900, color: '#fff7d1', outlineColor: '#1a0e04', outlineWidth: 5, shadow: true, animationIn: 'pop', animationOut: 'blur', animationInUs: 200_000, animationOutUs: 150_000, fillStyle: 'linear-gradient', gradientStartColor: '#fff9d6', gradientEndColor: '#f59e0b', highlightColor: '#ffffff', highlightScale: 1.2, wordAnimation: 'highlight', glowColor: '#f59e0b', glowIntensity: 11, letterSpacing: 3, marginX: Math.round(H * 0.06), marginY: Math.round(H * 0.06), maxWidthRatio: 0.86, background: 'none', section: 'climax' }) };
     case 'destaque':
       return { transform: t(0), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.075), color: '#ffffff', outlineColor: '#000000', outlineWidth: 4, shadow: true, animationIn: 'pop', animationOut: 'fade' }) };
     case 'palavra':
@@ -355,7 +376,10 @@ export function restyleSubtitles(project: Project, clipIds: string[], look: Subt
   return project.clips
     .filter((c) => clipIds.includes(c.id) && c.text)
     .map((c) => {
-      const raw = look === 'palavra' || look === 'section-climax' ? c.text!.text.toUpperCase() : c.text!.text;
+      const currentText = c.text;
+      if (!currentText) return { type: 'batch' as const, commands: [] };
+      const uppercase = ['palavra', 'section-climax', 'impact-typography', 'anime-impact', 'anime-neon', 'anime-manga', 'anime-gold-epic'].includes(look);
+      const raw = uppercase ? currentText.text.toUpperCase() : currentText.text;
       const l = lookText(look, H, raw);
       return {
         type: 'clip.update' as const,

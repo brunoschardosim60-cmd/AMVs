@@ -273,4 +273,17 @@ describe('idioma das legendas', () => {
     expect(langLabel('en')).toBe('Inglês');
     expect(langLabel('xx')).toBe('xx');
   });
+
+  it('estilos anime (impacto, neon, mangá, ouro épico, diálogo) aplicam visual e maiúsculas corretamente', () => {
+    const { p, tr } = setup();
+    const ids = subtitleClips(p, tr).map((c) => c.id);
+    for (const look of ['anime-impact', 'anime-neon', 'anime-manga', 'anime-gold-epic'] as const) {
+      const styled = apply(p, restyleSubtitles(p, ids, look));
+      const clip = subtitleClips(styled, tr)[0]!;
+      expect(clip.text?.text).toBe('EU VOU VENCER!');
+      expect(clip.text?.weight).toBe(900);
+    }
+    const dialogue = apply(p, restyleSubtitles(p, ids, 'anime-dialogue'));
+    expect(subtitleClips(dialogue, tr)[0]!.text?.text).toBe('Eu vou vencer!');
+  });
 });

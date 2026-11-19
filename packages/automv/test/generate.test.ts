@@ -541,12 +541,12 @@ describe('outros estilos', () => {
     expect(reliable.on('Legendas').filter((clip) => clip.reason === 'Palavra da letra').length).toBeGreaterThan(0);
   });
 
-  it('letra sem tempos por palavra fica como frase única, sem inventar sincronização interna', () => {
+  it('letra sem tempos por palavra fica como frase única e preserva o tempo cantado exato', () => {
     const lyrics = [{ startS: 30.04, endS: 33.04, text: 'Here we are beneath the moonlight tonight' }];
     const { on } = run({ style: 'hype', lyrics, useSpeech: false });
     const captions = on('Legendas').filter((clip) => clip.reason === 'Letra da música');
     expect(captions).toHaveLength(1);
-    expect(captions[0]!.timelineStartUs).toBe(14 * S);
+    expect(captions[0]!.timelineStartUs).toBe(Math.round(14.04 * S));
     expect(captions.every((clip) => clip.text?.animationIn === 'pop' && clip.text.animationOut === 'fade')).toBe(true);
     expect(captions.every((clip) => clip.text?.color === '#fff0a6')).toBe(true);
     expect(captions[0]?.text?.text).toBe(lyrics[0]!.text);
@@ -577,14 +577,15 @@ describe('outros estilos', () => {
     expect(on('Legendas').some((clip) => clip.reason?.includes('a força interior aparece'))).toBe(true);
   });
 
-  it('letra sobre o drop é deslocada para depois do impacto; só é omitida se não couber', () => {
-    // 39,5–40,5 s cruza o drop (24 s na timeline): começa depois da janela do golpe, não é apagada
-    const shifted = run({ style: 'hype', useSpeech: false, lyrics: [{ startS: 39.5, endS: 40.5, text: 'lyrics over drop' }] });
-    const line = shifted.on('Legendas').find((clip) => clip.reason === 'Letra da música');
+  it('letra sobre o drop preserva o tempo cantado exato sem ser apagada por impactos visuais', () => {
+    // 39,5–40,5 s cruza o drop (24 s na timeline): mantém o tempo cantado exato (23,5–24,5 s)
+    const overDrop = run({ style: 'hype', useSpeech: false, lyrics: [{ startS: 39.5, endS: 40.5, text: 'lyrics over drop' }] });
+    const line = overDrop.on('Legendas').find((clip) => clip.reason === 'Letra da música');
     expect(line).toBeDefined();
-    expect(line!.timelineStartUs).toBeGreaterThanOrEqual(24.2 * S - 1);
+    expect(line!.timelineStartUs).toBe(Math.round(23.5 * S));
+    expect(line!.durationUs).toBe(S);
 
-    // linha curtíssima com a próxima logo em seguida: não há onde encaixar, então é omitida com aviso
+    // linha curta preservada exatamente no tempo cantado sem invadir a próxima
     const tight = run({
       style: 'hype',
       useSpeech: false,
@@ -593,8 +594,8 @@ describe('outros estilos', () => {
         { startS: 40.3, endS: 42, text: 'seguinte' },
       ],
     });
-    expect(tight.r.warnings.some((warning) => warning.includes('omitidos'))).toBe(true);
-    expect(tight.on('Legendas').some((clip) => clip.text?.text === 'curta')).toBe(false);
+    expect(tight.on('Legendas').some((clip) => clip.text?.text === 'curta')).toBe(true);
+    expect(tight.on('Legendas').some((clip) => clip.text?.text === 'seguinte')).toBe(true);
 
     const lyrics = [{
       startS: 40,
@@ -857,14 +858,12 @@ describe('integração das melhorias do patch', () => {
     for (const clip of clips) expect(clip.sourceOutUs).toBeLessThanOrEqual(24 * S);
   });
 
-  it('desloca letra que cruza o drop para depois do impacto, em vez de apagar', () => {
-    const r = run({ style: 'hype', useSpeech: false, lyrics: [{ startS: 39.8, endS: 43, text: 'a letra continua depois do drop' }] });
+  it('preserva o tempo cantado exato de letras sobre o drop e de versos curtos', () => {
+    const r = run({ style: 'hype', useSpeech: false, lyrics: [{ startS: 39.8, endS: 43, text: 'a letra continua durante o drop' }] });
     const line = r.on('Legendas').find((clip) => clip.reason === 'Letra da música');
     expect(line).toBeDefined();
-    expect(line!.timelineStartUs).toBeGreaterThan(24.19 * S);
-  });
+    expect(line!.timelineStartUs).toBe(Math.round(23.8 * S));
 
-  it('mantém uma linha curta por pelo menos 0,9 s sem alcançar a próxima', () => {
     const lyrics = [
       { startS: 20, endS: 20.3, text: 'oi' },
       { startS: 21.5, endS: 23, text: 'segunda linha' },
@@ -873,9 +872,23 @@ describe('integração das melhorias do patch', () => {
       .filter((clip) => clip.reason === 'Letra da música');
     const first = lines.find((clip) => clip.text?.text === 'oi');
     expect(first).toBeDefined();
-    expect(first!.durationUs).toBeGreaterThanOrEqual(0.85 * S);
+    expect(first!.durationUs).toBe(Math.round(0.3 * S));
     const second = lines.find((clip) => clip.text?.text === 'segunda linha');
     if (second) expect(clipEndUs(first!)).toBeLessThanOrEqual(second.timelineStartUs + 1);
+  });
+
+  it('aplica estilo tipográfico anime escolhido (anime-neon / anime-gold-epic) nas letras geradas', () => {
+    const r = run({
+      style: 'hype',
+      useSpeech: false,
+      lyricStyle: 'anime-neon',
+      lyrics: [{ startS: 20, endS: 22, text: 'Break the limits' }],
+    });
+    const caption = r.on('Legendas').find((clip) => clip.reason === 'Letra da música');
+    expect(caption?.text?.text).toBe('BREAK THE LIMITS');
+    expect(caption?.text?.fillStyle).toBe('linear-gradient');
+    expect(caption?.text?.glowColor).toBe('#00d4ff');
+    expect(caption?.text?.glowIntensity).toBeGreaterThanOrEqual(10);
   });
 
   it('não usa loudness da faixa japonesa para corrigir uma fala renderizada da faixa portuguesa', () => {

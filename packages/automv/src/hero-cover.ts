@@ -50,13 +50,8 @@ export function findHeroCoverFrame(
     // 2. Riqueza de detalhes visuais e contraste
     const detailScore = trustedLocal ? (local!.entropy * 0.5 + local!.edgeDensity * 0.5) : 0.6;
 
-    // 3. Centralização e foco no personagem
+    // 3. Local visual mass is composition, not evidence of a character's bounds.
     let characterScore = 0.5;
-    if (trustedLocal && local!.centerOfVisualMass && local!.centerOfVisualMass.length === 2) {
-      const [cx, cy] = local!.centerOfVisualMass;
-      const distFromCenter = Math.hypot(cx - 0.5, cy - 0.5);
-      characterScore = Math.max(0, 1 - distFromCenter * 2.2);
-    }
     if (trustedVision && vision!.characters.length) characterScore += 0.2;
 
     // 4. Dinâmica e impacto da cena
@@ -83,7 +78,6 @@ export function findHeroCoverFrame(
     const reasons: string[] = [];
     if (shot.tags.includes('impacto') || (trustedVision && vision!.action === 'combate')) reasons.push('clímax de ação');
     if (trustedVision && vision!.characters.length) reasons.push(`personagem em destaque (${vision!.characters.join(', ')})`);
-    if (characterScore >= 0.75) reasons.push('enquadramento centralizado');
     if (detailScore >= 0.65) reasons.push('alta nitidez e contraste visual');
 
     candidates.push({

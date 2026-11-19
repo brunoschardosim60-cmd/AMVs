@@ -1,4 +1,4 @@
-import { evaluateKeyframes, type Clip, type ClipLook } from '@amv/project';
+import { evalClipLook, evaluateKeyframes, type Clip, type ClipLook } from '@amv/project';
 
 export const TEXT_ANIMATIONS_IN = [
   { id: '', label: 'Nenhuma' },
@@ -30,6 +30,7 @@ export function textIsAnimated(c: Clip): boolean {
     c.keyframes['transform.rotation']?.length ||
     c.keyframes['transform.x']?.length ||
     c.keyframes['transform.y']?.length ||
+    c.keyframes['transform.opacity']?.length ||
     c.effects.some((f) => f.enabled && f.effect === 'shake') ||
     c.transitionIn
   );
@@ -60,11 +61,14 @@ export function splitTimedText(
   const parts: { text: string; timingIndex: number }[] = [];
   let joined = '';
   for (let index = 0; index < wordTimings.length; index++) {
-    const candidate = joined + wordTimings[index]!.text;
-    if (!text.startsWith(candidate)) return null;
+    const timing = wordTimings[index];
+    if (!timing) continue;
+    const piece = timing.text.trim();
+    const candidate = joined + piece;
+    if (!text.normalize('NFC').toLowerCase().startsWith(candidate.normalize('NFC').toLowerCase())) return null;
     joined = candidate;
-    parts.push({ text: wordTimings[index]!.text, timingIndex: index });
-    if (joined === text) return parts;
+    parts.push({ text: text.slice(joined.length - piece.length, joined.length), timingIndex: index });
+    if (joined.length === text.length) return parts;
   }
   return null;
 }
@@ -183,7 +187,10 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   const dur = c.durationUs / 1e6;
   const inDuration = Math.min((t.animationInUs ?? 300_000) / 1e6, dur * 0.4);
   const outDuration = Math.min((t.animationOutUs ?? 250_000) / 1e6, dur * 0.25);
-  let alpha = look.alpha;
+  // look.alpha already includes base opacity; keyframes replace that base, not multiply it twice.
+  let alpha = c.transform.opacity > 0
+    ? look.alpha / c.transform.opacity
+    : evalClipLook({ ...c, transform: { ...c.transform, opacity: 1 } }, localS, dur).alpha;
   const atUs = Math.round(localS * 1e6);
   let scale = evaluateKeyframes(c.keyframes['transform.scale'], atUs, c.transform.scale);
   alpha *= Math.max(0, Math.min(1, evaluateKeyframes(c.keyframes['transform.opacity'], atUs, c.transform.opacity)));
@@ -235,7 +242,7 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   if (alpha <= 0) return;
 
   const shown = Array.from(t.text).slice(0, Math.max(0, visibleChars)).join('');
-  const size = t.size * scale * k;
+  let size = t.size * scale * k;
   ctx.save();
   ctx.globalAlpha = Math.min(1, alpha);
   if (blur > 0) ctx.filter = `blur(${blur * k}px)`;
@@ -252,12 +259,19 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   const padding = (t.padding ?? 24) * k;
   const maxWidth = Math.max(size, Math.min(projW * (t.maxWidthRatio ?? 0.9), projW - 2 * (t.marginX ?? 48)) * k);
   const wordTimings = t.wordTimings ?? [];
-  const lines = layoutLines(ctx, shown, maxWidth, spacing, wordTimings);
+  let lines = layoutLines(ctx, shown, maxWidth, spacing, wordTimings);
+  const safeHeight = Math.max(1, (projH - 2 * (t.marginY ?? 0)) * k - 2 * padding);
+  // Reflow long dialogue until the entire block fits; preview and export share this layout.
+  for (let attempt = 0; attempt < 12 && lines.length * size * (t.lineSpacing ?? 1.18) > safeHeight; attempt++) {
+    size *= Math.min(0.9, safeHeight / (lines.length * size * (t.lineSpacing ?? 1.18)));
+    ctx.font = `${t.weight ?? 700} ${size}px "${t.font}", "Manrope Variable", system-ui, sans-serif`;
+    lines = layoutLines(ctx, shown, maxWidth, spacing, wordTimings);
+  }
   const lh = size * (t.lineSpacing ?? 1.18);
   const totalHeight = Math.max(lh, lines.length * lh);
   const longestLine = Math.max(0, ...lines.map((line) => line.width));
   const contentHeight = totalHeight + 2 * padding;
-  const verticalLimit = Math.max(0, (projH / 2 - (t.marginY ?? 0)) * k - contentHeight / 2);
+  const verticalLimit = Math.max(0, projH / 2 - (t.marginY ?? 0) - contentHeight / (2 * k));
   const x = evaluateKeyframes(c.keyframes['transform.x'], atUs, c.transform.x);
   const y = evaluateKeyframes(c.keyframes['transform.y'], atUs, c.transform.y);
   const centerY = Math.max(-verticalLimit, Math.min(verticalLimit, y + look.dy + dy));
@@ -298,7 +312,7 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
       const animation = t.wordAnimation ?? 'highlight';
       const wordProgress = word ? Math.max(0, Math.min(1, (nowUs - word.startUs) / Math.max(1, word.endUs - word.startUs))) : 1;
       const defaultWordScale = active && animation === 'highlight' ? t.highlightScale ?? 1.12 : active && animation === 'pop' ? 1 + 0.12 * backOut(wordProgress) : 1;
-      const wordScale = (word?.scale ?? defaultWordScale) * k;
+      const wordScale = word?.scale ?? defaultWordScale;
       const wordX = x + (word?.offsetX ?? 0) * k;
       const wordY = y + (word?.offsetY ?? 0) * k;
       const wordSize = size * wordScale;
@@ -353,7 +367,7 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
         drawSpaced(ctx, part.word, wordX, wordY, spacing * wordScale);
       }
       ctx.restore();
-      x += part.width + measured(ctx, part.space, spacing);
+      x += part.width;
     }
   });
   ctx.restore();

@@ -119,24 +119,10 @@ export function planSequence<TCandidate extends SequencePlanCandidate, TSlot>(
         });
         continue;
       }
-      const currentSequence = repeated && options.mode === 'narrative' && state.last
-        ? candidates.filter((candidate) =>
-            candidate.assetId === state.last!.assetId
-            && candidate.sequenceOrder === state.last!.sequenceOrder,
-          )
-        : candidates;
-      const alternativesToLast = state.last
-        ? currentSequence.filter((candidate) => candidate.id !== state.last!.id)
-        : currentSequence;
-      let repeatedCandidates = alternativesToLast.length ? alternativesToLast : currentSequence;
-      if (repeated && options.mode === 'narrative' && state.last && repeatedCandidates.length) {
-        const anchorS = state.progress.get(state.last.assetId)?.sourceEndS ?? state.last.sourceEndS;
-        const nearestS = Math.min(...repeatedCandidates.map((candidate) => Math.abs(candidate.sourceStartS - anchorS)));
-        repeatedCandidates = repeatedCandidates.filter(
-          (candidate) => Math.abs(candidate.sourceStartS - anchorS) <= nearestS + 0.25,
-        );
-      }
-      const pool = repeated ? repeatedCandidates : eligible;
+      const unused = candidates.filter((candidate) => !state.used.has(candidate.id));
+      const alternatives = candidates.filter((candidate) => candidate.id !== state.last?.id);
+      // Narrative exhaustion may relax source order, but never prefer repeats over unused footage.
+      const pool = repeated ? (unused.length ? unused : alternatives.length ? alternatives : candidates) : eligible;
       const rank = (items: TCandidate[]) => items
         .map((candidate) => {
           const history = state.choices.filter((choice): choice is TCandidate => choice !== null).slice(-6);
@@ -194,7 +180,7 @@ export function planSequence<TCandidate extends SequencePlanCandidate, TSlot>(
           last: entry.candidate,
           lastSlot: slot,
           totalScore: state.totalScore + entry.score - (repeated ? 1 : 0),
-          repeatedSlots: repeated ? [...state.repeatedSlots, slotIndex] : state.repeatedSlots,
+          repeatedSlots: state.used.has(entry.candidate.id) ? [...state.repeatedSlots, slotIndex] : state.repeatedSlots,
         });
       }
     }
@@ -204,6 +190,7 @@ export function planSequence<TCandidate extends SequencePlanCandidate, TSlot>(
       .slice(0, beamWidth);
   }
 
-  const best = beam[0]!;
+  const best = beam[0];
+  if (!best) return { choices: slots.map(() => null), repeatedSlots: [], totalScore: 0 };
   return { choices: best.choices, repeatedSlots: best.repeatedSlots, totalScore: best.totalScore };
 }

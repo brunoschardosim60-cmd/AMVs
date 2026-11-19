@@ -6,6 +6,7 @@
  * usa os originais e é exata. O tempo do projeto é sempre a fonte da verdade.
  */
 import { drawTextLayer } from './textLayer';
+import { playbackIndex } from './playbackIndex';
 import { aggregateColorGrade, applyWhipPan, automaticDuckingGain, clipEndUs, createColorGradeLut, evalClipLook, evaluateKeyframes, isColorGradeNeutral, projectDurationUs, sampleColorGradeLut, sourceTimeAt, speedAt, transitionUnderlay, type Clip, type ClipLook, type ColorGradeLut, type Project, type Track } from '@amv/project';
 
 export interface MediaSource {
@@ -88,6 +89,16 @@ class ColorGradeGpu {
     this.gl = gl;
     this.program = program;
     this.sourceTexture = sourceTexture;
+  }
+
+  dispose(): void {
+    for (const texture of this.lutTextures.values()) this.gl.deleteTexture(texture);
+    this.lutTextures.clear();
+    this.gl.deleteTexture(this.sourceTexture);
+    this.gl.deleteProgram(this.program);
+    this.gl.getExtension('WEBGL_lose_context')?.loseContext();
+    this.canvas.width = 0;
+    this.canvas.height = 0;
   }
 
   static create(): ColorGradeGpu | null {
@@ -236,6 +247,7 @@ export function keyframeGainDb(clip: Clip, localUs: number): number {
 
 export class Player {
   private project: Project;
+  private index: ReturnType<typeof playbackIndex>;
   private slots = new Map<string, Slot>();
   private raf = 0;
   private playing = false;
@@ -261,6 +273,7 @@ export class Player {
     private readonly media: MediaSource,
   ) {
     this.project = project;
+    this.index = playbackIndex(project);
   }
 
   attach(canvas: HTMLCanvasElement): void {
@@ -269,6 +282,7 @@ export class Player {
   }
 
   detach(): void {
+    this.pause();
     cancelAnimationFrame(this.raf);
     this.raf = 0;
     for (const s of this.slots.values()) this.release(s);
@@ -276,11 +290,25 @@ export class Player {
     this.ctx = null;
     this.lastRenderAtMs = 0;
     this.lastNotifyAtMs = 0;
+    this.colorGradeGpu?.dispose();
+    this.colorGradeGpu = undefined;
+    this.colorLuts.clear();
+    if (this.colorBuffer) {
+      this.colorBuffer.width = 0;
+      this.colorBuffer.height = 0;
+      this.colorBuffer = null;
+    }
+    const audio = this.audioContext;
+    this.audioContext = null;
+    this.audioLimiter = null;
+    this.audioResume = null;
+    if (audio && audio.state !== 'closed') void audio.close().catch(() => undefined);
   }
 
   setProject(p: Project): void {
     if (this.project === p) return;
     this.project = p;
+    this.index = playbackIndex(p);
     if (this.audioLimiter) {
       this.audioLimiter.threshold.value = p.audioMix.limiterCeilingDb;
       this.audioLimiter.ratio.value = p.audioMix.limiterEnabled ? 20 : 1;
@@ -339,7 +367,7 @@ export class Player {
 
   play(): void {
     if (this.playing) return;
-    const end = projectDurationUs(this.project);
+    const end = this.index.durationUs;
     if (end > 0 && this.pausedAtUs >= end) this.pausedAtUs = 0;
     this.playing = true;
     this.clockStartUs = this.pausedAtUs;
@@ -586,7 +614,7 @@ export class Player {
     this.raf = requestAnimationFrame(this.loop);
     const now = performance.now();
     const t = this.timeUs;
-    const end = projectDurationUs(this.project);
+    const end = this.index.durationUs;
     if (this.playing && end > 0 && t >= end) {
       this.pause();
       this.pausedAtUs = end;
@@ -618,11 +646,10 @@ export class Player {
     // áudio: todas as trilhas de áudio
     for (const track of p.tracks) {
       if (track.kind !== 'audio') continue;
-      const trackClips = p.clips.filter((c) => c.trackId === track.id && c.assetId);
-      const nextAudio = trackClips
-        .filter((c) => c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t)
-        .sort((a, b) => a.timelineStartUs - b.timelineStartUs)[0];
+      const trackClips = this.index.tracks.get(track.id) ?? [];
+      const nextAudio = trackClips.find((c) => c.assetId && c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t);
       for (const c of trackClips) {
+        if (!c.assetId) continue;
         const near = (t >= c.timelineStartUs && t < clipEndUs(c)) || c === nextAudio;
         if (!near) continue;
         const slot = this.slotFor(c, 'audio');
@@ -643,13 +670,13 @@ export class Player {
       for (const track of p.tracks) {
         if (track.kind !== 'video' || track.muted || (anySolo && !track.solo)) continue;
         const audioTrack: Track = { ...track, kind: 'audio', role: 'voice' };
-        for (const c of p.clips) {
-          if (c.trackId !== track.id || !c.assetId) continue;
+        for (const c of this.index.tracks.get(track.id) ?? []) {
+          if (!c.assetId) continue;
           // Só processa áudio embutido para clipe ativo com volume audível
           if (t < c.timelineStartUs || t >= clipEndUs(c)) continue;
           const vol = clipVolume(c, audioTrack, t, anySolo, this.project);
           if (vol <= 0.003) continue;
-          const asset = p.assets.find((item) => item.id === c.assetId);
+          const asset = this.index.assets.get(c.assetId);
           if (!asset?.probe?.audio.length) continue;
           const slot = this.slotFor(c, 'audio', `embedded-audio:${c.id}`);
           if (!slot) continue;
@@ -672,9 +699,9 @@ export class Player {
     for (let i = visual.length - 1; i >= 0; i--) {
       const track = visual[i]!;
       if (track.hidden) continue;
-      const trackClips = p.clips.filter((c) => c.trackId === track.id);
+      const trackClips = this.index.tracks.get(track.id) ?? [];
       // pré-carrega só o PRÓXIMO clipe da trilha (com cortes rápidos, seriam vários)
-      const next = trackClips.filter((c) => c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t).sort((a, b) => a.timelineStartUs - b.timelineStartUs)[0];
+      const next = trackClips.find((c) => c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t);
       for (const c of trackClips) {
         const near = (t >= c.timelineStartUs && t < clipEndUs(c)) || c === next;
         if (!near) continue;
@@ -707,9 +734,11 @@ export class Player {
     // pausa o que não está mais perto do playhead; fecha o que ficou parado (libera a conexão)
     const now = performance.now();
     for (const [id, s] of this.slots) {
-      if (used.has(id) || s.kind === 'image') continue;
-      const m = s.el as HTMLMediaElement;
-      if (!m.paused) m.pause();
+      if (used.has(id)) continue;
+      if (s.kind !== 'image') {
+        const m = s.el as HTMLMediaElement;
+        if (!m.paused) m.pause();
+      }
       if (now - s.lastUsed > IDLE_RELEASE_MS) {
         this.release(s);
         this.slots.delete(id);
@@ -721,7 +750,7 @@ export class Player {
   private drawClip(ctx: CanvasRenderingContext2D, c: Clip, t: number, look: ClipLook, k: number, used: Set<string>, active: boolean): void {
     if (!c.assetId) return;
     const localS = (t - c.timelineStartUs) / 1e6;
-    const asset = this.project.assets.find((a) => a.id === c.assetId);
+    const asset = this.index.assets.get(c.assetId);
     if (!asset) return;
     const kind = asset.kind === 'image' ? 'image' : 'video';
     const slot = this.slotFor(c, kind);

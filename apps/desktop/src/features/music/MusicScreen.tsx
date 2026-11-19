@@ -12,13 +12,14 @@ import {
   type TrackFilter,
 } from '@amv/music';
 import type { MusicAnalysis } from '@amv/analysis';
-import { AlertTriangle, FolderPlus, Heart, ListMusic, Loader2, Music2, Pause, Play, Plus, Search, Sparkles, Star, Trash2, Wand2 } from 'lucide-react';
+import { AlertTriangle, FolderPlus, Heart, ListMusic, Loader2, Music2, Pause, Play, Plus, Search, Sparkles, Star, Trash2, Wand2, Lightbulb } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useApp, useLibraryVersion } from '../../store';
 import { Button } from '../../ui/controls';
 import { usePlayer } from './player';
+import { MusicIdeas } from './MusicIdeas';
 
-type View = { kind: 'all' } | { kind: 'favorites' } | { kind: 'recommend' } | { kind: 'playlist'; id: string };
+type View = { kind: 'all' } | { kind: 'favorites' } | { kind: 'recommend' } | { kind: 'ideas' } | { kind: 'playlist'; id: string };
 
 const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const SECTION_PT: Record<string, string> = { intro: 'intro', verse: 'verso', build: 'subida', chorus: 'refrão', drop: 'drop', bridge: 'ponte', outro: 'final' };
@@ -99,15 +100,16 @@ export function MusicScreen() {
   );
 
   return (
-    <div className="music-library flex h-full min-h-0">
+    <div className="music-library flex h-full min-h-0 flex-col md:flex-row">
       {/* coleções */}
-      <aside className="flex w-56 shrink-0 flex-col gap-0.5 border-r border-line bg-panel/80 p-3">
+      <aside className="flex max-h-56 w-full shrink-0 flex-col gap-0.5 overflow-y-auto border-b border-line bg-panel/80 p-3 md:max-h-none md:w-56 md:border-r md:border-b-0">
         <p className="px-2 pt-1 pb-2 text-sm font-semibold">Músicas</p>
         {(
           [
             [{ kind: 'all' }, 'Biblioteca', Music2, lib.tracks.length],
             [{ kind: 'favorites' }, 'Favoritas', Heart, lib.tracks.filter((t) => t.favorite).length],
             [{ kind: 'recommend' }, 'Recomendadas', Sparkles, null],
+            [{ kind: 'ideas' }, 'Ideias (YouTube/Spotify)', Lightbulb, null],
           ] as const
         ).map(([v, label, Icon, n]) => (
           <button key={label} type="button" onClick={() => setView(v)} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs ${view.kind === v.kind ? 'bg-raised text-ink' : 'text-ink-soft hover:bg-raised/60'}`}>
@@ -157,7 +159,7 @@ export function MusicScreen() {
         </div>
       </aside>
 
-      {/* lista */}
+      {view.kind === 'ideas' ? <MusicIdeas tracks={lib.tracks} /> : (
       <section className="flex min-w-0 flex-1 flex-col">
         <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b border-line px-4 py-2">
           {view.kind === 'recommend' ? (
@@ -292,6 +294,7 @@ export function MusicScreen() {
           </div>
         )}
       </section>
+      )}
 
       {/* detalhe / comparação */}
       {(detail || compare.length >= 2) && (

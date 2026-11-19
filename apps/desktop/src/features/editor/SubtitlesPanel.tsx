@@ -2,7 +2,7 @@ import { decodeSubtitleBytes, parseSubtitles, pickAudioStreamByLanguage, toSrt }
 import { joinPath } from '@amv/media';
 import { clipEndUs, type Clip } from '@amv/project';
 import { translateLines } from '@amv/assistant';
-import { alignUntimedLyrics, applyTranslation, cuesForClip, langLabel, LOOKS, originalText, placeCues, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
+import { alignUntimedLyrics, applyTranslation, cuesForClip, editSubtitleTextManually, langLabel, LOOKS, originalText, placeCues, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
 import { AlertTriangle, Download, FileText, Film, Languages, Mic, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
@@ -23,7 +23,7 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   const tracks = textTracks(project);
   const [trackId, setTrackId] = useState(tracks[0]?.id ?? '');
   const [look, setLook] = useState<SubtitleLook>('legenda');
-  const [lang, setLang] = useState('en');
+  const [lang, setLang] = useState('pt-BR');
   const [translating, setTranslating] = useState<{ done: number; total: number } | null>(null);
   const [speechAssetId, setSpeechAssetId] = useState(project.assets.find((asset) => asset.kind === 'video')?.id ?? '');
   const [speechModel, setSpeechModel] = useState('small');
@@ -81,7 +81,7 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
       const path = await platform!.dialogs.pickFile('Legenda ou letra', ['srt', 'ass', 'ssa', 'vtt', 'lrc', 'txt']);
       if (!path) return;
       const text = decodeSubtitleBytes(await platform!.fs.readFile(path));
-      const cues = parseSubtitles(path, text).filter((c) => Number.isFinite(c.startS));
+      const cues = parseSubtitles(path, text, lyricsAsset?.probe ? lyricsAsset.probe.durationUs / 1e6 : undefined).filter((c) => Number.isFinite(c.startS));
       if (!cues.length) {
         const plainText = text.replace(/^\uFEFF/, '').trim();
         if (/\.txt$/i.test(path) && plainText) {
@@ -95,11 +95,10 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
       setUntimedLyrics(null);
       // letra (.lrc) acompanha a música: alinha com o começo do clipe de música
       const isLyrics = /\.lrc$/i.test(path);
-      const musicTrack = project.tracks.find((t) => t.role === 'music');
-      const musicClip = musicTrack ? project.clips.filter((c) => c.trackId === musicTrack.id).sort((a, b) => a.timelineStartUs - b.timelineStartUs)[0] : undefined;
-      const offsetUs = isLyrics && musicClip ? musicClip.timelineStartUs - musicClip.sourceInUs : playheadUs;
-      const end = isLyrics && musicClip ? clipEndUs(musicClip) : undefined;
-      const cmds = placeCues(project, cues, { trackId, offsetUs, look: isLyrics && look === 'legenda' ? 'karaoke' : look, windowUs: end !== undefined ? [Math.max(0, musicClip!.timelineStartUs), end] : undefined, label: path.split(/[\\/]/).pop() });
+      const musicClip = lyricsClip;
+      const mappedCues = isLyrics && musicClip ? cuesForClip(musicClip, cues) : cues;
+      const offsetUs = isLyrics && musicClip ? 0 : playheadUs;
+      const cmds = placeCues(project, mappedCues, { trackId, offsetUs, look: isLyrics && look === 'legenda' ? 'karaoke' : look, windowUs: isLyrics && musicClip ? [musicClip.timelineStartUs, clipEndUs(musicClip)] : undefined, label: path.split(/[\\/]/).pop() });
       if (!cmds.length) {
         toast({ tone: 'warn', title: 'Nenhuma linha caiu dentro do vídeo', body: isLyrics ? 'O trecho da música usado na timeline não tem letra nesse arquivo.' : undefined });
         return;
@@ -193,7 +192,9 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
         return;
       }
       session.history.transaction(`Transcrever falas (${r.count} linhas)`, r.commands);
-      const language = transcript.language ? ` Idioma detectado: ${transcript.language}${Math.round(transcript.language_probability * 100)}%.` : '';
+      const language = transcript.language ? (transcript.language_probability > 0
+        ? ` Idioma detectado: ${transcript.language} (${Math.round(transcript.language_probability * 100)}%).`
+        : ` Idioma utilizado: ${transcript.language}.`) : '';
       toast({ tone: 'ok', title: `${r.count} falas adicionadas`, body: `Reveja e edite as legendas na trilha. A transcrição roda localmente.${language}` });
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
@@ -392,8 +393,8 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="space-y-2 border-b border-line px-2 pb-2">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="shrink-0 space-y-2 border-b border-line px-3 pb-3">
         {tracks.length > 1 && (
           <select className="h-7 w-full rounded-control border border-line bg-base px-1 text-xs" value={trackId} onChange={(e) => setTrackId(e.target.value)}>
             {tracks.map((t) => (
@@ -563,9 +564,9 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
         )}
         <div className="flex flex-wrap gap-1">
           {LOOKS.map((l) => (
-            <button key={l.id} type="button" title={`${l.description}${target.length ? ` Aplica em ${selectedSubs.length ? 'selecionadas' : 'todas'}.` : ''}`} onClick={() => restyle(l.id)} className={`rounded-control border px-2 py-0.5 text-2xs ${look === l.id ? 'border-violet bg-violet/10 text-ink' : 'border-line text-muted hover:text-ink'}`}>
+            <Button size="sm" key={l.id} aria-pressed={look === l.id} title={`${l.description}${target.length ? ` Aplica em ${selectedSubs.length ? 'selecionadas' : 'todas'}.` : ''}`} onClick={() => restyle(l.id)} className={`px-2 text-2xs ${look === l.id ? 'border-violet bg-violet/10 text-ink' : 'border-line text-muted hover:text-ink'}`}>
               {l.label}
-            </button>
+            </Button>
           ))}
         </div>
         {clips.length > 0 && (
@@ -615,7 +616,7 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
           Nenhuma legenda ainda. <b>Importar</b> traz um .srt/.ass/.lrc; <b>Do episódio</b> encaixa as falas originais embaixo de cada cena. Também dá para criar uma com <b>T</b>.
         </p>
       ) : (
-        <ul className="min-h-0 flex-1 overflow-y-auto py-1">
+        <ul className="shrink-0 py-1">
           {clips.map((c, i) => (
             <SubRow
               key={c.id}
@@ -626,7 +627,9 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
                 setPlayhead(c.timelineStartUs);
                 select(add ? (selection.includes(c.id) ? selection.filter((x) => x !== c.id) : [...selection, c.id]) : [c.id]);
               }}
-              onText={(text) => session.execute({ type: 'clip.update', clipId: c.id, patch: { text: { ...c.text!, text } } }, 'Editar legenda')}
+              onText={(text) => {
+                if (c.text) session.execute({ type: 'clip.update', clipId: c.id, patch: { text: editSubtitleTextManually(c.text, text) } }, 'Editar legenda');
+              }}
               onDelete={() => session.execute({ type: 'clip.remove', clipId: c.id }, 'Apagar legenda')}
             />
           ))}

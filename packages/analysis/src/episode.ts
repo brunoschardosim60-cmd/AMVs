@@ -3,7 +3,7 @@
  * cortes de cena → planos; movimento, clarões e volume por plano → intensidade;
  * falas e gritos por energia na faixa de voz (ou pelas legendas, quando houver).
  */
-import { mean, movingAverage, percentile, rmsFrames, stft, toDb } from './dsp.js';
+import { forEachSpectrum, mean, movingAverage, percentile, rmsFrames, toDb } from './dsp.js';
 import { impactScore, type Cue } from './subtitles.js';
 
 export const EPISODE_ANALYSIS_VERSION = 'e4';
@@ -102,7 +102,6 @@ export function detectCuts(frames: FrameStat[], threshold = 0.32, minGapS = 0.35
 export function voiceFeatures(samples: Float32Array, sampleRate: number, hopS = 0.032): { t: number[]; db: number[]; voiceRatio: number[] } {
   const size = 1024;
   const hop = Math.round(sampleRate * hopS);
-  const spec = stft(samples, sampleRate, size, hop);
   const binHz = sampleRate / size;
   const v0 = Math.round(300 / binHz);
   const v1 = Math.round(3400 / binHz);
@@ -110,19 +109,19 @@ export function voiceFeatures(samples: Float32Array, sampleRate: number, hopS = 
   const t: number[] = [];
   const db: number[] = [];
   const voiceRatio: number[] = [];
-  for (let f = 0; f < spec.mags.length; f++) {
-    const m = spec.mags[f]!;
+  forEachSpectrum(samples, size, hop, (m, f) => {
     let all = 0;
     let voice = 0;
     for (let i = 1; i < m.length; i++) {
-      const e = m[i]! * m[i]!;
+      const magnitude = m[i] ?? 0;
+      const e = magnitude * magnitude;
       all += e;
       if (i >= v0 && i <= v1) voice += e;
     }
     t.push((f * hop + size / 2) / sampleRate);
     db.push(toDb(rms[f] ?? 0));
     voiceRatio.push(all > 0 ? voice / all : 0);
-  }
+  });
   return { t, db, voiceRatio };
 }
 

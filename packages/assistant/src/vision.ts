@@ -230,8 +230,8 @@ export async function labelScenes(cfg: ProviderConfig, key: string | null, fetch
         const n = normLabel(c);
         if (!n) continue;
         if (!canon.has(n)) canon.set(n, c);
-        const name = canon.get(n)!;
-        if (!chars.includes(name) && chars.length < MAX_CHARS_PER_SHOT) chars.push(name);
+        const name = canon.get(n);
+        if (name && !chars.includes(name) && chars.length < MAX_CHARS_PER_SHOT) chars.push(name);
       }
       labels[f.id] = {
         characters: chars,
@@ -241,6 +241,11 @@ export async function labelScenes(cfg: ProviderConfig, key: string | null, fetch
         ...(g.emotion ? { emotion: g.emotion } : {}),
         ...(g.visualIntensity !== undefined ? { visualIntensity: g.visualIntensity } : {}),
         ...(g.confidence !== undefined ? { confidence: g.confidence } : {}),
+        ...(g.sceneType ? { sceneType: g.sceneType, sceneTypeConfidence: g.confidence } : {}),
+        ...(g.framing ? { framing: g.framing } : {}),
+        ...(g.framingConfidence !== undefined ? { framingConfidence: g.framingConfidence } : {}),
+        ...(g.faceCount !== undefined ? { faceCount: g.faceCount } : {}),
+        ...(g.expressions?.length ? { expressions: g.expressions } : {}),
       };
       if (opts.matchLyrics && g.lyricMatches?.length) lyricMatches[f.id] = g.lyricMatches;
     });

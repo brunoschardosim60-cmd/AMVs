@@ -24,6 +24,7 @@ interface EditorState {
   snapping: boolean;
   /** Fração da resolução do projeto usada no preview (não afeta a exportação). */
   previewScale: 1 | 0.5 | 0.25;
+  previewOriginal: boolean;
   assetDrag: AssetDrag | null;
   /** Painel do assistente aberto (o inspetor vazio some para dar espaço). */
   assistantOpen: boolean;
@@ -57,6 +58,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   clipboard: null,
   snapping: true,
   previewScale: 0.5,
+  previewOriginal: false,
   assetDrag: null,
   assistantOpen: false,
   assistantDraft: null,

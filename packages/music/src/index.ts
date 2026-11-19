@@ -303,3 +303,4 @@ export function recommend(lib: Library, themeId: ThemeId, opts: { limit?: number
     .sort((a, b) => b.score - a.score)
     .slice(0, opts.limit ?? 12);
 }
+export * from './ideas.js';

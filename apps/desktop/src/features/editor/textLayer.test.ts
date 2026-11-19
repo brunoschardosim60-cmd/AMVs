@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { TextWordTiming } from '@amv/project';
-import { splitOverlongText, splitTimedText } from './textLayer.js';
+import { createProject, evalClipLook, type TextWordTiming } from '@amv/project';
+import { subtitleClip, cuesForClip, editSubtitleTextManually } from '@amv/subtitles';
+import { drawTextLayer, splitOverlongText, splitTimedText, textIsAnimated } from './textLayer.js';
+import { clampTimelineHeight } from './editorLayout.js';
 
 const timing = (text: string, startUs: number): TextWordTiming => ({
   text,
@@ -44,5 +46,57 @@ describe('segmentos de texto cronometrados', () => {
   it('preserva tokens curtos e devolve o texto completo se a largura for inválida', () => {
     expect(splitOverlongText('AMV', 4, (value) => value.length)).toEqual(['AMV']);
     expect(splitOverlongText('AMV', 0, (value) => value.length)).toEqual(['AMV']);
+  });
+});
+
+describe('subtitle preview/export parity', () => {
+  it('keeps timed Japanese parts after applying uppercase impact styling', () => {
+    const words = ['Go', '未来'].map((text) => timing(text, 0));
+    expect(splitTimedText('GO未来', words)).toEqual([{ text: 'GO', timingIndex: 0 }, { text: '未来', timingIndex: 1 }]);
+  });
+  it('applies output scaling once and advances whitespace once', () => {
+    const project = createProject({ name: 'Text' });
+    const clip = subtitleClip(project, 'text', 0, 3e6, 'Hello world', 'legenda');
+    if (!clip.text) throw new Error('Missing text');
+    clip.text.animationIn = null;
+    const positions: number[] = [];
+    const fonts: string[] = [];
+    const ctx = { canvas: { width: 960, height: 540 }, font: '', globalAlpha: 1, save() {}, restore() {}, translate() {}, rotate() {}, measureText: (text: string) => ({ width: text.length * 10 }), fillText(_text: string, x: number) { positions.push(x); fonts.push(this.font); }, strokeText() {} };
+    drawTextLayer(ctx as unknown as CanvasRenderingContext2D, clip, 1920, 1080, 0.5, evalClipLook(clip, 1, 3), 1);
+    expect(fonts[0]).toContain(`${clip.text.size * 0.5}px`);
+    expect((positions[1] ?? 0) - (positions[0] ?? 0)).toBe(60);
+  });
+  it('exports opacity keyframes as animation', () => {
+    const clip = subtitleClip(createProject({ name: 'Opacity' }), 'text', 0, 3e6, 'Hello', 'legenda');
+    clip.keyframes['transform.opacity'] = [{ atUs: 0, value: 0, easing: 'linear' }, { atUs: 1e6, value: 1, easing: 'linear' }];
+    expect(textIsAnimated(clip)).toBe(true);
+  });
+  it('applies half opacity once rather than squaring it', () => {
+    const clip = subtitleClip(createProject({ name: 'Alpha' }), 'text', 0, 3e6, 'Hello', 'legenda');
+    if (!clip.text) throw new Error('Missing text');
+    clip.text.animationIn = null;
+    clip.transform.opacity = 0.5;
+    const ctx = { canvas: { width: 960, height: 540 }, globalAlpha: 1, save() {}, restore() {}, translate() {}, rotate() {}, measureText: (text: string) => ({ width: text.length * 10 }), fillText() {}, strokeText() {} };
+    drawTextLayer(ctx as unknown as CanvasRenderingContext2D, clip, 1920, 1080, 0.5, evalClipLook(clip, 1, 3), 1);
+    expect(ctx.globalAlpha).toBe(0.5);
+  });
+  it('maps lyrics through trimming, speed and reverse rather than an offset', () => {
+    const clip = subtitleClip(createProject({ name: 'Mapping' }), 'music', 5e6, 4e6, 'Music', 'legenda');
+    Object.assign(clip, { sourceInUs: 10e6, sourceOutUs: 18e6, speed: 2 });
+    expect(cuesForClip(clip, [{ startS: 12, endS: 14, text: 'Line' }])[0]).toMatchObject({ startS: 6, endS: 7 });
+    clip.reverse = true;
+    expect(cuesForClip(clip, [{ startS: 12, endS: 14, text: 'Line' }])[0]).toMatchObject({ startS: 7, endS: 8 });
+  });
+  it('manual edits preserve the original and invalidate stale karaoke timing', () => {
+    const clip = subtitleClip(createProject({ name: 'Manual' }), 'text', 0, 3e6, 'Original', 'legenda');
+    if (!clip.text) throw new Error('Missing text');
+    const edited = editSubtitleTextManually(clip.text, 'Edited');
+    expect(edited.textSource).toBe('manual');
+    expect(edited.original).toBe('Original');
+    expect(edited.wordTimings).toEqual([]);
+  });
+  it('keeps a preview area when the workspace shrinks', () => {
+    expect(clampTimelineHeight(500, 600)).toBe(320);
+    expect(clampTimelineHeight(500, 300)).toBe(96);
   });
 });

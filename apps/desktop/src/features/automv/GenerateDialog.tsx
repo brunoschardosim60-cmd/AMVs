@@ -1,5 +1,5 @@
 import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type CameraMotionType, type Cue, type SceneEmotion, type SpeechSegment } from '@amv/analysis';
-import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, planNarrative, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, scoreSpeechCandidate, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type OrganizationMode, type StyleId } from '@amv/automv';
+import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, planNarrative, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, scoreSpeechCandidate, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type LyricTypographyStyle, type OrganizationMode, type StyleId } from '@amv/automv';
 import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { translateLines } from '@amv/assistant';
@@ -17,6 +17,7 @@ import { applyCommand, clipEndUs, newId, sourceTimeAt, type Clip, type Project }
 import { Button, Dialog } from '../../ui/controls';
 import { MusicalMap } from './MusicalMap';
 import { RegenerationCompare } from './RegenerationCompare';
+import { SceneSuggestions } from './SceneSuggestions';
 import { useEditor } from '../editor/editorStore';
 import { getPlayer } from '../editor/Preview';
 
@@ -110,6 +111,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const transcriptionAbort = useRef<AbortController | null>(null);
   const [matchLyrics, setMatchLyrics] = useState(false);
   const [lyricSceneMatches, setLyricSceneMatches] = useState<NonNullable<GenerateOptions['lyricSceneMatches']>>({});
+  const [suggestedMatches, setSuggestedMatches] = useState<NonNullable<GenerateOptions['lyricSceneMatches']> | null>(null);
+  const [lyricStyle, setLyricStyle] = useState<LyricTypographyStyle>('lyrics-cinematic');
   const [seed, setSeed] = useState(1);
   const [result, setResult] = useState<{
     warnings: string[];
@@ -1058,7 +1061,11 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         }
       }
 
-      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches: effectiveLyricSceneMatches, speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
+      if (suggestedMatches) {
+        effectiveLyricSceneMatches = { ...effectiveLyricSceneMatches };
+        for (const [scene, cues] of Object.entries(suggestedMatches)) effectiveLyricSceneMatches[scene] = { ...(effectiveLyricSceneMatches[scene] ?? {}), ...cues };
+      }
+      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: lyrics?.cues, lyricSceneMatches: effectiveLyricSceneMatches, lyricStyle, speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, useEffects, showText, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
       const m = musics.find((a) => a.id === musicId)!;
       const suggestedEditorialRange = chosenStart !== null
         ? null
@@ -2194,9 +2201,34 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                 <Button size="sm" variant="ghost" disabled={lyricsSyncing} onClick={pickLyrics}>Importar .LRC / .SRT</Button>
                 {lyrics && <span className="text-2xs text-muted">Ativa: {lyrics.name} · {lyrics.cues.length} linhas</span>}
               </div>
+              <label className="flex flex-wrap items-center gap-2 text-2xs text-ink-soft">
+                <span>Tipografia da letra:</span>
+                <select
+                  aria-label="Tipografia da letra na geração"
+                  value={lyricStyle}
+                  onChange={(e) => setLyricStyle(e.target.value as LyricTypographyStyle)}
+                  className="h-7 rounded-control border border-line bg-base px-2 text-xs text-ink"
+                >
+                  <option value="lyrics-cinematic">Letras cinematográficas (padrão)</option>
+                  <option value="anime-impact">Anime · impacto (caixa alta + glow vermelho)</option>
+                  <option value="anime-neon">Anime · neon (gradiente ciano elétrico)</option>
+                  <option value="anime-manga">Anime · mangá (painel contrastado)</option>
+                  <option value="anime-gold-epic">Anime · ouro épico (gradiente dourado)</option>
+                  <option value="anime-dialogue">Anime · diálogo (limpo e discreto)</option>
+                </select>
+              </label>
               {lyricDraft.trim() && !lyrics && !lyricsSyncing && <p className="text-2xs text-ink-soft">O texto ainda não foi sincronizado. Sincronize antes de gerar para as linhas aparecerem no vídeo.</p>}
               <p className="text-2xs text-muted">O Whisper reconhece as palavras cantadas e alinha cada verso no áudio. Na primeira utilização, o modelo pode baixar os pesos necessários; depois a transcrição roda localmente. Linhas sem correspondência não recebem um tempo inventado.</p>
             </div>
+
+            <SceneSuggestions
+              session={session}
+              inputs={inputs}
+              seqIds={seqIds}
+              lyrics={lyrics?.cues ?? null}
+              musicRange={music ? chooseMusicRange(music, duration, chosenStart) : null}
+              onApply={setSuggestedMatches}
+            />
           </div>
         </div>
       )}

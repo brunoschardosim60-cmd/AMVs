@@ -120,4 +120,47 @@ describe('avaliador audiovisual', () => {
     expect(analyze(replaceShots([0, 2, 4])).issues.some((item) => item.dimension === 'cut-density')).toBe(false);
     expect(analyze(replaceShots([0, 0.1, 0.2])).issues.some((item) => item.dimension === 'cut-density')).toBe(true);
   });
+
+  it('detecta início atrasado, encerramento abrupto com correção 1-clique, rampa em clipe curto e calcula score por dimensão', () => {
+    const { project, episode, music } = fixture();
+    const videoTrack = project.tracks.find((track) => track.kind === 'video' && track.name === 'V1')!;
+    const template = project.clips.find((clip) => clip.id === 'shot-a')!;
+    const extended: Project = {
+      ...project,
+      clips: [
+        ...project.clips.filter((clip) => clip.trackId !== videoTrack.id),
+        ClipSchema.parse({
+          ...template,
+          id: 'delayed-first',
+          timelineStartUs: 0.4 * S,
+          durationUs: 0.2 * S,
+          sourceInUs: 0,
+          sourceOutUs: 0.2 * S,
+          keyframes: { speed: [{ atUs: 0, value: 0.8, easing: 'linear' }, { atUs: 0.2 * S, value: 1.4, easing: 'linear' }] },
+        }),
+        ClipSchema.parse({
+          ...template,
+          id: 'ending-shot',
+          timelineStartUs: 0.6 * S,
+          durationUs: 5 * S,
+          sourceInUs: 0,
+          sourceOutUs: 5 * S,
+        }),
+      ],
+    };
+    const report = evaluateAudiovisualQuality({
+      project: extended,
+      episodes: new Map([['episode', episode]]),
+      music: new Map([['song', music]]),
+    });
+    expect(report.issues.map((i) => i.type)).toContain('início atrasado');
+    expect(report.issues.map((i) => i.type)).toContain('rampa em clipe muito curto');
+    const abruptEnding = report.issues.find((i) => i.type === 'encerramento abrupto');
+    expect(abruptEnding?.fix?.commands).toHaveLength(1);
+    const fixed = applyCommand(extended, abruptEnding!.fix!.commands[0]!).project;
+    expect(fixed.clips.find((c) => c.id === 'ending-shot')?.effects.some((e) => e.effect === 'fade_out')).toBe(true);
+    expect(report.coverage.temporal.score).toBeDefined();
+    expect(report.coverage.temporal.score!).toBeLessThan(1);
+    expect(report.coverage.temporal.score!).toBeGreaterThanOrEqual(0);
+  });
 });

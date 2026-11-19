@@ -192,7 +192,7 @@ describe('golpe na batida', () => {
     return (sh.peakS - srcS(c)) / c.speed;
   };
 
-  it('cena forte: o golpe cai logo depois do corte; no drop, quase junto', () => {
+  it('cena forte: o golpe cai alinhado ao corte na janela de um quadro; no drop também', () => {
     const ep = twoFights('ep1', 0.7, 0.7);
     const { on, r } = run([ep], { focus: 'fight', hitSync: true });
     const v1 = on('V1');
@@ -200,8 +200,7 @@ describe('golpe na batida', () => {
     expect(synced.length).toBeGreaterThan(v1.length * 0.6);
     for (const c of synced) {
       const off = peakOffset(c, ep);
-      expect(off).toBeGreaterThanOrEqual(0.03);
-      expect(off).toBeLessThanOrEqual(0.13);
+      expect(Math.abs(off)).toBeLessThanOrEqual(1 / 30 + 1e-6);
       // o corte continua na batida (meio segundo)
       expect((c.timelineStartUs / S) % 0.5).toBeCloseTo(0, 5);
     }
@@ -209,7 +208,7 @@ describe('golpe na batida', () => {
     const drop = v1.find((c) => c.timelineStartUs === Math.round(dropAt * S))!;
     expect(drop.reason).toMatch(/Drop/);
     expect(drop.reason).toMatch(/golpe na batida/);
-    expect(peakOffset(drop, ep)).toBeCloseTo(0.04, 2);
+    expect(Math.abs(peakOffset(drop, ep))).toBeLessThanOrEqual(1 / 30 + 1e-6);
   });
 
   it('desligado: nenhum clipe diz que encaixou golpe', () => {
@@ -242,10 +241,7 @@ describe('golpe na batida', () => {
       expect(clip.keyframes.speed?.some((keyframe) => keyframe.value < 1)).toBe(true);
       expect(clip.sourceOutUs - clip.sourceInUs).toBe(clip.durationUs);
       if (clip.reason?.includes('golpe na batida')) {
-        const expectedLead = clip.reason.includes('Drop em')
-          ? 0.04
-          : Math.min(0.12, Math.max(0.05, clip.durationUs / S * 0.25));
-        expect(localPeakUs! / S).toBeCloseTo(expectedLead, 1);
+        expect(Math.abs(localPeakUs! / S)).toBeLessThanOrEqual(1 / 30 + 0.01);
       }
     }
   });
@@ -267,9 +263,9 @@ describe('golpe na batida', () => {
     for (const clip of zooms) {
       const points = clip.keyframes['transform.scale']!;
       expect(clip.reason).toContain('golpe na batida');
-      expect(points[0]?.value).toBe(1);
-      expect(Math.max(...points.map((point) => point.value))).toBeGreaterThan(1.03);
-      expect(points.at(-1)?.value).toBe(1);
+      expect(points[0]?.value).toBeCloseTo(clip.transform.scale, 5);
+      expect(Math.max(...points.map((point) => point.value))).toBeGreaterThan(clip.transform.scale * 1.03);
+      expect(points.at(-1)?.value).toBeCloseTo(clip.transform.scale, 5);
       expect(points.at(-1)!.atUs).toBeLessThanOrEqual(clip.durationUs);
     }
     expect(clips.filter((clip) => clip.effects.some((effect) => effect.effect === 'zoom')).length).toBe(0);
@@ -603,7 +599,8 @@ describe('efeitos sonoros', () => {
     const v1 = on('V1');
     for (const h of on('Efeitos').filter((c) => c.assetId === 'sfx-hit')) {
       const at = h.timelineStartUs / S + 0.004;
-      const clip = v1.find((c) => c.timelineStartUs <= h.timelineStartUs + 1 && clipEndUs(c) > h.timelineStartUs)!;
+      const atUs = Math.round(at * S);
+      const clip = v1.find((c) => c.timelineStartUs <= atUs + 1 && clipEndUs(c) > atUs)!;
       const sh = e.analysis.shots.find((x) => srcS(clip) >= x.startS - 1e-6 && srcS(clip) < x.endS)!;
       const peakAt = clip.timelineStartUs / S + (sh.peakS - srcS(clip)) / clip.speed;
       expect(Math.abs(at - peakAt)).toBeLessThan(0.01);

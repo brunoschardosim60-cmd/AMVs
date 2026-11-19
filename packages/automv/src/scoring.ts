@@ -31,6 +31,10 @@ export interface SceneScoringInput {
   recentFramings?: string[];
   /** Personagens identificados em planos anteriores, excluindo o corte imediatamente anterior. */
   recentCharacters?: string[][];
+  /** Duração do slot atual em segundos, para avaliar o encaixe natural da cena. */
+  slotDurationS?: number;
+  /** Intensidades (0..1) dos últimos cortes, para respiro narrativo e anti-monotonia. */
+  recentIntensities?: number[];
 }
 
 export interface SceneScoreBreakdown {
@@ -375,6 +379,29 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
         visual += 0.08;
         reasons.push('contraste luminoso expressivo na entrada do drop');
       }
+      if (
+        previous.local.samples >= 2
+        && input.local.samples >= 2
+        && previous.local.colorHistogram.length > 0
+        && previous.local.colorHistogram.length === input.local.colorHistogram.length
+      ) {
+        const histA = previous.local.colorHistogram;
+        const histB = input.local.colorHistogram;
+        const sumA = histA.reduce((sum, v) => sum + Math.max(0, v), 0);
+        const sumB = histB.reduce((sum, v) => sum + Math.max(0, v), 0);
+        const denom = Math.max(1e-6, sumA + sumB);
+        const colorDist = histA.reduce((sum, v, idx) => sum + Math.abs(v - (histB[idx] ?? 0)), 0) / denom;
+        if (input.isDrop && colorDist >= 0.45) {
+          visual += 0.06;
+          reasons.push('contraste de paleta expressivo na entrada do drop');
+        } else if (!input.isDrop && input.musicEnergy <= 0.45 && colorDist >= 0.55) {
+          visual -= 0.08;
+          reasons.push('mudança brusca de paleta de cor em trecho calmo');
+        } else if (!input.isDrop && colorDist <= 0.16 && !sharedCharacter(previous.vision, vision)) {
+          visual += 0.04;
+          reasons.push('paleta de cor harmoniosa com a cena anterior');
+        }
+      }
     }
     if (actionTransition(previous.vision, vision)) {
       transition += 0.12;
@@ -423,6 +450,40 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
   if (Number.isFinite(shot.motion) && shot.motion < 0.05 && input.musicEnergy >= 0.65 && !shot.tags.includes('fala')) {
     visual -= 0.12;
     reasons.push('cena quase parada penalizada em trecho musical agitado');
+  }
+
+  // Encaixe natural de duração cena × slot: evita esticar planos curtos demais.
+  if (typeof input.slotDurationS === 'number' && Number.isFinite(input.slotDurationS) && input.slotDurationS > 0.1) {
+    const shotDurationS = Math.max(0, shot.endS - shot.startS);
+    const ratio = shotDurationS / input.slotDurationS;
+    if (ratio < 0.75) {
+      visual -= 0.1;
+      reasons.push('cena curta demais para a duração do trecho');
+    } else if (ratio >= 1.0 && ratio <= 3.0) {
+      visual += 0.04;
+    }
+  }
+
+  // Respiro narrativo após rajada intensa e anti-monotonia dinâmica.
+  if (input.recentIntensities && input.recentIntensities.length >= 3) {
+    const recent3 = input.recentIntensities.slice(-3);
+    const span3 = Math.max(...recent3) - Math.min(...recent3);
+    const avg3 = recent3.reduce((sum, v) => sum + v, 0) / recent3.length;
+    if (span3 < 0.08 && Math.abs(sceneIntensity - avg3) >= 0.18) {
+      diversity += 0.08;
+      reasons.push('variação dinâmica de intensidade após trechos uniformes');
+    }
+    const recent4 = input.recentIntensities.slice(-4);
+    if (
+      recent4.length >= 4
+      && recent4.every((v) => v >= 0.72)
+      && !input.isDrop
+      && input.narrativeRole !== 'climax'
+      && (sceneIntensity <= 0.5 || shot.tags.includes('calma'))
+    ) {
+      narrative += 0.12;
+      reasons.push('respiro visual após sequência intensa');
+    }
   }
 
   const lyricBase = input.lyricMatchScore === undefined

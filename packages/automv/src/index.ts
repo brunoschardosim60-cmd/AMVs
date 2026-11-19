@@ -13,3 +13,6 @@ export * from './creative-profiles.js';
 export * from './lyric-matcher.js';
 export * from './hero-cover.js';
 export * from './smart-preset.js';
+export * from './beat-confidence.js';
+export * from './impact-effects.js';
+export * from './lyrics-layout.js';

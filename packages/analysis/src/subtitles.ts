@@ -114,7 +114,7 @@ function assKaraokeWords(raw: string, startS: number, endS: number): CueWord[] {
   return out;
 }
 
-export function parseAss(text: string): Cue[] {
+export function parseAss(text: string, dialogueOnly = false): Cue[] {
   const out: Cue[] = [];
   let format: string[] = [];
   for (const raw of text.replace(/\r/g, '').split('\n')) {
@@ -138,7 +138,7 @@ export function parseAss(text: string): Cue[] {
     const e = p(get('end'));
     // estilos de placa/sinal/karaokê costumam ser texto na tela, não fala
     const style = get('style').toLowerCase();
-    if (!t || !Number.isFinite(s) || !Number.isFinite(e) || /sign|placa|song|op|ed|title/.test(style)) continue;
+    if (!t || !Number.isFinite(s) || !Number.isFinite(e) || e <= s || (dialogueOnly && /(?:^|[\s_-])(sign|placa|song|op|ed|title)(?:$|[\s_-])/.test(style))) continue;
     const words = assKaraokeWords(rawText, s, e);
     out.push({ startS: s, endS: e, text: t, ...(words.length ? { words } : {}) });
   }
@@ -148,12 +148,13 @@ export function parseAss(text: string): Cue[] {
 /** LRC: [mm:ss.xx] linha. O fim de cada linha é o começo da próxima. */
 export function parseLrc(text: string, durationS?: number): Cue[] {
   const marks: { t: number; text: string; rawText: string }[] = [];
+  const offsetS = Number(text.match(/\[offset:\s*([+-]?\d+)\]/i)?.[1] ?? 0) / 1000;
   for (const raw of text.replace(/\r/g, '').split('\n')) {
     const tags = [...raw.matchAll(/\[(\d+):(\d{2})(?:[.:](\d{1,3}))?\]/g)];
     if (!tags.length) continue;
     const rawText = raw.replace(/\[[^\]]*\]/g, '');
     const body = clean(rawText.replace(/<\d+:\d{2}[.:]\d+>/g, ''));
-    for (const m of tags) marks.push({ t: Number(m[1]) * 60 + Number(m[2]) + Number(`0.${m[3] ?? '0'}`), text: body, rawText });
+    for (const m of tags) marks.push({ t: Number(m[1]) * 60 + Number(m[2]) + Number(`0.${m[3] ?? '0'}`) + offsetS, text: body, rawText });
   }
   marks.sort((a, b) => a.t - b.t);
   return marks
@@ -165,8 +166,8 @@ export function parseLrc(text: string, durationS?: number): Cue[] {
           ? [{ startS: m.t, text: m.rawText.slice(0, timingTags[0].index) }]
           : []),
         ...timingTags.map((tag, index) => ({
-          startS: Number(tag[1]) * 60 + Number(tag[2]) + Number(`0.${tag[3]}`),
-          text: m.rawText.slice(tag.index! + tag[0].length, timingTags[index + 1]?.index ?? m.rawText.length),
+          startS: Number(tag[1]) * 60 + Number(tag[2]) + Number(`0.${tag[3]}`) + offsetS,
+          text: m.rawText.slice((tag.index ?? 0) + tag[0].length, timingTags[index + 1]?.index ?? m.rawText.length),
         })),
       ];
       const hasOneWordPerTimestamp = segments.length > 0 && segments.every((segment) => clean(segment.text).trim().split(/\s+/u).filter(Boolean).length === 1);

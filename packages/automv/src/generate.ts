@@ -17,6 +17,9 @@ import { editorialStyle, styleDef, type EditorialDirection, type StyleDef, type 
 import type { CreativeEmphasis } from './creative-profiles.js';
 import { matchLyricsSemantics } from './lyric-matcher.js';
 import { lyricCueKey } from './lyric-cue-key.js';
+import { layoutLyrics } from './lyrics-layout.js';
+import { reliableBeatGrid } from './beat-confidence.js';
+import { refineImpactEffects } from './impact-effects.js';
 export { lyricCueKey } from './lyric-cue-key.js';
 
 export interface EpisodeInput {
@@ -39,6 +42,14 @@ export interface MusicInput {
   name: string;
   analysis: MusicAnalysis;
 }
+
+export type LyricTypographyStyle =
+  | 'lyrics-cinematic'
+  | 'anime-impact'
+  | 'anime-neon'
+  | 'anime-manga'
+  | 'anime-gold-epic'
+  | 'anime-dialogue';
 
 export interface GenerateOptions {
   style: StyleId;
@@ -94,6 +105,8 @@ export interface GenerateOptions {
   sfxAssets?: Partial<Record<SfxKind, string>>;
   /** Pesos de preferência para sinais visuais analisados; 50/50 preserva o comportamento anterior. */
   creativeEmphasis?: CreativeEmphasis;
+  /** Estilo tipográfico opcional para letras da música na geração automática. */
+  lyricStyle?: LyricTypographyStyle;
 }
 
 export interface GenerateResult {
@@ -218,7 +231,8 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
   }
   const beats = m.beats.map((t) => t + beatOffsetS).filter((t) => t >= a - 0.01 && t <= b + 0.01);
   const sectionEdges = m.sections.flatMap((section) => [section.startS, section.endS]).map((t) => t + beatOffsetS);
-  const subdivision = Math.min(1, ...style.beatsPerCut);
+  const confidentRhythm = reliableBeatGrid(m);
+  const subdivision = confidentRhythm ? Math.min(1, ...style.beatsPerCut) : 1;
   const beatGrid = beats.length >= 4 ? beats : Array.from({ length: Math.ceil((b - a) / 0.5) + 1 }, (_, i) => a + beatOffsetS + i * 0.5);
   const grid: number[] = [];
   for (let i = 0; i < beatGrid.length; i++) {
@@ -247,6 +261,7 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
     const lvl = e < 0.35 ? 0 : e < 0.7 ? 1 : 2;
     const rhythmVariation = m.events ? (style.rhythmPattern[slotNumber % style.rhythmPattern.length] ?? 1) : 1;
     let cadence = style.beatsPerCut[lvl]! * speedUp * rhythmVariation;
+    if (!confidentRhythm) cadence = Math.max(2, cadence);
     const timelineS = cur - a;
     const activeGrowth = musicMap.events.find((event) =>
       event.type === 'growth' && event.confidence >= 0.55
@@ -302,7 +317,8 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
     // Início de frase musical é um ponto editorial de transição, mesmo quando não coincide com o corte previsto.
     const phraseBoundary = [...phraseStarts].find((timeS) => timeS > cur + 0.05 && timeS < next - 0.05);
     if (phraseBoundary !== undefined) next = phraseBoundary;
-    if (next <= cur + 0.05 || i + n >= grid.length - 1) next = b;
+    if (next <= cur + 0.05) next = b;
+    if (drop !== null && cur < drop && next > drop) next = drop;
     const sectionEdge = sectionEdges.find((edge) => edge > cur + 0.05 && edge < next - 0.05);
     if (sectionEdge !== undefined) next = sectionEdge;
     const startS = cur - a;
@@ -329,7 +345,7 @@ export function makeSlots(m: MusicAnalysis, range: [number, number], style: Styl
     });
     slotNumber++;
     i = grid.findIndex((g) => g >= next - 0.01);
-    if (i < 0) break;
+    if (i < 0) i = grid.length - 1;
     cur = next;
   }
   return slots.filter((s) => s.endS - s.startS > 0.05);
@@ -422,6 +438,23 @@ const POOL_ROOM = 1.6;
  * acima, repetir um pouco é melhor que misturar outra luta.
  */
 const POOL_SHOT_MIN = 0.7;
+
+/**
+ * Combina a leitura temática local com combinações explícitas (visão/IA/editor). As explícitas
+ * vencem por cena+verso, mas não apagam a leitura local das demais cenas — um mapa parcial ou
+ * vazio vindo da interface não pode desligar o encaixe local da letra.
+ */
+export function mergeLyricMatches(
+  local: GenerateOptions['lyricSceneMatches'],
+  explicit: GenerateOptions['lyricSceneMatches'],
+): GenerateOptions['lyricSceneMatches'] {
+  if (!local) return explicit;
+  if (!explicit) return local;
+  const out: NonNullable<GenerateOptions['lyricSceneMatches']> = {};
+  for (const [scene, cues] of Object.entries(local)) out[scene] = { ...cues };
+  for (const [scene, cues] of Object.entries(explicit)) out[scene] = { ...(out[scene] ?? {}), ...cues };
+  return out;
+}
 
 const visionOf = (ep: EpisodeInput, shot: Shot): ShotVision | undefined => ep.vision?.shots[shotKey(shot.startS)];
 
@@ -707,12 +740,13 @@ function accelerationCurve(durationUs: number): Keyframe[] {
 
 function impactZoomCurve(durationUs: number, impactAtUs: number, baseScale: number, strength: number): Keyframe[] {
   const impact = Math.max(0, Math.min(durationUs, impactAtUs));
+  const peakAt = impact <= 0 ? Math.min(durationUs, 40_000) : impact;
   const points: { atUs: number; value: number; easing: Keyframe['easing'] }[] = [
     { atUs: 0, value: baseScale, easing: 'linear' },
-    { atUs: Math.max(0, impact - 80_000), value: baseScale, easing: 'ease-in-out' },
-    { atUs: impact, value: baseScale * (1 + strength), easing: 'ease-out' },
-    { atUs: Math.min(durationUs, impact + 100_000), value: baseScale * (1 + strength * 0.45), easing: 'ease-in-out' },
-    { atUs: Math.min(durationUs, impact + 260_000), value: baseScale, easing: 'linear' },
+    ...(peakAt > 80_000 ? [{ atUs: peakAt - 80_000, value: baseScale, easing: 'ease-in-out' as const }] : []),
+    { atUs: peakAt, value: baseScale * (1 + strength), easing: 'ease-out' },
+    { atUs: Math.min(durationUs, peakAt + 100_000), value: baseScale * (1 + strength * 0.45), easing: 'ease-in-out' },
+    { atUs: Math.min(durationUs, peakAt + 260_000), value: baseScale, easing: 'linear' },
   ];
   return points
     .map((point) => ({ ...point, atUs: Math.max(0, Math.min(durationUs, point.atUs)) }))
@@ -753,7 +787,7 @@ function textClip(
   highlight = false,
   impact = 0,
   timing?: NonNullable<Cue['words']>[number][],
-  preset: 'lyrics-cinematic' | 'dialogue-dramatic' = kind === 'word' ? 'lyrics-cinematic' : 'dialogue-dramatic',
+  preset: LyricTypographyStyle | 'dialogue-dramatic' = kind === 'word' ? 'lyrics-cinematic' : 'dialogue-dramatic',
   translation?: SubtitleTranslations | string | null,
 ): Clip {
   const word = kind === 'word';
@@ -772,12 +806,24 @@ function textClip(
       uncertain: item.uncertain ?? (item.confidence != null && item.confidence < 0.78),
     }];
   });
-  const isLyrics = preset === 'lyrics-cinematic';
-  const isClimaxImpact = highlight || impact >= 0.75;
+  const isLyrics = preset !== 'dialogue-dramatic';
+  const isClimaxImpact = highlight || impact >= 0.75 || preset === 'anime-impact' || preset === 'anime-gold-epic';
   const isDialogue = preset === 'dialogue-dramatic';
   const sizeMultiplier = 1 + (isClimaxImpact ? 0.35 : 0.25) * Math.max(0, Math.min(1, impact));
-  const baseSize = word ? 0.105 : isLyrics ? 0.09 : (impact < 0.45 ? 0.056 : 0.065);
-  const glowIntensity = isClimaxImpact ? Math.round(12 + 16 * Math.max(0, Math.min(1, impact))) : 0;
+  const presetBaseSize: Record<LyricTypographyStyle | 'dialogue-dramatic', number> = {
+    'lyrics-cinematic': 0.09,
+    'dialogue-dramatic': impact < 0.45 ? 0.056 : 0.065,
+    'anime-dialogue': 0.052,
+    'anime-impact': 0.11,
+    'anime-neon': 0.1,
+    'anime-manga': 0.088,
+    'anime-gold-epic': 0.11,
+  };
+  const baseSize = word ? 0.105 : presetBaseSize[preset];
+  const glowIntensity = preset === 'anime-neon' ? 12
+    : preset === 'anime-gold-epic' ? 11
+      : preset === 'anime-impact' ? 6
+        : isClimaxImpact ? Math.round(12 + 16 * Math.max(0, Math.min(1, impact))) : 0;
   const transObj: Record<string, string> | undefined = typeof translation === 'string'
     ? { pt: translation }
     : (translation as Record<string, string> | null | undefined) ?? undefined;
@@ -790,38 +836,68 @@ function textClip(
   const translationLanguage = translationEntry?.[0];
   const chosenTranslation = translationEntry?.[1];
   const displayText = chosenTranslation && chosenTranslation !== text ? chosenTranslation : text;
+  const uppercase = word || ['anime-impact', 'anime-neon', 'anime-manga', 'anime-gold-epic'].includes(preset);
+  const yRatio = word || preset === 'anime-impact' || preset === 'anime-gold-epic' ? 0
+    : preset === 'anime-neon' ? 0.14
+      : preset === 'anime-manga' ? 0.24
+        : preset === 'anime-dialogue' ? 0.34
+          : isLyrics ? 0.22 : 0.28;
+  const color = preset === 'anime-neon' ? '#d8fbff'
+    : preset === 'anime-impact' ? '#fff4e6'
+      : preset === 'anime-gold-epic' ? '#fff7d1'
+        : highlight ? '#fff0a6' : '#ffffff';
+  const outlineColor = preset === 'anime-neon' ? '#05121d'
+    : preset === 'anime-impact' ? '#14090d'
+      : preset === 'anime-gold-epic' ? '#1a0e04'
+        : '#000000';
+  const highlightColor = preset === 'anime-neon' ? '#ff4d9d'
+    : preset === 'anime-impact' ? '#ff5364'
+      : preset === 'anime-manga' ? '#ffe047'
+        : highlight ? '#fff0a6' : '#ffd166';
+  const gradientStartColor = preset === 'anime-neon' ? '#e0ffff'
+    : preset === 'anime-gold-epic' ? '#fff9d6'
+      : highlight ? '#fff8cc' : '#ffe259';
+  const gradientEndColor = preset === 'anime-neon' ? '#38bdf8'
+    : preset === 'anime-gold-epic' ? '#f59e0b'
+      : highlight ? '#ffd166' : '#ff6b6b';
+  const glowColor = preset === 'anime-neon' ? '#00d4ff'
+    : preset === 'anime-impact' ? '#ff5364'
+      : preset === 'anime-gold-epic' ? '#f59e0b'
+        : highlight ? '#ffd166' : '#ff7a00';
+  const useGradient = preset === 'anime-neon' || preset === 'anime-gold-epic' || (isClimaxImpact && !word && preset !== 'anime-manga' && preset !== 'anime-dialogue');
+  const useBox = preset === 'anime-manga' || (!isLyrics);
 
   return baseClip(trackId, null, startS, durS, 0, reason, {
-    transform: { x: 0, y: word ? 0 : Math.round(H * (isLyrics ? 0.22 : 0.28)), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
+    transform: { x: 0, y: Math.round(H * yRatio), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
     text: TextContentSchema.parse({
-      text: word ? displayText.toUpperCase() : displayText,
+      text: uppercase ? displayText.toUpperCase() : displayText,
       font: 'Manrope Variable',
       size: Math.round(H * baseSize * sizeMultiplier),
-      weight: word || isClimaxImpact ? 900 : isLyrics ? 800 : 700,
-      color: highlight ? '#fff0a6' : '#ffffff',
-      outlineColor: '#000000',
-      outlineWidth: word ? 5 : isClimaxImpact ? 4 : 3,
+      weight: word || isClimaxImpact || preset === 'anime-neon' || preset === 'anime-manga' ? 900 : isLyrics ? 800 : 700,
+      color,
+      outlineColor,
+      outlineWidth: word || preset === 'anime-impact' || preset === 'anime-manga' || preset === 'anime-gold-epic' ? 5 : isClimaxImpact || preset === 'anime-neon' ? 4 : 3,
       shadow: true,
-      animationIn: 'pop',
-      animationOut: 'fade',
-      background: isLyrics ? 'none' : 'box',
-      backgroundOpacity: isDialogue ? (impact < 0.45 ? 0.65 : 0.8) : 0.78,
+      animationIn: preset === 'anime-manga' ? 'slide' : preset === 'anime-dialogue' ? 'fade' : 'pop',
+      animationOut: preset === 'anime-gold-epic' ? 'blur' : 'fade',
+      background: useBox ? 'box' : 'none',
+      backgroundOpacity: preset === 'anime-manga' ? 0.88 : isDialogue ? (impact < 0.45 ? 0.65 : 0.8) : 0.78,
       alignment: 'center',
       maxWidthRatio: 0.86,
       marginX: Math.round(H * 0.06),
       marginY: Math.round(H * 0.04),
       padding: Math.round(H * 0.025),
-      highlightColor: highlight ? '#fff0a6' : '#ffd166',
+      highlightColor,
       highlightScale: isClimaxImpact ? 1.25 : 1.18,
-      fillStyle: isClimaxImpact && !word ? 'linear-gradient' : 'solid',
-      gradientStartColor: highlight ? '#fff8cc' : '#ffe259',
-      gradientEndColor: highlight ? '#ffd166' : '#ff6b6b',
-      glowColor: highlight ? '#ffd166' : '#ff7a00',
+      fillStyle: useGradient ? 'linear-gradient' : 'solid',
+      gradientStartColor,
+      gradientEndColor,
+      glowColor,
       glowIntensity,
-      section: isClimaxImpact ? 'climax' : word ? 'chorus' : 'verse',
-      letterSpacing: word ? 2 : 0,
-      timingPrecision: wordTimings.length ? 'word' : 'segment',
-      wordTimings,
+      section: isClimaxImpact ? 'climax' : word || preset === 'anime-neon' ? 'chorus' : 'verse',
+      letterSpacing: word || preset === 'anime-neon' || preset === 'anime-manga' ? 2 : preset === 'anime-gold-epic' ? 3 : 0,
+      timingPrecision: displayText === text && wordTimings.length ? 'word' : 'segment',
+      wordTimings: displayText === text ? wordTimings : [],
       ...(transObj
         ? {
             textSource: chosenTranslation && chosenTranslation !== text ? ('translation' as const) : ('original' as const),
@@ -857,8 +933,9 @@ export function findSubtitleTranslations(ep: EpisodeInput, startS: number, endS:
 
 function speechTranslation(ep: EpisodeInput, speech: SpeechSegment, opts: GenerateOptions): SubtitleTranslations | null {
   const translated = opts.speechTranslations?.[`${ep.assetId}@${speech.startS}`]?.trim();
-  if (!translated) return null;
-  return { [opts.speechTranslationLanguage ?? 'pt']: translated };
+  if (translated) return { [opts.speechTranslationLanguage ?? 'pt']: translated };
+  if (opts.speechTranslationLanguage) return null;
+  return findSubtitleTranslations(ep, speech.startS, speech.endS);
 }
 
 function speechCaptionText(ep: EpisodeInput, speech: SpeechSegment, lang: 'original' | 'pt', opts: GenerateOptions): string | null {
@@ -977,6 +1054,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const dropAbs = m.drops.map((d) => d + beatOffsetS).find((d) => d > range[0] + 1 && d < range[1] - 1) ?? null;
   const dropT = dropAbs === null ? null : dropAbs - range[0];
   const direction = planNarrative(m, range, beatOffsetS);
+  if (!reliableBeatGrid(m)) warnings.push('Ritmo com baixa confiança: subdivisões rápidas foram evitadas. Revise as batidas e o ajuste de tempo antes de exportar.');
   if (dropT === null) warnings.push('A música não tem um drop claro nesse trecho: a montagem segue a energia da música.');
   if (opts.style === 'letra' && !opts.lyrics?.length) warnings.push('Sem a letra com tempo (LRC), o estilo "letra" corta na batida mas não escreve as palavras. Importe a letra em Legendas.');
   const lang = opts.voiceLang ?? 'original';
@@ -1089,9 +1167,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       speechIntervals.push({ startS, endS: startS + len });
       const sourceText = speechCaptionText(ep, s, lang, opts);
       const reason = `Fala ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}" ` : ''}de ${ep.name} ${fmt(s.startS)} (impacto ${s.impact.toFixed(2)})`;
-      cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, t, len + 0.35, s.startS, reason, { effects: [...gradeFx(style.grade)] }) });
+      cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, t, len + 0.35, s.startS, reason, { effects: opts.useEffects ? [...gradeFx(style.grade)] : [] }) });
       cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: voiceGainDb(2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
-      const subtitleTranslations = speechTranslation(ep, s, opts) ?? findSubtitleTranslations(ep, s.startS, s.endS);
+      const subtitleTranslations = speechTranslation(ep, s, opts);
       if (opts.showText && text && sourceText) addCaptionPhrases(cmds, text.id, t, len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations);
       used.add(`${ep.assetId}@${s.startS}`);
       clipsMade++;
@@ -1230,9 +1308,10 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     }
   }
 
-  const effectiveLyricMatches = opts.lyricSceneMatches ?? (opts.lyrics && opts.lyrics.length > 0
-    ? matchLyricsSemantics(opts.lyrics, candidates, (c) => visionOf(c.ep, c.shot))
-    : undefined);
+  const effectiveLyricMatches = mergeLyricMatches(
+    opts.lyrics && opts.lyrics.length > 0 ? matchLyricsSemantics(opts.lyrics, candidates, (c) => visionOf(c.ep, c.shot)) : undefined,
+    opts.lyricSceneMatches,
+  );
 
   const RECENT_WINDOW = 6;
 
@@ -1298,6 +1377,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
           ? [recentVision.characters]
           : [];
       }),
+      slotDurationS: len,
+      recentIntensities: history.slice(-4).map((item) => effectiveShotIntensity(item.ep, item.shot)),
     });
     const dropSequenceBonus = sl.isDrop && opts.focus === 'mix' && previous?.ep.assetId === c.ep.assetId && c.sequenceOrder > previous.sequenceOrder
       ? MIX_SEQUENCE_DROP_BONUS
@@ -1448,6 +1529,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   let syncedHits = 0;
   let hitSlots = 0;
   let speedRamps = 0;
+  let lastImpactFxS = Number.NEGATIVE_INFINITY;
+  let lastDecorativeTransitionS = Number.NEGATIVE_INFINITY;
   let prev: Candidate | null = null;
   let prevSlot: Slot | null = null;
   /** Para os efeitos sonoros: onde cada corte/golpe aconteceu na timeline. */
@@ -1556,16 +1639,15 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const wantsHit = opts.hitSync !== false && (sl.isDrop || sl.energy >= 0.5 || c.shot.tags.includes('impacto')) && c.shot.motion >= 0.3 && Number.isFinite(c.shot.peakS);
     if (wantsHit) {
       hitSlots++;
-      const lead = sl.isDrop ? 0.04 : Math.min(0.12, Math.max(0.05, len * 0.25));
+      const lead = 0;
       const want = c.shot.peakS - lead * speed;
       const lo = c.shot.startS + Math.min(0.08, Math.max(0, shotLen - srcLen));
       const hi = c.shot.endS - srcLen;
       if (hi >= lo) {
         const at = Math.min(hi, Math.max(lo, want));
         const actualLead = (c.shot.peakS - at) / speed;
-        const minLead = sl.isDrop ? 0.02 : 0.03;
-        const maxLead = sl.isDrop ? 0.07 : 0.13;
-        if (actualLead >= minLead && actualLead <= maxLead && Math.abs(at - want) / speed <= 0.15) {
+        const toleranceS = project.settings.fps.den / project.settings.fps.num;
+        if (Math.abs(actualLead) <= toleranceS && Math.abs(at - want) / speed <= toleranceS) {
           srcIn = at;
           hit = true;
           syncedHits++;
@@ -1625,7 +1707,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         || (c.shot.tags.includes('impacto') && c.shot.motion >= 0.65);
       if (reliableImpact && Number.isFinite(c.shot.peakS) && c.shot.peakS >= c.shot.startS && c.shot.peakS < c.shot.endS) {
         const impactAtS = hit
-          ? (sl.isDrop ? 0.04 : Math.min(0.12, Math.max(0.05, len * 0.25)))
+          ? 0
           : Math.min(len * 0.45, Math.max(0.08, len * 0.35));
         const minimumFactor = Math.max(0.65, Math.min(0.9, 1.2 / fpsRatio));
         speedKeyframes = adaptiveSpeedCurve(us(len), us(impactAtS), minimumFactor);
@@ -1654,7 +1736,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const priorGrade = project.clips.find((old) =>
       old.trackId === v1.id && old.origin === 'ai' && sl.startS * S >= old.timelineStartUs && sl.startS * S < old.timelineStartUs + old.durationUs,
     )?.effects.filter((effect) => effect.effect === 'color' || effect.effect === 'vignette') ?? [];
-    const effects: EffectInstance[] = priorGrade.length
+    const effects: EffectInstance[] = !opts.useEffects ? [] : priorGrade.length
       ? priorGrade.map((effect) => ({ ...structuredClone(effect), id: newId('fx') }))
       : [...gradeFx(style.grade)];
     const exposureMatch = prev ? matchSceneExposure(prev.shot.brightness, c.shot.brightness) : 0;
@@ -1663,7 +1745,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const colorMatch = previousLocal?.samples && previousLocal.samples >= 2 && currentLocal?.samples && currentLocal.samples >= 2
       ? matchSceneColor(previousLocal.colorHistogram, currentLocal.colorHistogram)
       : { temperature: 0, tint: 0 };
-    if (exposureMatch || colorMatch.temperature || colorMatch.tint) {
+    if (opts.useEffects && (exposureMatch || colorMatch.temperature || colorMatch.tint)) {
       effects.push(fx('color', {
         brightness: 0, contrast: 1, saturation: 1, exposure: exposureMatch,
         temperature: colorMatch.temperature, tint: colorMatch.tint, hue: 0, shadows: 0, midtones: 0, highlights: 0, vignette: 0,
@@ -1683,7 +1765,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         effects.push(fx('vignette', { strength: 0.16 }));
       }
     }
-    const fxOn = opts.useEffects && style.impactFx > 0;
+    const fxOn = opts.useEffects && style.impactFx > 0 && sl.startS - lastImpactFxS >= 0.8;
     const hasVisualImpact = c.shot.tags.includes('impacto') || (visual?.confidence !== undefined && visual.confidence >= 0.55 && visual.action === 'combate');
     let impactLocalUs: number | null = null;
     if (Number.isFinite(c.shot.peakS) && c.shot.peakS >= srcIn && c.shot.peakS <= srcIn + len * speed) {
@@ -1695,29 +1777,40 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       if (speedKeyframes.length) speedProbe.sourceOutUs = speedProbe.sourceInUs + speedProbe.durationUs;
       impactLocalUs = timelineLocalAtSource(speedProbe, us(c.shot.peakS));
     }
-    // Recorte inteligente de ênfase no personagem (punch-in e enquadramento pelo centro de massa)
+    // Recorte/punch-in de personagem SOMENTE quando há evidência visual confiável de personagem/rosto
+    // (evita deslocar para cantos falsos usando apenas centróide de contraste sem sujeito confirmado).
     let punchScale = 1;
     let punchX = 0;
     let punchY = 0;
     let characterFramingReason: string | null = null;
+    const confirmedCharacter = Boolean(
+      visual
+      && typeof visual.confidence === 'number'
+      && Number.isFinite(visual.confidence)
+      && visual.confidence >= 0.55
+      && ((visual.faceCount ?? 0) >= 1 || visual.characters.length > 0),
+    );
     const centerOfMass = currentLocal?.centerOfVisualMass;
     const hasCenterOfMass = Boolean(centerOfMass && centerOfMass.length === 2 && Number.isFinite(centerOfMass[0]) && Number.isFinite(centerOfMass[1]));
     const wantsCharacterPunch = Boolean(
-      hasCenterOfMass
-      && ((hit && sl.energy >= 0.7)
+      opts.useEffects
+      && confirmedCharacter
+      && editorialDirection !== 'cinematic'
+      && ((hit && sl.energy >= 0.65)
         || (sl.isDrop && hasVisualImpact)
-        || (c.shot.tags.includes('fala') && len >= 0.8)
-        || (c.shot.tags.includes('grito') || (c.shot.tags.includes('impacto') && sl.energy >= 0.6)))
-      && editorialDirection !== 'cinematic',
+        || (c.shot.tags.includes('impacto') && sl.energy >= 0.6)
+        || (visual?.framing === 'close-up' && sl.energy >= 0.55)),
     );
-    if (wantsCharacterPunch && hasCenterOfMass) {
-      punchScale = sl.isDrop || (hit && sl.energy >= 0.85) ? 1.14 : 1.08;
-      const [cx, cy] = centerOfMass!;
-      const maxShiftX = (punchScale - 1) * project.settings.width * 0.45;
-      const maxShiftY = (punchScale - 1) * project.settings.height * 0.45;
-      punchX = Math.round(Math.max(-maxShiftX, Math.min(maxShiftX, -(cx - 0.5) * project.settings.width)));
-      punchY = Math.round(Math.max(-maxShiftY, Math.min(maxShiftY, -(cy - 0.5) * project.settings.height)));
-      characterFramingReason = 'recorte focado no personagem centralizado pelo centro de massa visual';
+    if (wantsCharacterPunch) {
+      punchScale = sl.isDrop || (hit && sl.energy >= 0.85) ? 1.12 : 1.07;
+      if (hasCenterOfMass) {
+        const [cx, cy] = centerOfMass!;
+        const maxShiftX = (punchScale - 1) * project.settings.width * 0.4;
+        const maxShiftY = (punchScale - 1) * project.settings.height * 0.4;
+        punchX = Math.round(Math.max(-maxShiftX, Math.min(maxShiftX, -(cx - 0.5) * project.settings.width)));
+        punchY = Math.round(Math.max(-maxShiftY, Math.min(maxShiftY, -(cy - 0.5) * project.settings.height)));
+      }
+      characterFramingReason = 'recorte focado no personagem com análise visual confiável';
     }
 
     if (fxOn && hit && hasVisualImpact && impactLocalUs !== null) {
@@ -1734,12 +1827,12 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     if (fxOn && sl.isDrop) {
       const flashStrength = editorialDirection === 'cinematic' ? 0.5 : editorialDirection === 'hype' ? 1.15 : 1;
       effects.push(fx('flash', { duration: editorialDirection === 'cinematic' ? 0.12 : 0.2, white: 1, strength: flashStrength }));
-      if (editorialDirection !== 'cinematic') {
-        effects.push(fx('rgb_split', { amount: editorialDirection === 'hype' ? 14 : 9, duration: 0.25 }));
-      }
       if (hasVisualImpact) {
         const shakeIntensity = editorialDirection === 'cinematic' ? 8 : editorialDirection === 'hype' ? 28 : 22;
         effects.push(fx('shake', { intensity: shakeIntensity, frequency: 14, duration: editorialDirection === 'cinematic' ? 0.2 : 0.45 }));
+      }
+      if (editorialDirection !== 'cinematic') {
+        effects.push(fx('rgb_split', { amount: editorialDirection === 'hype' ? 14 : 9, duration: 0.25 }));
       }
     } else if (fxOn && editorialDirection !== 'cinematic' && hit && sl.energy >= 0.65 && hasVisualImpact) {
       const visualConfidence = Math.max(visual?.confidence ?? 0, c.shot.motion);
@@ -1749,6 +1842,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         effects.push(fx('rgb_split', { amount: 8, duration: Math.min(0.18, len) }));
       }
     }
+    if (effects.some((effect) => ['flash', 'shake', 'rgb_split'].includes(effect.effect)) || visualScaleKeyframes.length) lastImpactFxS = sl.startS;
     const previousVision = prev ? visionOf(prev.ep, prev.shot) : undefined;
     const currentVision = visionOf(c.ep, c.shot);
     const transitionChoice = prev
@@ -1757,15 +1851,18 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
           incoming: { shot: c.shot, local: currentVision?.local, vision: currentVision },
           musicEnergy: sl.energy,
           isDrop: sl.isDrop,
-          durationS: len,
+          durationS: Math.min(len, prevSlot ? prevSlot.endS - prevSlot.startS : len),
           direction: editorialDirection,
           style: opts.style,
         })
       : null;
-    const transition = transitionChoice?.transition ?? null;
-    const clipEffects = transition?.transition === 'flash'
-      ? effects.filter((effect) => effect.effect !== 'flash')
-      : effects;
+    let transition = transitionChoice?.transition ?? null;
+    const decorative = transition && !['match_cut', 'cut_on_action'].includes(transition.transition);
+    if (decorative) {
+      if (!opts.useEffects || sl.startS - lastDecorativeTransitionS < 1.2) transition = null;
+      else lastDecorativeTransitionS = sl.startS;
+    }
+    const clipEffects = refineImpactEffects(effects, len, visualScaleKeyframes.length > 0, transition, sl.isDrop);
     const why = [
       narrativeBeat ? `${narrativeRoleLabel(narrativeBeat.role)} (${narrativeBeat.section})` : null,
       sl.isDrop ? `Drop em ${fmt(sl.startS)}` : `${sl.section || 'trecho'} (energia ${sl.energy.toFixed(2)})`,
@@ -1831,7 +1928,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const timing = sl.wordTiming
         ? [{ ...sl.wordTiming, startS: sl.startS, endS: sl.endS }]
         : undefined;
-      cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra', sl.isDrop, 0, timing, 'lyrics-cinematic') });
+      cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra', sl.isDrop, 0, timing, opts.lyricStyle ?? 'lyrics-cinematic') });
     }
     used.add(c.id);
     // Mantém o mesmo histórico usado pelo planejador para justificar a escolha.
@@ -1910,26 +2007,16 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   for (const b of blocks) {
     const { ep, s } = b;
     const sourceText = speechCaptionText(ep, s, lang, opts);
-    const subtitleTranslations = speechTranslation(ep, s, opts) ?? findSubtitleTranslations(ep, s.startS, s.endS);
+    const subtitleTranslations = speechTranslation(ep, s, opts);
     const reason = b.preDrop
       ? `Fala marcante antes do drop: ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada durante a fala`
       : `Fala intercalada: ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada`;
     const lead = b.atS - b.from;
-    const speechShot = ep.analysis.shots.find((sh) => s.startS >= sh.startS - 0.1 && s.startS <= sh.endS);
-    const speechLocal = speechShot ? visionOf(ep, speechShot)?.local : undefined;
-    const com = speechLocal?.centerOfVisualMass;
-    let voicePunchX = 0;
-    let voicePunchY = 0;
-    let voicePunchScale = 1;
-    if (com && com.length === 2 && Number.isFinite(com[0]) && Number.isFinite(com[1])) {
-      voicePunchScale = 1.06;
-      const maxShiftX = (voicePunchScale - 1) * project.settings.width * 0.45;
-      const maxShiftY = (voicePunchScale - 1) * project.settings.height * 0.45;
-      voicePunchX = Math.round(Math.max(-maxShiftX, Math.min(maxShiftX, -(com[0] - 0.5) * project.settings.width)));
-      voicePunchY = Math.round(Math.max(-maxShiftY, Math.min(maxShiftY, -(com[1] - 0.5) * project.settings.height)));
-    }
+    const voicePunchX = 0;
+    const voicePunchY = 0;
+    const voicePunchScale = 1;
     cmds.push({ type: 'clip.add', clip: baseClip(v1.id, ep.assetId, b.from, b.to - b.from, Math.max(0, s.startS - lead), reason, {
-      effects: gradeFx(style.grade),
+      effects: opts.useEffects ? gradeFx(style.grade) : [],
       audio: selectedVideoAudio(streamFor(ep), -60),
       transform: {
         x: voicePunchX,
@@ -1945,85 +2032,39 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     clipsMade++;
   }
 
-  // Legendas da música evitam os golpes principais e acompanham a grade quando perto dela.
-  let skippedLyrics = 0;
+  // Sung timing is authoritative: decorative impacts must not erase or delay the lyrics.
   if (opts.showText && text && opts.lyrics?.length && style.subtitles !== 'none') {
-    const timedWordCueKeys = new Set(slots.filter((slot) => slot.word && slot.lyricCueKey).map((slot) => slot.lyricCueKey!));
-    const dropWindow = dropT === null ? null : { startS: dropT - 0.12, endS: dropT + 0.2 };
-    // Outros cortes fortes são acentos visuais, não bloqueios absolutos para a leitura da letra.
-    const secondaryImpactWindows = cutsLog
-      .filter((cut) => !cut.isDrop && cut.energy >= 0.85 && cut.intensity >= 0.85)
-      .map((cut) => {
-        const at = cut.hitAtS ?? cut.startS;
-        return { startS: Math.max(0, at - 0.1), endS: at + 0.2 };
-      })
-      .sort((left, right) => left.startS - right.startS);
-    const beatsOnTimeline = m.beats.map((beat) => beat + beatOffsetS - range[0]);
-    for (const c of opts.lyrics) {
-      if (!Number.isFinite(c.startS) || c.endS <= range[0] || c.startS >= range[1]) continue;
-      let a = Math.max(0, c.startS - range[0]);
-      const b = Math.min(D, c.endS - range[0]);
-      if (blocks.some((x) => a < x.atS + x.len && b > x.atS)) {
-        skippedLyrics++;
-        continue;
-      }
-      const nearestBeat = beatsOnTimeline.reduce<{ time: number; distance: number } | null>((best, beat) => {
-        const distance = Math.abs(beat - a);
-        return distance < (best?.distance ?? Infinity) ? { time: beat, distance } : best;
-      }, null);
-      if (nearestBeat && nearestBeat.distance <= 0.1 && nearestBeat.time >= 0 && nearestBeat.time < b) a = nearestBeat.time;
-      const lyricKey = lyricCueKey(c);
-      // No estilo palavra-a-palavra, evita duplicar cues com karaoke confiável; cues incertos ficam como frase.
-      if (style.id === 'letra' && timedWordCueKeys.has(lyricKey)) continue;
-      const lyricSceneMatch = cutsLog.find((cut) => cut.lyricCueKey === lyricKey && (cut.lyricMatchScore ?? 0) >= 0.65 && cut.startS < b && cut.startS + cut.len > a);
-      const originalLyricStart = a;
-      const nextCueStart = opts.lyrics
-        .filter((other) => other !== c && Number.isFinite(other.startS) && other.startS > c.startS)
-        .reduce((min, other) => Math.min(min, other.startS - range[0]), D);
-      let lyricEnd = Math.min(b, nextCueStart, D);
-      if (!lyricSceneMatch) {
-        const maxEnd = Math.min(nextCueStart, D);
-        const preferredDuration = Math.max(0.9, lyricEnd - a);
-        lyricEnd = Math.min(maxEnd, a + preferredDuration);
-
-        // O drop é o único bloqueio absoluto: a letra termina antes dele ou começa depois.
-        if (dropWindow && a < dropWindow.endS && lyricEnd > dropWindow.startS) {
-          if (dropWindow.startS - a >= 0.6) {
-            lyricEnd = Math.min(lyricEnd, dropWindow.startS);
-          } else {
-            a = Math.max(a, dropWindow.endS);
-            lyricEnd = Math.min(maxEnd, a + preferredDuration);
-          }
-        }
-
-        // Acentos secundários apenas encurtam a linha quando há espaço legível antes.
-        // Quando estão colados ao drop, não podem empurrar a frase indefinidamente nem apagá-la.
-        for (const window of secondaryImpactWindows) {
-          if (window.endS <= a || window.startS >= lyricEnd) continue;
-          if (window.startS - a >= 0.6) {
-            lyricEnd = Math.min(lyricEnd, window.startS);
-            break;
-          }
-        }
-      }
-      if (lyricEnd - a < 0.6 || (!lyricSceneMatch && dropWindow && a < dropWindow.endS && lyricEnd > dropWindow.startS)) {
-        skippedLyrics++;
-        continue;
-      }
+    const timedWordCueKeys = new Set(slots.filter((slot) => slot.word && slot.lyricCueKey).map((slot) => slot.lyricCueKey));
+    const chosenLyricStyle = opts.lyricStyle ?? 'lyrics-cinematic';
+    for (const cue of layoutLyrics(opts.lyrics, range, blocks)) {
+      const originalCue = opts.lyrics.find((item) => item.text === cue.text && item.startS - range[0] <= cue.startS + 1e-6 && item.endS - range[0] >= cue.endS - 1e-6);
+      const cueKey = originalCue ? lyricCueKey(originalCue) : undefined;
+      if (style.id === 'letra' && cueKey && timedWordCueKeys.has(cueKey)) continue;
+      const lyricSceneMatch = cueKey
+        ? cutsLog.find((cut) => cut.lyricCueKey === cueKey && (cut.lyricMatchScore ?? 0) >= 0.65 && cut.startS < cue.endS && cut.startS + cut.len > cue.startS)
+        : undefined;
       const reason = lyricSceneMatch ? `Letra da música · ${lyricSceneMatch.lyricMatchReason}` : 'Letra da música';
-      const reliableWords = (c.words ?? []).filter(hasReliableWordTiming);
-      const wordTimings = reliableWords.length ? reliableWords.map((word) => ({
-        ...word,
-        startS: word.startS - range[0] + (a - originalLyricStart),
-        endS: word.endS - range[0] + (a - originalLyricStart),
-      })) : undefined;
+      const wordTimings = cue.words?.filter(hasReliableWordTiming);
       cmds.push({
         type: 'clip.add',
-        clip: textClip(text.id, a, lyricEnd - a, c.text, H, 'line', reason, true, Math.max(impactScore(c.text), lyricSceneMatch?.lyricMatchScore ?? 0), wordTimings, 'lyrics-cinematic'),
+        clip: textClip(
+          text.id,
+          cue.startS,
+          cue.endS - cue.startS,
+          cue.text,
+          H,
+          'line',
+          reason,
+          true,
+          Math.max(impactScore(cue.text), lyricSceneMatch?.lyricMatchScore ?? 0),
+          wordTimings,
+          chosenLyricStyle,
+        ),
       });
     }
+    const omitted = opts.lyrics.filter((cue) => cue.endS > range[0] && cue.startS < range[1] && blocks.some((block) => cue.startS - range[0] < block.atS + block.len && cue.endS - range[0] > block.atS)).length;
+    if (omitted) warnings.push(`${omitted} verso(s) foram divididos ou omitidos apenas durante falas para evitar sobreposição de textos.`);
   }
-  if (skippedLyrics) warnings.push(`${skippedLyrics} trecho(s) de letra foram omitidos para evitar sobreposição com falas ou momentos de impacto.`);
 
   const firstSpeech = blocks.find((b) => b.preDrop) ?? blocks[0];
   return {

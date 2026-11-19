@@ -753,6 +753,24 @@ export class ProjectSession {
     return { analyzed, failed, frameFailures };
   }
 
+  /** Um quadro JPEG pequeno por cena (meio da cena), para o modelo "ver" as cenas ao sugerir. */
+  async sceneThumbnails(items: { id: string; assetId: string; timeS: number }[], signal?: AbortSignal): Promise<{ sceneId: string; jpegBase64: string }[]> {
+    const env = await this.mediaEnv();
+    const out: { sceneId: string; jpegBase64: string }[] = [];
+    for (const it of items) {
+      if (signal?.aborted) break;
+      const asset = this.project.assets.find((a) => a.id === it.assetId);
+      if (!asset) continue;
+      const src = this.assetRuntime(it.assetId).artifacts?.proxyPath ?? asset.path;
+      try {
+        out.push({ sceneId: it.id, jpegBase64: toBase64(await grabFrameJpeg(env.runner, src, it.timeS, 320, signal)) });
+      } catch (error) {
+        if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+      }
+    }
+    return out;
+  }
+
   /** Analisa cenas visualmente; no modo detalhado usa três quadros por cena e retoma do cache. */
   async runVision(
     assetId: string,

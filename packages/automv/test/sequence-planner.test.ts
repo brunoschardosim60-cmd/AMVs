@@ -151,6 +151,6 @@ describe('planejador global de sequência', () => {
     });
 
     expect(result.choices.map((item) => item?.id)).toEqual(['cena-a', 'cena-b', 'cena-proxima', 'cena-b']);
-    expect(result.repeatedSlots).toEqual([2, 3]);
+    expect(result.repeatedSlots).toEqual([3]);
   });
 });

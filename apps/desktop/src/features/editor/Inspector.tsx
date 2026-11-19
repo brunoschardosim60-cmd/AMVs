@@ -1,13 +1,14 @@
 import { clipEndUs, colorGradingPreset, COLOR_GRADING_PRESETS, defaultParams, isSfxAsset, EFFECTS, evaluateKeyframes, fillScale, formatTimecode, newId, param, removeKeyframeAt, sourceDurationUs, SPEED_PRESETS, speedAt, speedFactorAt, speedKeyframesForPreset, TRANSITIONS, trimClip, upsertKeyframe, type Clip, type Command, type EffectId, type Keyframe, type Project, type TextWordTiming } from '@amv/project';
 import { Eye, EyeOff, Pause, Play, Plus, RotateCcw, SkipForward, Trash2 } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
-import { editSubtitleTextManually, langLabel, selectSubtitleTextVariant } from '@amv/subtitles';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { editSubtitleTextManually, langLabel, LOOKS, restyleSubtitles, selectSubtitleTextVariant } from '@amv/subtitles';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
 import { IconButton } from '../../ui/controls';
 import { AssetDetail } from '../project/AssetDetail';
 import { useEditor } from './editorStore';
 import { TEXT_ANIMATIONS_IN, TEXT_ANIMATIONS_OUT } from './textLayer';
+import { wordPreviewEnded, type WordPreviewRange } from './wordPreview';
 
 /** Campo numérico que só grava ao confirmar (Enter/sair do campo) — um passo de desfazer por edição. */
 function NumField({
@@ -413,6 +414,96 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
               </select>
             </label>
             <p className="mt-1 mb-2 text-2xs text-muted">A máscara é aplicada ao recorte da camada; o modo de mesclagem também vale no render final.</p>
+            <div className="mb-2 space-y-1">
+              <span className="block text-2xs font-medium text-muted">Enquadramento &amp; recorte rápido</span>
+              <div className="grid grid-cols-2 gap-1">
+                <button
+                  type="button"
+                  className="rounded-control border border-line bg-base px-2 py-1 text-left text-2xs text-ink-soft hover:border-violet/50 hover:text-ink"
+                  onClick={() => patch('Resetar enquadramento', {
+                    mask: 'none',
+                    transform: { ...tr, x: 0, y: 0, scale: 1, rotation: 0, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
+                    keyframes: { ...clip.keyframes, 'transform.scale': [] },
+                  })}
+                >
+                  Normal
+                </button>
+                <button
+                  type="button"
+                  className="rounded-control border border-line bg-base px-2 py-1 text-left text-2xs text-ink-soft hover:border-violet/50 hover:text-ink"
+                  onClick={() => patch('Destaque personagem (1,16×)', {
+                    transform: { ...tr, scale: 1.16, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
+                  })}
+                >
+                  Destaque (1,16×)
+                </button>
+                <button
+                  type="button"
+                  className="rounded-control border border-line bg-base px-2 py-1 text-left text-2xs text-ink-soft hover:border-violet/50 hover:text-ink"
+                  onClick={() => patch('Close dramático (1,32×)', {
+                    transform: { ...tr, scale: 1.32, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
+                  })}
+                >
+                  Close (1,32×)
+                </button>
+                <button
+                  type="button"
+                  className="rounded-control border border-line bg-base px-2 py-1 text-left text-2xs text-ink-soft hover:border-violet/50 hover:text-ink"
+                  onClick={() => patch('Recorte Cinemascope', {
+                    transform: { ...tr, crop: { left: 0, top: 0.12, right: 0, bottom: 0.12 } },
+                  })}
+                >
+                  Cinemascope
+                </button>
+                <button
+                  type="button"
+                  className="rounded-control border border-line bg-base px-2 py-1 text-left text-2xs text-ink-soft hover:border-violet/50 hover:text-ink"
+                  onClick={() => patch('Recorte Painel Mangá', {
+                    transform: { ...tr, scale: 1.12, crop: { left: 0.18, top: 0.04, right: 0.18, bottom: 0.04 } },
+                  })}
+                >
+                  Painel Mangá
+                </button>
+                <button
+                  type="button"
+                  className="rounded-control border border-violet/40 bg-violet/10 px-2 py-1 text-left text-2xs text-ink-soft hover:bg-violet/20 hover:text-ink"
+                  onClick={() => {
+                    const baseScale = tr.scale || 1;
+                    const decayUs = Math.min(240_000, Math.round(clip.durationUs * 0.45));
+                    patch('Punch de impacto no corte', {
+                      keyframes: {
+                        ...clip.keyframes,
+                        'transform.scale': [
+                          { atUs: 0, value: Math.round(baseScale * 1.16 * 1000) / 1000, easing: 'ease-out' },
+                          { atUs: Math.max(1, decayUs), value: baseScale, easing: 'ease-in-out' },
+                          { atUs: clip.durationUs, value: baseScale, easing: 'linear' },
+                        ],
+                      },
+                    });
+                  }}
+                >
+                  Punch no corte
+                </button>
+                <button
+                  type="button"
+                  className="col-span-2 rounded-control border border-violet/40 bg-violet/10 px-2 py-1 text-left text-2xs text-ink-soft hover:bg-violet/20 hover:text-ink"
+                  onClick={() => {
+                    const baseScale = tr.scale || 1;
+                    patch('Zoom dramático progressivo', {
+                      keyframes: {
+                        ...clip.keyframes,
+                        'transform.scale': [
+                          { atUs: 0, value: baseScale, easing: 'ease-in-out' },
+                          { atUs: clip.durationUs, value: Math.round(baseScale * 1.14 * 1000) / 1000, easing: 'linear' },
+                        ],
+                      },
+                    });
+                  }}
+                >
+                  Zoom dramático progressivo (1,0× → 1,14×)
+                </button>
+              </div>
+            </div>
             {(['left', 'top', 'right', 'bottom'] as const).map((side) => (
               <NumField
                 key={side}
@@ -429,7 +520,7 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
           </Section>
         )}
 
-        {clip.text && <TextSection clip={clip} patch={patch} />}
+        {clip.text && <TextSection clip={clip} patch={patch} session={session} />}
 
         {visual && <EffectsSection clip={clip} patch={patch} />}
 
@@ -572,12 +663,13 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
   );
 }
 
-function TextSection({ clip, patch }: { clip: Clip; patch: (label: string, p: Partial<Clip>) => void }) {
+function TextSection({ clip, patch, session }: { clip: Clip; patch: (label: string, p: Partial<Clip>) => void; session: ProjectSession }) {
   const S = 1_000_000;
   const t = clip.text!;
   const [text, setText] = useState(t.text);
   const [font, setFont] = useState(t.font);
   const [wordIndex, setWordIndex] = useState(0);
+  const wordPreview = useRef<WordPreviewRange | null>(null);
   const playheadUs = useEditor((state) => state.playheadUs);
   const playing = useEditor((state) => state.playing);
   const setPlayhead = useEditor((state) => state.setPlayhead);
@@ -590,9 +682,16 @@ function TextSection({ clip, patch }: { clip: Clip; patch: (label: string, p: Pa
   useEffect(() => setFont(t.font), [t.font]);
   const set = (label: string, p: Partial<NonNullable<Clip['text']>>) => patch(label, { text: { ...t, ...p } });
   useEffect(() => {
-    if (!playing || !word) return;
-    if (playheadUs >= clip.timelineStartUs + word.endUs) setPlaying(false);
-  }, [clip.timelineStartUs, playheadUs, playing, setPlaying, word]);
+    wordPreview.current = null;
+    setWordIndex(0);
+  }, [clip.id]);
+  useEffect(() => {
+    if (!playing) { wordPreview.current = null; return; }
+    if (wordPreviewEnded(wordPreview.current, clip.id, playheadUs)) {
+      wordPreview.current = null;
+      setPlaying(false);
+    }
+  }, [clip.id, playheadUs, playing, setPlaying]);
   const updateWord = (label: string, values: Partial<TextWordTiming>) => {
     if (!word) return;
     const updated = words.map((item, index) =>
@@ -613,12 +712,28 @@ function TextSection({ clip, patch }: { clip: Clip; patch: (label: string, p: Pa
   const seekWord = (index: number, play: boolean) => {
     const selected = words[index];
     if (!selected) return;
+    if (play && playing && wordPreview.current?.clipId === clip.id) {
+      wordPreview.current = null;
+      setPlaying(false);
+      return;
+    }
+    wordPreview.current = play ? { clipId: clip.id, endUs: clip.timelineStartUs + selected.endUs } : null;
     setWordIndex(index);
     setPlayhead(clip.timelineStartUs + selected.startUs);
     setPlaying(play);
   };
   return (
     <Section title="Texto">
+      <label className="mb-2 grid grid-cols-[1fr_150px] items-center gap-2 text-xs">
+        <span className="text-muted">Estilo visual</span>
+        <select aria-label="Estilo visual do texto" value="" className="h-7 min-w-0 rounded-control border border-line bg-base px-1 text-xs text-ink" onChange={(event) => {
+          const look = LOOKS.find((item) => item.id === event.target.value);
+          if (look) session.history.transaction(`Estilo ${look.label}`, restyleSubtitles(session.project, [clip.id], look.id));
+        }}>
+          <option value="">Escolher…</option>
+          {LOOKS.map((look) => <option key={look.id} value={look.id}>{look.label}</option>)}
+        </select>
+      </label>
       {(Object.keys(t.translations).length > 0 || t.manualText !== null) && (
         <label className="mb-2 grid grid-cols-[1fr_150px] items-center gap-2 text-xs">
           <span className="text-muted">Versão do texto</span>

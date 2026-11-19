@@ -4,7 +4,7 @@ import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from 're
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
 const VARIANTS: Record<Variant, string> = {
-  primary: 'bg-violet text-white shadow-[0_3px_14px_rgba(137,117,245,0.16)] hover:bg-violet-strong hover:shadow-[0_4px_18px_rgba(137,117,245,0.24)] disabled:bg-violet-deep disabled:text-muted',
+  primary: 'bg-violet text-action-ink hover:bg-violet-strong disabled:bg-violet-deep disabled:text-muted',
   secondary: 'bg-raised/80 text-ink border border-line hover:border-line hover:bg-hover disabled:text-faint',
   ghost: 'text-ink-soft hover:bg-raised/80 hover:text-ink disabled:text-faint disabled:hover:bg-transparent',
   danger: 'text-danger hover:bg-danger/10 disabled:text-faint',
