@@ -2003,56 +2003,71 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                 />
                 Traduzir / converter letra para Português (PT-BR)
               </label>
-              <label className="flex items-center justify-between gap-2 text-2xs text-ink-soft">
-                <span>Tipografia:</span>
-                <select
-                  aria-label="Tipografia da letra na geração"
-                  value={lyricStyle}
-                  onChange={(e) => setLyricStyle(e.target.value as LyricTypographyStyle)}
-                  className="h-7 min-w-0 flex-1 rounded-control border border-line bg-base px-2 text-xs text-ink"
-                >
-                  <option value="anime-impact">Anime · impacto (pop + glow)</option>
-                  <option value="anime-neon">Anime · neon (ciano elétrico)</option>
-                  <option value="anime-gold-epic">Anime · ouro épico (Cinzel dourado)</option>
-                  <option value="anime-manga">Anime · mangá (contrastado)</option>
-                  <option value="lyrics-cinematic">Letras cinematográficas</option>
-                  <option value="anime-dialogue">Discreto (base da tela)</option>
-                </select>
-              </label>
-              <div className="space-y-1.5 rounded-control border border-line-soft bg-[#07090e] p-2">
-                <div className="flex items-center justify-between text-[10px] text-faint">
-                  <span>Como fica na tela</span>
-                  <span className="text-muted">{TYPOGRAPHY_PREVIEW_PILLS.find((p) => p.id === lyricStyle)?.label ?? lyricStyle}</span>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] sm:items-stretch">
+                <div className="flex flex-col justify-between gap-1.5">
+                  <label className="flex flex-col gap-1 text-2xs text-ink-soft">
+                    <span>Tipografia da letra:</span>
+                    <select
+                      aria-label="Tipografia da letra na geração"
+                      value={lyricStyle}
+                      onChange={(e) => setLyricStyle(e.target.value as LyricTypographyStyle)}
+                      className="h-7 w-full min-w-0 rounded-control border border-line bg-base px-2 text-xs text-ink"
+                    >
+                      <option value="anime-impact">Anime · impacto (pop + glow)</option>
+                      <option value="anime-neon">Anime · neon (ciano elétrico)</option>
+                      <option value="anime-gold-epic">Anime · ouro épico (Cinzel dourado)</option>
+                      <option value="anime-manga">Anime · mangá (contrastado)</option>
+                      <option value="lyrics-cinematic">Letras cinematográficas</option>
+                      <option value="anime-dialogue">Discreto (base da tela)</option>
+                    </select>
+                  </label>
+                  <div className="grid grid-cols-3 gap-1">
+                    {TYPOGRAPHY_PREVIEW_PILLS.map((pill) => {
+                      const active = lyricStyle === pill.id;
+                      return (
+                        <button
+                          key={pill.id}
+                          type="button"
+                          onClick={() => setLyricStyle(pill.id)}
+                          title={pill.label}
+                          className={`flex flex-col items-center justify-center rounded border px-1 py-1 transition-colors ${active ? 'border-violet bg-violet/20 ring-1 ring-violet/60' : 'border-line-soft bg-base/70 hover:border-line hover:bg-raised'}`}
+                        >
+                          <TextLookSample look={pill.id} sample={pill.sample} compact fontSizePx={10} />
+                          <span className="mt-0.5 max-w-full truncate text-[9px] text-muted">{pill.label.replace(/^Anime · /, '')}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-                <div className="grid min-h-12 place-items-center overflow-hidden rounded bg-[radial-gradient(circle_at_center,rgba(90,60,180,0.18),transparent_72%)] px-2 py-2 text-center">
-                  <TextLookSample
-                    look={lyricStyle}
-                    sample={
-                      (lyrics?.cues.find((c) => c.text.trim())?.text
-                        ?? lyricDraft.split(/\r?\n/).find((l) => l.trim() && !l.trim().startsWith('['))
-                        ?? 'MEU PODER É NUNCA DESISTIR!')
-                        .replace(/^\[[^\]]+\]\s*/g, '')
-                        .trim()
-                        .slice(0, 42)
-                    }
-                  />
-                </div>
-                <div className="grid grid-cols-3 gap-1">
-                  {TYPOGRAPHY_PREVIEW_PILLS.map((pill) => {
-                    const active = lyricStyle === pill.id;
-                    return (
-                      <button
-                        key={pill.id}
-                        type="button"
-                        onClick={() => setLyricStyle(pill.id)}
-                        title={pill.label}
-                        className={`flex flex-col items-center justify-center rounded border px-1.5 py-1 transition-colors ${active ? 'border-violet bg-violet/20 ring-1 ring-violet/60' : 'border-line-soft bg-base/70 hover:border-line hover:bg-raised'}`}
-                      >
-                        <TextLookSample look={pill.id} sample={pill.sample} compact fontSizePx={11} />
-                        <span className="mt-0.5 max-w-full truncate text-[9px] text-muted">{pill.label.replace(/^Anime · /, '')}</span>
-                      </button>
-                    );
-                  })}
+                <div className="flex flex-col justify-between gap-1.5 rounded-control border border-line-soft bg-[#07090e] p-2">
+                  <div className="flex items-center justify-between text-[10px] text-faint">
+                    <span>Como fica na tela</span>
+                    <span className="text-muted">{TYPOGRAPHY_PREVIEW_PILLS.find((p) => p.id === lyricStyle)?.label ?? lyricStyle}</span>
+                  </div>
+                  <div className="grid min-h-14 flex-1 place-items-center overflow-hidden rounded bg-[radial-gradient(circle_at_center,rgba(90,60,180,0.18),transparent_72%)] px-2 py-2 text-center">
+                    <TextLookSample
+                      look={lyricStyle}
+                      sample={
+                        (lyrics?.cues.find((c) => c.text.trim())?.text
+                          ?? lyricDraft.split(/\r?\n/).find((l) => l.trim() && !l.trim().startsWith('['))
+                          ?? 'MEU PODER É NUNCA DESISTIR!')
+                          .replace(/^\[[^\]]+\]\s*/g, '')
+                          .trim()
+                          .slice(0, 42)
+                      }
+                    />
+                  </div>
+                  {(voiceMoments > 0 || style === 'discurso') && showSpeechCaptions && (
+                    <div className="flex items-center justify-between gap-2 rounded bg-black/50 px-2 py-1">
+                      <span className="shrink-0 text-[9px] text-faint">Fala:</span>
+                      <TextLookSample
+                        look={lyricStyle === 'anime-dialogue' ? 'anime-impact' : 'anime-dialogue'}
+                        sample="Eu nunca vou recuar!"
+                        compact
+                        fontSizePx={11}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

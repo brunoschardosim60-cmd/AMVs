@@ -1,4 +1,4 @@
-import { newId, sourceTimeAt, type Clip, type Command, type EffectInstance, type Project } from '@amv/project';
+import { clipEndUs, newId, sourceTimeAt, type Clip, type Command, type EffectInstance, type Project } from '@amv/project';
 import type { EpisodeInput } from './generate.js';
 import type { QualityReport } from './quality.js';
 
@@ -9,12 +9,11 @@ export interface AutoRepairResult {
   repairsApplied: string[];
 }
 
-function findShotBrightness(episode: EpisodeInput | undefined, clip: Clip): number | null {
-  if (!episode) return null;
+function findSourceShot(episode: EpisodeInput | undefined, clip: Clip) {
+  if (!episode) return undefined;
   const sourceMidS = sourceTimeAt(clip, clip.durationUs / 2) / SECOND;
-  const shot = episode.analysis.shots.find((item) => sourceMidS >= item.startS && sourceMidS < item.endS)
+  return episode.analysis.shots.find((item) => sourceMidS >= item.startS && sourceMidS < item.endS)
     ?? episode.analysis.shots.find((item) => sourceMidS >= item.startS - 0.05 && sourceMidS <= item.endS + 0.05);
-  return shot && Number.isFinite(shot.brightness) ? shot.brightness : null;
 }
 
 function effectiveBrightness(raw: number, clip: Clip): number {
@@ -30,8 +29,9 @@ function effectiveBrightness(raw: number, clip: Clip): number {
 /**
  * Corrige automaticamente problemas objetivos detectados pela avaliação audiovisual:
  * 1. Saltos bruscos de luminosidade entre clipes consecutivos (ajusta exposição limitada a ±0,65 EV).
- * 2. Sequências de micro-cortes (< 180 ms) na trilha de vídeo (alonga o clipe anterior quando há margem na fonte).
- * 3. Sobreposições de legendas/textos (aplica os comandos seguros já sugeridos pelo avaliador).
+ * 2. Sequências de micro-cortes (< 180 ms) na trilha de vídeo (mescla pares contíguos sem invadir o plano seguinte).
+ * 3. Repetições do mesmo trecho de cena (troca o clipe repetido para outro plano inédito do mesmo episódio).
+ * 4. Sobreposições de legendas/textos (aplica os comandos seguros já sugeridos pelo avaliador).
  */
 export function autoRepairAssembly(
   project: Project,
@@ -56,11 +56,11 @@ export function autoRepairAssembly(
     const prevClip = clipById.get(prevId);
     const currClip = clipById.get(currId);
     if (!prevClip?.assetId || !currClip?.assetId) continue;
-    const prevRaw = findShotBrightness(episodeById.get(prevClip.assetId), prevClip);
-    const currRaw = findShotBrightness(episodeById.get(currClip.assetId), currClip);
-    if (prevRaw === null || currRaw === null) continue;
-    const prevB = effectiveBrightness(prevRaw, prevClip);
-    const currB = effectiveBrightness(currRaw, currClip);
+    const prevShot = findSourceShot(episodeById.get(prevClip.assetId), prevClip);
+    const currShot = findSourceShot(episodeById.get(currClip.assetId), currClip);
+    if (!prevShot || !currShot || !Number.isFinite(prevShot.brightness) || !Number.isFinite(currShot.brightness)) continue;
+    const prevB = effectiveBrightness(prevShot.brightness, prevClip);
+    const currB = effectiveBrightness(currShot.brightness, currClip);
     const diff = prevB - currB;
     if (Math.abs(diff) < 0.25) continue;
     // Compensa parcialmente para aproximar a luminância sem estourar nem escurecer demais
@@ -97,7 +97,7 @@ export function autoRepairAssembly(
     repairsApplied.push(`Exposição suavizada automaticamente em ${brightnessFixCount} transição(ões) com salto de luminosidade.`);
   }
 
-  // 2. Redução de sequências de micro-cortes (< 180 ms): mescla pares adjacentes quando há margem na fonte
+  // 2. Redução de sequências de micro-cortes (< 180 ms): mescla pares contíguos sem ultrapassar o shot nem a mídia
   const removedIds = new Set<string>();
   let microCutFixCount = 0;
   for (const issue of report.issues) {
@@ -110,15 +110,21 @@ export function autoRepairAssembly(
       const second = run[i + 1]!;
       if (removedIds.has(first.id) || removedIds.has(second.id)) continue;
       if (!first.assetId) continue;
+      // Só mescla clipes realmente contíguos (sem pular lacunas)
+      if (Math.abs(clipEndUs(first) - second.timelineStartUs) > 10_000) continue;
       const asset = project.assets.find((a) => a.id === first.assetId);
-      const maxSourceUs = asset?.probe?.durationUs ?? Infinity;
+      const maxAssetUs = asset?.probe?.durationUs ?? Infinity;
+      const ep = episodeById.get(first.assetId);
+      const shot = findSourceShot(ep, first);
+      const maxShotUs = shot ? Math.round(shot.endS * SECOND) : Infinity;
+      const maxAllowedUs = Math.min(maxAssetUs, maxShotUs);
       const mergedDurUs = first.durationUs + second.durationUs;
       const neededSourceOutUs = first.sourceInUs + Math.round(mergedDurUs * (first.speed || 1));
-      if (neededSourceOutUs > maxSourceUs) continue;
+      if (neededSourceOutUs > maxAllowedUs + 1_000) continue;
       commands.push({
         type: 'clip.update',
         clipId: first.id,
-        patch: { durationUs: mergedDurUs, sourceOutUs: neededSourceOutUs },
+        patch: { durationUs: mergedDurUs, sourceOutUs: Math.min(maxAllowedUs, neededSourceOutUs) },
       });
       commands.push({
         type: 'clip.remove',
@@ -132,7 +138,54 @@ export function autoRepairAssembly(
     repairsApplied.push(`${microCutFixCount} micro-corte(s) abaixo de 180 ms mesclado(s) para manter a ação legível.`);
   }
 
-  // 3. Correções seguras de duração em legendas sobrepostas
+  // 3. Troca automática de cenas repetidas por planos inéditos do mesmo episódio
+  const usedShotRanges = new Map<string, Array<[number, number]>>();
+  for (const clip of project.clips) {
+    if (!clip.assetId || removedIds.has(clip.id)) continue;
+    const list = usedShotRanges.get(clip.assetId) ?? [];
+    list.push([clip.sourceInUs / SECOND, clip.sourceOutUs / SECOND]);
+    usedShotRanges.set(clip.assetId, list);
+  }
+  const overlapsUsed = (assetId: string, startS: number, endS: number) =>
+    (usedShotRanges.get(assetId) ?? []).some(([a, b]) => startS < b - 0.1 && endS > a + 0.1);
+  const replacedRepeatIds = new Set<string>();
+  let repeatFixCount = 0;
+  for (const issue of report.issues) {
+    if (issue.dimension !== 'repetition' || issue.clipIds.length < 2) continue;
+    for (const dupId of issue.clipIds.slice(1)) {
+      if (!generatedIds.has(dupId) || removedIds.has(dupId) || replacedRepeatIds.has(dupId)) continue;
+      const clip = clipById.get(dupId);
+      if (!clip?.assetId) continue;
+      const ep = episodeById.get(clip.assetId);
+      if (!ep) continue;
+      const neededS = (clip.durationUs * (clip.speed || 1)) / SECOND;
+      const altShot = ep.analysis.shots
+        .filter((s) =>
+          s.endS - s.startS >= neededS + 0.02
+          && !s.tags.includes('escura')
+          && !overlapsUsed(clip.assetId!, s.startS, s.startS + neededS),
+        )
+        .sort((a, b) => b.intensity - a.intensity)[0];
+      if (!altShot) continue;
+      const newSourceInUs = Math.round(altShot.startS * SECOND);
+      const newSourceOutUs = newSourceInUs + Math.round(neededS * SECOND);
+      commands.push({
+        type: 'clip.update',
+        clipId: clip.id,
+        patch: { sourceInUs: newSourceInUs, sourceOutUs: newSourceOutUs },
+      });
+      const list = usedShotRanges.get(clip.assetId) ?? [];
+      list.push([altShot.startS, altShot.startS + neededS]);
+      usedShotRanges.set(clip.assetId, list);
+      replacedRepeatIds.add(clip.id);
+      repeatFixCount++;
+    }
+  }
+  if (repeatFixCount > 0) {
+    repairsApplied.push(`${repeatFixCount} cena(s) repetida(s) substituída(s) automaticamente por planos inéditos.`);
+  }
+
+  // 4. Correções seguras de duração em legendas sobrepostas
   const durationUpdates = new Map<string, number>();
   const subtitleLabels = new Set<string>();
   for (const item of report.issues) {

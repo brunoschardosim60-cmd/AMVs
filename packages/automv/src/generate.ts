@@ -477,7 +477,7 @@ function resolveSpeechPreset(
 ): LyricTypographyStyle | 'dialogue-dramatic' {
   if (hasLyrics) {
     const chosenLyric = lyricStyle ?? 'lyrics-cinematic';
-    return chosenLyric === 'anime-dialogue' ? 'dialogue-dramatic' : 'anime-dialogue';
+    return chosenLyric === 'anime-dialogue' ? 'anime-impact' : 'anime-dialogue';
   }
   return lyricStyle && lyricStyle !== 'lyrics-cinematic' ? lyricStyle : 'dialogue-dramatic';
 }
@@ -1400,9 +1400,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const targetList = shot.tags.includes('escura') ? darkReserve : candidates;
     const sequenceOrder = sequenceOrders.get(seq) ?? 0;
     const episodeOrder = episodeOrders.get(ep.assetId) ?? Number.MAX_SAFE_INTEGER;
-    // Subdivide planos longos (>= 4s) em trechos não sobrepostos para evitar repetir o mesmo recorte
-    // quando o episódio tem poucos cortes longos.
-    const sliceCount = shotDur >= 4.0 ? Math.min(4, Math.floor(shotDur / 2.2)) : 1;
+    // Subdivide planos longos em trechos não sobrepostos nos estilos de corte dinâmico
+    // (mantém planos longos inteiros em estilos lentos como Emocional).
+    const sliceCount = style.minCutS < 1.0 && shotDur >= 4.4 ? Math.min(4, Math.floor(shotDur / 2.2)) : 1;
     if (sliceCount <= 1) {
       targetList.push({
         ep,
@@ -1846,6 +1846,15 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         // Seleção inteligente de srcIn: escolher a parte mais interessante da cena
         const margin = Math.max(0, c.shot.endS - c.shot.startS - len);
         if (margin < 0.08) return c.shot.startS; // cena quase do mesmo tamanho: começa no início
+        const pickFreeWindow = (preferred: number): number => {
+          const clamped = Math.max(c.shot.startS, Math.min(c.shot.endS - len, preferred));
+          if (!overlapsUsedInterval(c.assetId, clamped, clamped + len)) return clamped;
+          const step = Math.max(0.25, margin / 6);
+          for (let candidateIn = c.shot.startS; candidateIn <= c.shot.endS - len + 1e-6; candidateIn += step) {
+            if (!overlapsUsedInterval(c.assetId, candidateIn, candidateIn + len)) return candidateIn;
+          }
+          return clamped;
+        };
         const jitter = margin * 0.15 * (rand() - 0.5); // variação por seed
         const visual = visionOf(c.ep, c.shot);
         const local = visual?.local;
@@ -1855,16 +1864,14 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
           .sort((a, b) => b.speed * b.confidence - a.speed * a.confidence)[0];
         if (motionEvent) {
           const eventCenter = (motionEvent.startS + motionEvent.endS) / 2;
-          const preferred = eventCenter - len * 0.4 + jitter;
-          return Math.max(c.shot.startS, Math.min(c.shot.endS - len, preferred));
+          return pickFreeWindow(eventCenter - len * 0.4 + jitter);
         }
         // Se tem peakS confiável, enquadrar o pico no primeiro terço
         if (Number.isFinite(c.shot.peakS) && c.shot.peakS >= c.shot.startS && c.shot.peakS <= c.shot.endS) {
-          const preferred = c.shot.peakS - len * 0.3 + jitter;
-          return Math.max(c.shot.startS, Math.min(c.shot.endS - len, preferred));
+          return pickFreeWindow(c.shot.peakS - len * 0.3 + jitter);
         }
         // Fallback: pequeno offset variável sem ser totalmente aleatório
-        return c.shot.startS + Math.min(0.12, margin) + margin * 0.25 * rand();
+        return pickFreeWindow(c.shot.startS + Math.min(0.12, margin) + margin * 0.25 * rand());
       })(),
     };
     const lyricMatch = sl.lyricCueKey ? effectiveLyricMatches?.[c.id]?.[sl.lyricCueKey] : undefined;

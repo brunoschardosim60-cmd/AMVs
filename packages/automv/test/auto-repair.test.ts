@@ -109,4 +109,42 @@ describe('autoRepairAssembly', () => {
     const after = evaluateAudiovisualQuality({ project: afterProject, episodes: new Map() });
     expect(after.issues.some((i) => i.dimension === 'cut-density')).toBe(false);
   });
+
+  it('substitui automaticamente cenas repetidas por planos inéditos do mesmo episódio', () => {
+    const { project, v1 } = baseProject();
+    // Dois clipes apontando para o mesmo shot (0..4s)
+    const c1 = makeClip('r1', v1.id, 0, 1_000_000, 500_000);
+    const c2 = makeClip('r2', v1.id, 1_000_000, 1_000_000, 600_000);
+    project.clips.push(c1, c2);
+
+    const analysis: EpisodeAnalysis = {
+      version: 'e4',
+      durationS: 60,
+      shots: [
+        { startS: 0, endS: 4, intensity: 0.7, motion: 0.6, loud: 0.5, peakS: 2, brightness: 0.55, line: null, tags: ['ação'] },
+        { startS: 4, endS: 9, intensity: 0.85, motion: 0.8, loud: 0.7, peakS: 6, brightness: 0.55, line: null, tags: ['ação'] },
+      ],
+      speech: [],
+      subtitles: [],
+      intensityCurve: [],
+      curveStepS: 0.5,
+      sequences: [],
+    };
+    const ep: EpisodeInput = { assetId: 'ep1', name: 'ep1.mp4', hasAudio: true, analysis };
+    const episodesMap = new Map([[ep.assetId, ep.analysis]]);
+
+    const before = evaluateAudiovisualQuality({ project, episodes: episodesMap });
+    expect(before.issues.some((i) => i.dimension === 'repetition')).toBe(true);
+
+    const repair = autoRepairAssembly(project, new Set(['r1', 'r2']), [ep], before);
+    expect(repair.repairsApplied.some((r) => /repetida/i.test(r))).toBe(true);
+
+    const afterProject = applyCommand(project, {
+      type: 'batch',
+      label: 'auto-repair',
+      commands: repair.commands as Command[],
+    }).project;
+    const after = evaluateAudiovisualQuality({ project: afterProject, episodes: episodesMap });
+    expect(after.issues.some((i) => i.dimension === 'repetition')).toBe(false);
+  });
 });

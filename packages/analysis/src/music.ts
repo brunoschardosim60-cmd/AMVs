@@ -282,17 +282,21 @@ export function detectVariableTempo(beats: number[]): boolean {
   }
   if (intervals.length < 6) return false;
   const winSize = Math.min(8, intervals.length);
+  let highVarWindows = 0;
+  let totalWindows = 0;
   for (let i = 0; i + winSize <= intervals.length; i++) {
     const slice = intervals.slice(i, i + winSize);
     const avg = mean(slice);
     if (avg <= 0) continue;
+    totalWindows++;
     const variance = mean(slice.map((v) => (v - avg) * (v - avg)));
-    if (Math.sqrt(variance) / avg > 0.06) return true;
+    if (Math.sqrt(variance) / avg > 0.085) highVarWindows++;
   }
+  if (totalWindows > 0 && highVarWindows >= Math.max(2, Math.ceil(totalWindows * 0.25))) return true;
   const mid = Math.floor(intervals.length / 2);
   const firstAvg = mean(intervals.slice(0, mid));
   const secondAvg = mean(intervals.slice(mid));
-  if (firstAvg > 0 && Math.abs(secondAvg - firstAvg) / firstAvg > 0.08) return true;
+  if (firstAvg > 0 && Math.abs(secondAvg - firstAvg) / firstAvg > 0.09) return true;
   return false;
 }
 

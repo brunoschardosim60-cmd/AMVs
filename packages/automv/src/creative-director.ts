@@ -200,11 +200,17 @@ export function buildEditorialStoryboard(input: {
 }): StoryboardBeat[] {
   const episodeById = new Map(input.episodes.map((episode) => [episode.assetId, episode]));
   const tracks = new Map(input.project.tracks.map((track) => [track.id, track]));
-  const videoClips = input.commands.flatMap((command) => {
-    if (command.type !== 'clip.add') return [];
-    const track = tracks.get(command.clip.trackId);
-    return track?.kind === 'video' && command.clip.assetId ? [command.clip] : [];
-  }).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+  const addedIds = new Set(input.commands.flatMap((command) => command.type === 'clip.add' ? [command.clip.id] : []));
+  const projectVideoClips = input.project.clips
+    .filter((clip) => addedIds.has(clip.id) && tracks.get(clip.trackId)?.kind === 'video' && clip.assetId)
+    .sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+  const videoClips = projectVideoClips.length
+    ? projectVideoClips
+    : input.commands.flatMap((command) => {
+        if (command.type !== 'clip.add') return [];
+        const track = tracks.get(command.clip.trackId);
+        return track?.kind === 'video' && command.clip.assetId ? [command.clip] : [];
+      }).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
   const direction = input.direction.length ? input.direction : [{
     role: 'development' as const,
     startS: 0,
@@ -384,14 +390,15 @@ export function reviewGeneratedAssembly(input: CreativeDirectorInput): CreativeR
   }
 
   const storyboard = buildEditorialStoryboard({
-    project: preview,
-    commands: input.commands,
+    project: workingPreview,
+    commands: finalCommands,
     brief: input.brief,
     direction: input.direction,
     episodes: input.episodes,
   });
-  const finalVideoClips = generatedClips.filter((clip) => preview.tracks.some((track) => track.id === clip.trackId && track.kind === 'video'));
-  const finalTextClips = generatedClips.filter((clip) => preview.tracks.some((track) => track.id === clip.trackId && track.kind === 'text'));
+  const survivingGeneratedClips = workingPreview.clips.filter((clip) => generatedIds.has(clip.id));
+  const finalVideoClips = survivingGeneratedClips.filter((clip) => workingPreview.tracks.some((track) => track.id === clip.trackId && track.kind === 'video'));
+  const finalTextClips = survivingGeneratedClips.filter((clip) => workingPreview.tracks.some((track) => track.id === clip.trackId && track.kind === 'text'));
   const alignment = buildBriefAlignment({
     brief: input.brief,
     summary: input.summary,
@@ -405,7 +412,7 @@ export function reviewGeneratedAssembly(input: CreativeDirectorInput): CreativeR
     quality: finalQuality,
     alignment,
     repairsApplied,
-    generatedClipCount: generatedClips.length,
+    generatedClipCount: survivingGeneratedClips.length,
     generatedVideoClipCount: finalVideoClips.length,
   };
 }

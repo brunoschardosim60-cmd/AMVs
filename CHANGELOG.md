@@ -1,5 +1,15 @@
 # Novidades
 
+## 0.6.32
+
+**Revisão profunda do auto-reparo (troca automática de cenas repetidas, segurança de limites na mesclagem de micro-cortes, storyboard pós-reparo) e prévia de tipografia lado a lado com Letra + Fala.**
+
+- **Auto-reparo de repetições (`autoRepairAssembly`):** além de suavizar saltos de luminosidade e mesclar micro-cortes `< 180 ms`, agora substitui automaticamente cenas repetidas por planos inéditos do mesmo episódio; a mesclagem de micro-cortes também valida contiguidade e limites do plano original (`shot.endS`) para nunca invadir a cena seguinte, e o storyboard/resumo reflete o estado real pós-reparo.
+- **Anti-repetição mais preciso no gerador:** subdivisão de planos longos (`>= 4,4 s`) nos estilos dinâmicos preservando planos longos inteiros em `Emocional`, e busca automática de janela de tempo livre em `srcIn` quando um trecho já foi usado.
+- **Diferenciação visual garantida em todas as combinações + prévia lado a lado:** no gerador, o seletor de tipografia e a prévia ao vivo **Como fica na tela** agora aparecem lado a lado (exibindo também uma linha de amostra da **Fala** quando letra e fala estão ativas juntas), e escolher `Discreto (base da tela)` para a letra faz a fala usar estilo contrastado (`anime-impact`).
+- **Menos falsos positivos em andamento variável:** `detectVariableTempo` agora exige variação consistente em múltiplas janelas antes de sinalizar andamento variável em músicas de BPM fixo.
+- **CI Windows mais estável:** concorrência de testes limitada a 2 pacotes paralelos para evitar contenção de CPU nos testes de FFmpeg.
+
 ## 0.6.31
 
 **Auto-reparo pós-geração, anti-repetição de cenas, tradução em lote com cache em disco, diferenciação visual entre letra e fala, andamento variável/compasso e instalador em pasta única.**
