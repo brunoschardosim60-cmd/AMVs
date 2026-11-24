@@ -2,6 +2,7 @@ import type { ShotVision } from '@amv/analysis';
 import { shotKey } from '@amv/analysis';
 import { applyCommand, clipEndUs, sourceTimeAt, type Clip, type Command, type Project } from '@amv/project';
 import { evaluateAudiovisualQuality, type QualityIssue, type QualityReport } from './quality.js';
+import { autoRepairAssembly } from './auto-repair.js';
 import type { EpisodeInput, GenerateOptions, GenerateResult, MusicInput } from './generate.js';
 import { narrativeRoleLabel, type NarrativeBeat, type NarrativeRole } from './narrative.js';
 import { STYLE_EDITORIAL_GOALS, type StyleId } from './styles.js';
@@ -246,34 +247,6 @@ function issuePenalty(report: QualityReport): number {
   return report.issues.reduce((total, item) => total + (item.severity === 'high' ? 10 : item.severity === 'medium' ? 4 : 1), 0);
 }
 
-function safeGeneratedClipRepairs(report: QualityReport, generatedIds: ReadonlySet<string>): { commands: Command[]; labels: string[] } {
-  const durationUpdates = new Map<string, number>();
-  const labels = new Set<string>();
-  for (const item of report.issues) {
-    if (!item.fix || !item.clipIds.length || !item.clipIds.every((id) => generatedIds.has(id))) continue;
-    // Allowlist deliberada: hoje só encurtamos a legenda gerada anterior para remover sobreposição.
-    // Novos tipos de correção exigem validação própria antes de entrarem neste loop.
-    for (const command of item.fix.commands) {
-      if (command.type !== 'clip.update' || !generatedIds.has(command.clipId)) continue;
-      const patchKeys = Object.keys(command.patch);
-      if (patchKeys.length !== 1 || patchKeys[0] !== 'durationUs') continue;
-      const durationUs = command.patch.durationUs;
-      if (typeof durationUs !== 'number' || !Number.isFinite(durationUs) || durationUs < 1_000) continue;
-      const prior = durationUpdates.get(command.clipId);
-      durationUpdates.set(command.clipId, prior === undefined ? durationUs : Math.min(prior, durationUs));
-      labels.add(item.fix.label);
-    }
-  }
-  return {
-    commands: [...durationUpdates].map(([clipId, durationUs]) => ({
-      type: 'clip.update',
-      clipId,
-      patch: { durationUs },
-    })),
-    labels: [...labels],
-  };
-}
-
 function buildBriefAlignment(input: {
   brief: CreativeBrief;
   summary: GenerateResult['summary'];
@@ -376,27 +349,37 @@ export function reviewGeneratedAssembly(input: CreativeDirectorInput): CreativeR
     music: new Map([[input.music.assetId, input.music.analysis]]),
   };
   const initialQuality = evaluateAudiovisualQuality({ project: scopedProject, ...qualityInputs });
-  const safeFixes = safeGeneratedClipRepairs(initialQuality, generatedIds);
+  let workingPreview = preview;
   let finalCommands = [...input.commands];
   let finalQuality = initialQuality;
-  let repairsApplied: string[] = [];
+  const repairsApplied: string[] = [];
 
-  if (safeFixes.commands.length) {
+  // Executa até 2 passadas de autocorreção (saltos de luminosidade, micro-cortes e sobreposição de legendas),
+  // aceitando cada passada apenas quando reduz a penalidade objetiva de qualidade.
+  for (let pass = 0; pass < 2; pass++) {
+    const autoFixes = autoRepairAssembly(workingPreview, generatedIds, input.episodes, finalQuality);
+    if (!autoFixes.commands.length) break;
     try {
-      const repaired = applyCommand(preview, {
+      const repaired = applyCommand(workingPreview, {
         type: 'batch',
-        label: 'Correções seguras da revisão automática',
-        commands: safeFixes.commands,
+        label: `Correções automáticas da revisão (passada ${pass + 1})`,
+        commands: autoFixes.commands,
       }).project;
       const repairedScope = { ...repaired, clips: repaired.clips.filter((clip) => generatedIds.has(clip.id)) };
       const repairedQuality = evaluateAudiovisualQuality({ project: repairedScope, ...qualityInputs });
-      if (issuePenalty(repairedQuality) < issuePenalty(initialQuality)) {
-        finalCommands = [...input.commands, ...safeFixes.commands];
+      if (issuePenalty(repairedQuality) < issuePenalty(finalQuality)) {
+        workingPreview = repaired;
+        finalCommands = [...finalCommands, ...autoFixes.commands];
         finalQuality = repairedQuality;
-        repairsApplied = safeFixes.labels;
+        for (const label of autoFixes.repairsApplied) {
+          if (!repairsApplied.includes(label)) repairsApplied.push(label);
+        }
+      } else {
+        break;
       }
     } catch {
       // A falha de uma correção opcional nunca deve bloquear ou descartar a montagem original.
+      break;
     }
   }
 

@@ -1,5 +1,17 @@
 # Novidades
 
+## 0.6.31
+
+**Auto-reparo pós-geração, anti-repetição de cenas, tradução em lote com cache em disco, diferenciação visual entre letra e fala, andamento variável/compasso e instalador em pasta única.**
+
+- **Auto-reparo automático na revisão (`autoRepairAssembly`):** a revisão pós-geração executa até 2 passadas automáticas para suavizar saltos de luminosidade (`±0,65 EV`), mesclar micro-cortes abaixo de 180 ms quando há margem na fonte e eliminar sobreposições de legendas, reportando o que foi corrigido automaticamente.
+- **Anti-repetição e cor preservada em lutas:** planos longos (`>= 4 s`) são subdivididos em trechos não sobrepostos, intervalos usados são rastreados para não repetir o mesmo recorte, cenas muito escuras são evitadas nas pontas e lutas/estilos de impacto mantêm cores vivas (sem vinheta escura indevida).
+- **Diferenciação visual entre letra da música e legenda de fala:** quando ambos aparecem no mesmo AMV, a legenda da fala recebe estilo, fonte, cor e posição vertical distintos da letra da música.
+- **Tradução rápida em lote + cache persistente:** `translateLinesFree` agrupa até 14 linhas em 4 requisições paralelas, pula trechos já em português e persiste traduções em disco (`translate-cache.json`) para reuso instantâneo.
+- **Sincronia musical e de letras aprimorada:** detecção de andamento variável (`tempoVariable`) com rastreador de batidas relaxado e compassos `3/4`, `4/4` e `6/8` em `@amv/analysis`; novo botão **Auto-sync** no painel de Legendas para alinhar deslocamento global às batidas detectadas.
+- **Pasta única no Windows (NSIS `currentUser`):** instalador consolidado em `%LOCALAPPDATA%\AMV Studio` (removido MSI duplicado), sobrescrevendo a mesma pasta a cada atualização.
+- **Documentação consolidada e SAM2 marcado como experimental:** remoção de roadmaps duplicados, arquivamento dos benchmarks de SAM2 em `docs/archive/`, atualização de `docs/STATUS.md` e `docs/LIMITATIONS.md`, e criação do checklist `docs/TESTE_MANUAL_WINDOWS.md`.
+
 ## 0.6.30
 
 **Edição direta na Timeline, falas em narração por cima dos cortes de ação (`voiceover`) e prévia visual ao vivo da tipografia.**

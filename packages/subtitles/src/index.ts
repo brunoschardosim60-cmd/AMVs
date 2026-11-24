@@ -828,3 +828,52 @@ export function restoreOriginals(clips: Clip[]): Command[] {
       },
     }));
 }
+
+/**
+ * Estima o deslocamento global ótimo (dentro de `±maxShiftS`) que aproxima os inícios
+ * das legendas das batidas musicais da timeline, útil quando uma letra .LRC/.SRT chega
+ * uniformemente adiantada ou atrasada em relação à música.
+ */
+export function autoSyncSubtitlesToBeats(
+  project: Project,
+  clipIds: string[],
+  beatsS: number[],
+  maxShiftS = 0.5,
+): { shiftUs: number; commands: Command[] } {
+  const validBeats = beatsS.filter((b) => Number.isFinite(b) && b >= 0).sort((a, b) => a - b);
+  const targets = project.clips.filter((c) => clipIds.includes(c.id) && c.text);
+  if (!validBeats.length || !targets.length) return { shiftUs: 0, commands: [] };
+
+  const nearestDist = (t: number): number => {
+    let lo = 0;
+    let hi = validBeats.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (validBeats[mid]! < t) lo = mid + 1;
+      else hi = mid;
+    }
+    let best = Math.abs(validBeats[lo]! - t);
+    if (lo > 0) best = Math.min(best, Math.abs(validBeats[lo - 1]! - t));
+    return best;
+  };
+
+  let bestShiftS = 0;
+  let bestScore = Infinity;
+  const stepS = 0.02;
+  for (let shiftS = -maxShiftS; shiftS <= maxShiftS + 1e-9; shiftS += stepS) {
+    let score = 0;
+    for (const c of targets) {
+      const shiftedS = Math.max(0, c.timelineStartUs / S + shiftS);
+      score += nearestDist(shiftedS);
+    }
+    // Leve preferência por deslocamentos menores em caso de empate
+    score += Math.abs(shiftS) * 0.05;
+    if (score < bestScore) {
+      bestScore = score;
+      bestShiftS = shiftS;
+    }
+  }
+  const shiftUs = Math.round(bestShiftS * S);
+  if (Math.abs(shiftUs) < 15_000) return { shiftUs: 0, commands: [] };
+  return { shiftUs, commands: shiftSubtitles(project, clipIds, shiftUs) };
+}

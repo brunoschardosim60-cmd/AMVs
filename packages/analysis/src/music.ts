@@ -5,7 +5,7 @@
  */
 import { mean, movingAverage, normalize, percentile, rmsFrames, stft, toDb } from './dsp.js';
 
-export const MUSIC_ANALYSIS_VERSION = 'm5';
+export const MUSIC_ANALYSIS_VERSION = 'm6';
 
 export type SectionLabel = 'intro' | 'verso' | 'pré-refrão' | 'refrão' | 'drop' | 'ponte' | 'final';
 export type MusicEventType = 'onset' | 'impact' | 'growth' | 'pause' | 'drop' | 'section-change' | 'rhythm-change';
@@ -51,6 +51,10 @@ export interface MusicAnalysis {
   intensity: number;
   /** Volume médio aproximado (dBFS RMS). */
   loudnessDb: number;
+  /** True quando o andamento varia significativamente ao longo da faixa (aceleração/desaceleração). */
+  tempoVariable?: boolean;
+  /** Compasso estimado pelas acentuações das batidas (3/4, 4/4 ou 6/8). */
+  meter?: 3 | 4 | 6;
 }
 
 /** Ajusta a grade detectada sem alterar a análise de energia e seções. */
@@ -268,30 +272,76 @@ export function trackBeats(o: OnsetEnvelope, bpm: number, tightness = 100): numb
   return beats;
 }
 
-/** Compassos 4/4: escolhe a fase (0–3) cujas batidas têm mais ataque/grave. */
-export function downbeatsFrom(beats: number[], o: OnsetEnvelope): number[] {
-  if (beats.length < 8) return beats.filter((_, i) => i % 4 === 0);
+/** Detecta se o andamento varia significativamente (aceleração/desaceleração) nas janelas de batidas. */
+export function detectVariableTempo(beats: number[]): boolean {
+  if (beats.length < 8) return false;
+  const intervals: number[] = [];
+  for (let i = 1; i < beats.length; i++) {
+    const dt = beats[i]! - beats[i - 1]!;
+    if (Number.isFinite(dt) && dt > 0.15 && dt < 2) intervals.push(dt);
+  }
+  if (intervals.length < 6) return false;
+  const winSize = Math.min(8, intervals.length);
+  for (let i = 0; i + winSize <= intervals.length; i++) {
+    const slice = intervals.slice(i, i + winSize);
+    const avg = mean(slice);
+    if (avg <= 0) continue;
+    const variance = mean(slice.map((v) => (v - avg) * (v - avg)));
+    if (Math.sqrt(variance) / avg > 0.06) return true;
+  }
+  const mid = Math.floor(intervals.length / 2);
+  const firstAvg = mean(intervals.slice(0, mid));
+  const secondAvg = mean(intervals.slice(mid));
+  if (firstAvg > 0 && Math.abs(secondAvg - firstAvg) / firstAvg > 0.08) return true;
+  return false;
+}
+
+/** Estima o compasso (3/4, 4/4 ou 6/8) e os tempos fortes a partir da energia de ataque nas batidas. */
+export function detectMeterAndDownbeats(beats: number[], o: OnsetEnvelope): { meter: 3 | 4 | 6; downbeats: number[] } {
+  if (beats.length < 8) return { meter: 4, downbeats: beats.filter((_, i) => i % 4 === 0) };
   const strength = beats.map((t) => {
     const i = Math.round((t - o.offsetS) * o.rate);
     let s = 0;
     for (let k = -2; k <= 2; k++) s += o.env[i + k] ?? 0;
     return s;
   });
+  const globalMean = mean(strength) || 1;
+  let bestMeter: 3 | 4 | 6 = 4;
   let bestPhase = 0;
-  let best = -1;
-  for (let ph = 0; ph < 4; ph++) {
-    let s = 0;
-    let c = 0;
-    for (let i = ph; i < beats.length; i += 4) {
-      s += strength[i]!;
-      c++;
+  let bestScore = -Infinity;
+  const meters: (3 | 4 | 6)[] = [4, 3, 6];
+  for (const meter of meters) {
+    if (beats.length < meter * 3) continue;
+    let phaseBest = 0;
+    let phaseMax = -Infinity;
+    for (let ph = 0; ph < meter; ph++) {
+      let s = 0;
+      let c = 0;
+      for (let i = ph; i < beats.length; i += meter) {
+        s += strength[i]!;
+        c++;
+      }
+      const avg = c ? s / c : 0;
+      if (avg > phaseMax) {
+        phaseMax = avg;
+        phaseBest = ph;
+      }
     }
-    if (c && s / c > best) {
-      best = s / c;
-      bestPhase = ph;
+    const contrast = (phaseMax - globalMean) / globalMean;
+    const prior = meter === 4 ? 0.08 : meter === 3 ? 0 : -0.04;
+    const score = contrast + prior;
+    if (score > bestScore) {
+      bestScore = score;
+      bestMeter = meter;
+      bestPhase = phaseBest;
     }
   }
-  return beats.filter((_, i) => i % 4 === bestPhase);
+  return { meter: bestMeter, downbeats: beats.filter((_, i) => i % bestMeter === bestPhase) };
+}
+
+/** Compassos (3/4, 4/4 ou 6/8): escolhe a fase cujas batidas têm mais ataque/grave. */
+export function downbeatsFrom(beats: number[], o: OnsetEnvelope): number[] {
+  return detectMeterAndDownbeats(beats, o).downbeats;
 }
 
 /** Energia (RMS em dB normalizada 0..1) a cada `stepS`. */
@@ -518,8 +568,24 @@ export function analyzeMusic(samples: Float32Array, sampleRate: number): MusicAn
   // leva para a faixa usual de edição (70–180)
   while (bpm < 70) bpm *= 2;
   while (bpm > 180) bpm /= 2;
-  const beats = trackBeats(o, bpm);
-  const downbeats = downbeatsFrom(beats, o);
+  let beats = trackBeats(o, bpm);
+  // Verifica se o andamento muda entre metades da faixa; se sim, relaxa a rigidez do rastreador
+  // para acompanhar acelerações/desacelerações reais dos ataques.
+  const half = Math.floor(o.env.length / 2);
+  let tempoVariable = detectVariableTempo(beats);
+  if (!tempoVariable && half > o.rate * 6) {
+    const firstBpm = estimateTempo({ ...o, env: o.env.subarray(0, half) }).bpm;
+    const secondBpm = estimateTempo({ ...o, env: o.env.subarray(half) }).bpm;
+    const ratio = Math.max(firstBpm, secondBpm) / Math.max(1, Math.min(firstBpm, secondBpm));
+    if (ratio > 1.08 && ratio < 1.85) {
+      tempoVariable = true;
+    }
+  }
+  if (tempoVariable) {
+    beats = trackBeats(o, bpm, 28);
+    tempoVariable = detectVariableTempo(beats) || tempoVariable;
+  }
+  const { meter, downbeats } = detectMeterAndDownbeats(beats, o);
   const stepS = 0.25;
   const { energy, loudnessDb } = energyCurve(samples, sampleRate, stepS);
   const { sections, drops } = findSections(downbeats, energy, stepS, durationS, beats);
@@ -546,5 +612,7 @@ export function analyzeMusic(samples: Float32Array, sampleRate: number): MusicAn
     })),
     intensity,
     loudnessDb: Math.round(loudnessDb * 10) / 10,
+    tempoVariable,
+    meter,
   };
 }

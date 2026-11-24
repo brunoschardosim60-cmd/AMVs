@@ -1,6 +1,6 @@
 import { decodeSubtitleBytes, parseSubtitles, pickAudioStreamByLanguage, toSrt } from '@amv/analysis';
 import { clipEndUs, type Clip } from '@amv/project';
-import { alignUntimedLyrics, alignUntimedLyricsWithFallback, applyTranslation, cuesForClip, editSubtitleTextManually, langLabel, LOOKS, lookText, originalText, placeCues, promoteAlignedCuesForTypography, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
+import { alignUntimedLyrics, alignUntimedLyricsWithFallback, applyTranslation, autoSyncSubtitlesToBeats, cuesForClip, editSubtitleTextManually, langLabel, LOOKS, lookText, originalText, placeCues, promoteAlignedCuesForTypography, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
 import { AlertTriangle, Download, FileText, Film, Languages, Mic, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ProjectSession } from '../../core/session';
@@ -463,6 +463,27 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   const translatedCount = target.filter((c) => c.text?.original !== undefined).length;
 
   const shift = (ms: number) => session.history.transaction(`Ajustar tempo ${ms > 0 ? '+' : ''}${ms} ms`, shiftSubtitles(project, target.map((c) => c.id), ms * 1000));
+  const autoSyncToBeats = () => {
+    const musicAnalysis = lyricsClip?.assetId ? session.assetRuntime(lyricsClip.assetId).music : undefined;
+    if (!lyricsClip || !musicAnalysis?.beats.length) {
+      toast({ tone: 'info', title: 'Sem batidas detectadas', body: 'Adicione e analise uma música na timeline para auto-sincronizar as legendas.' });
+      return;
+    }
+    const clipStartS = lyricsClip.timelineStartUs / 1e6;
+    const sourceInS = lyricsClip.sourceInUs / 1e6;
+    const speed = lyricsClip.speed || 1;
+    const timelineBeats = musicAnalysis.beats
+      .map((b) => clipStartS + (b - sourceInS) / speed)
+      .filter((t) => t >= 0);
+    const res = autoSyncSubtitlesToBeats(project, target.map((c) => c.id), timelineBeats, 0.5);
+    if (!res.commands.length) {
+      toast({ tone: 'ok', title: 'Legendas já alinhadas', body: 'As legendas já estão próximas das batidas musicais.' });
+      return;
+    }
+    const ms = Math.round(res.shiftUs / 1000);
+    session.history.transaction(`Auto-sincronizar legendas (${ms > 0 ? '+' : ''}${ms} ms)`, res.commands);
+    toast({ tone: 'ok', title: `Sincronizado (${ms > 0 ? '+' : ''}${ms} ms)`, body: 'Deslocamento global ajustado às batidas da música.' });
+  };
   const restyle = (l: SubtitleLook) => {
     setLook(l);
     if (target.length) session.history.transaction('Estilo das legendas', restyleSubtitles(project, target.map((c) => c.id), l));
@@ -705,6 +726,14 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
                 {Math.abs(ms) / 1000}s
               </button>
             ))}
+            <button
+              type="button"
+              className="rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-accent hover:bg-accent/20"
+              onClick={autoSyncToBeats}
+              title="Alinha o deslocamento global das legendas às batidas detectadas da música"
+            >
+              Auto-sync
+            </button>
           </div>
         )}
       </div>

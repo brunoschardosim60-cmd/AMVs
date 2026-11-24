@@ -159,4 +159,44 @@ describe('análise de música', () => {
     expect(a.durationS).toBeCloseTo(5);
     expect(Number.isFinite(a.bpm)).toBe(true);
   });
+
+  it('detecta andamento variável (100→140 BPM) acompanhando as batidas reais', () => {
+    const durS = 24;
+    const samples = new Float32Array(SR * durS);
+    const expectedBeats: number[] = [];
+    let t = 0.2;
+    while (t < durS - 0.3) {
+      expectedBeats.push(t);
+      const frac = t / durS;
+      const curBpm = 100 + 40 * frac;
+      const start = Math.round(t * SR);
+      for (let k = 0; k < Math.round(0.05 * SR) && start + k < samples.length; k++) {
+        const env = Math.exp(-k / (0.012 * SR));
+        samples[start + k] = (samples[start + k] ?? 0) + 0.8 * env * Math.sin((2 * Math.PI * 110 * k) / SR);
+      }
+      t += 60 / curBpm;
+    }
+    const a = analyzeMusic(samples, SR);
+    expect(a.tempoVariable).toBe(true);
+    const errors = expectedBeats.slice(2, -2).map((bt) => Math.min(...a.beats.map((b) => Math.abs(b - bt))));
+    const meanErr = errors.reduce((acc, e) => acc + e, 0) / errors.length;
+    expect(meanErr).toBeLessThan(0.045);
+  });
+
+  it('detecta compasso 3/4 em valsa sintética acentuada a cada 3 batidas', () => {
+    const durS = 18;
+    const bpm = 120;
+    const period = 60 / bpm;
+    const samples = new Float32Array(SR * durS);
+    for (let idx = 0; idx * period < durS - 0.2; idx++) {
+      const start = Math.round((idx * period + 0.1) * SR);
+      const accent = idx % 3 === 0 ? 1.0 : 0.28;
+      for (let k = 0; k < Math.round(0.05 * SR) && start + k < samples.length; k++) {
+        const env = Math.exp(-k / (0.012 * SR));
+        samples[start + k] = (samples[start + k] ?? 0) + accent * env * Math.sin((2 * Math.PI * 120 * k) / SR);
+      }
+    }
+    const a = analyzeMusic(samples, SR);
+    expect(a.meter).toBe(3);
+  });
 });

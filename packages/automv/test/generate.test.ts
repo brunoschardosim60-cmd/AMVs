@@ -1211,4 +1211,79 @@ describe('integração das melhorias do patch', () => {
     expect(captions).toHaveLength(3);
     expect(captions.every((c) => c.text?.timingPrecision === 'word' && (c.text.wordTimings?.length ?? 0) >= 3 && c.text.wordAnimation === 'pop')).toBe(true);
   });
+
+  it('diferencia visualmente letra da música e legenda de fala quando ambas aparecem no mesmo AMV', () => {
+    const ep = episode('ep1', 120, 3);
+    ep.analysis.speech = [
+      { startS: 10, endS: 12, kind: 'fala', confidence: 0.92, text: 'Eu não vou perder aqui', language: 'por', impact: 0.95 },
+    ];
+    const p = project();
+    const r = generateAmv(p, music(), [ep], {
+      ...base,
+      durationS: 20,
+      musicStartS: 26, // drop em 40s (14s no vídeo)
+      useSpeech: true,
+      voiceMoments: 1,
+      showText: true,
+      lyricStyle: 'anime-impact',
+      lyrics: [
+        { startS: 28, endS: 30, text: 'Rise up into the fire' },
+        { startS: 41, endS: 43, text: 'Never back down now' },
+      ],
+    });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const textTrack = out.tracks.find((t) => t.kind === 'text')!;
+    const textClips = out.clips.filter((c) => c.trackId === textTrack.id);
+    const speechClip = textClips.find((c) => /legenda da fala/i.test(c.reason ?? ''));
+    const lyricClip = textClips.find((c) => /letra da música|palavra da letra/i.test(c.reason ?? ''));
+    expect(speechClip).toBeDefined();
+    expect(lyricClip).toBeDefined();
+    // Fala e letra devem ter posição vertical, fonte e estilo de fundo distintos
+    expect(speechClip!.transform.y).not.toBe(lyricClip!.transform.y);
+    expect(speechClip!.text?.font).not.toBe(lyricClip!.text?.font);
+    expect(speechClip!.text?.background).toBe('box');
+    expect(lyricClip!.text?.background).toBe('none');
+  });
+
+  it('subdivide planos longos para evitar repetir exatamente o mesmo recorte', () => {
+    const ep: EpisodeInput = {
+      assetId: 'ep1',
+      name: 'ep1.mp4',
+      hasAudio: true,
+      analysis: {
+        version: 'e4',
+        durationS: 40,
+        shots: [
+          { startS: 0, endS: 12, intensity: 0.85, motion: 0.8, loud: 0.7, peakS: 6, brightness: 0.55, line: null, tags: ['ação', 'impacto'] },
+          { startS: 12, endS: 24, intensity: 0.82, motion: 0.8, loud: 0.7, peakS: 18, brightness: 0.58, line: null, tags: ['ação', 'impacto'] },
+          { startS: 24, endS: 36, intensity: 0.88, motion: 0.85, loud: 0.75, peakS: 30, brightness: 0.52, line: null, tags: ['ação', 'impacto'] },
+        ],
+        speech: [],
+        subtitles: [],
+        intensityCurve: [],
+        curveStepS: 0.5,
+        sequences: [{ id: 's1', kind: 'luta', startS: 0, endS: 36, intensity: 0.85, peak: 0.9, shotCount: 3 }],
+      },
+    };
+    const p = project();
+    const r = generateAmv(p, music(), [ep], {
+      ...base,
+      durationS: 12,
+      musicStartS: 36,
+      useSpeech: false,
+      showText: false,
+    });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const v1 = out.clips.filter((c) => c.trackId === out.tracks.find((t) => t.name === 'V1')!.id);
+    const distinctStarts = new Set(v1.map((c) => Math.round(c.sourceInUs / 500_000)));
+    expect(v1.length).toBeGreaterThanOrEqual(4);
+    expect(distinctStarts.size).toBeGreaterThanOrEqual(4);
+  });
+
+  it('emite aviso quando a música tem andamento variável', () => {
+    const m = music();
+    m.analysis.tempoVariable = true;
+    const r = generateAmv(project(), m, [episode('ep1', 120, 3)], { ...base, durationS: 10 });
+    expect(r.warnings.some((w) => /andamento variável/i.test(w))).toBe(true);
+  });
 });

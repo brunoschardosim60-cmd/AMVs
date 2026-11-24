@@ -207,7 +207,22 @@ async function fetchGtxText(
   return tryTranslateUrl(fetch, fallbackUrl, parseClients5Translation, signal);
 }
 
-/** Tradução gratuita e sem chave via endpoint público translate.googleapis.com. */
+const FREE_CACHE = new Map<string, string>();
+const SEP = '\n';
+const PT_HINT = /\b(que|não|nao|você|voce|uma|para|com|isso|está|esta|então|vou|meu|minha|mais|mas|como|ele|ela|nós|eu|é)\b|[ãõçáéíóúâêô]/i;
+const EN_HINT = /\b(the|you|and|what|are|is|my|your|this|that|with|not|can|will|i'm|don't|it's)\b/i;
+
+/** Texto que já parece português (e não tem cara de inglês) não precisa ser traduzido de novo. */
+function looksPortuguese(text: string): boolean {
+  return PT_HINT.test(text) && !EN_HINT.test(text);
+}
+
+/** Limpa o cache em memória (testes). */
+export function clearFreeTranslationCache(): void {
+  FREE_CACHE.clear();
+}
+
+/** Tradução gratuita e sem chave via endpoint público translate.googleapis.com — em poucos lotes paralelos, com cache. */
 export async function translateLinesFree(
   fetch: FetchLike,
   lines: string[],
@@ -217,54 +232,87 @@ export async function translateLinesFree(
   const targetCode = normalizeTargetLangCode(opts.target);
   const sourceCode = opts.source ? normalizeTargetLangCode(opts.source) : 'auto';
   const out: (string | null)[] = lines.map(() => null);
-  let failed = 0;
-  let done = 0;
+  const cacheKey = (text: string) => `${sourceCode}|${targetCode}|${text}`;
+  const cleaned = lines.map((line) => line.replace(/\s*\n\s*/g, ' ').trim());
+  // únicos que realmente precisam de rede
+  const pending = new Map<string, number[]>();
+  cleaned.forEach((text, idx) => {
+    if (!text) {
+      out[idx] = '';
+      return;
+    }
+    if (!/[\p{L}]/u.test(text)) {
+      out[idx] = lines[idx]!;
+      return;
+    }
+    if (targetCode === 'pt' && looksPortuguese(text)) {
+      out[idx] = lines[idx]!.trim();
+      return;
+    }
+    const cached = FREE_CACHE.get(cacheKey(text));
+    if (cached !== undefined) {
+      out[idx] = cached;
+      return;
+    }
+    const list = pending.get(text) ?? [];
+    list.push(idx);
+    pending.set(text, list);
+  });
 
-  // Tenta agrupar linhas simples (sem quebra de linha interna) em lotes rápidos;
-  // se o endpoint mesclar linhas, refaz em paralelo controlado linha a linha.
-  const MAX_BATCH = Math.max(1, Math.min(12, opts.batchSize ?? 10));
-  for (let i = 0; i < lines.length; i += MAX_BATCH) {
+  const unique = [...pending.keys()];
+  let done = lines.length - [...pending.values()].reduce((acc, list) => acc + list.length, 0);
+  opts.onProgress?.(done, lines.length);
+  const MAX_CHARS = 1500;
+  const batches: string[][] = [];
+  let current: string[] = [];
+  let size = 0;
+  for (const text of unique) {
+    if (current.length && (size + text.length + SEP.length > MAX_CHARS || current.length >= 14)) {
+      batches.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(text);
+    size += text.length + SEP.length;
+  }
+  if (current.length) batches.push(current);
+
+  const settle = (text: string, value: string | null) => {
+    const idxs = pending.get(text)!;
+    if (value && value.trim()) {
+      FREE_CACHE.set(cacheKey(text), value.trim());
+      for (const idx of idxs) out[idx] = value.trim();
+    }
+    done += idxs.length;
+    opts.onProgress?.(Math.min(done, lines.length), lines.length);
+  };
+
+  const runBatch = async (batch: string[]) => {
     if (opts.signal?.aborted) throw Object.assign(new Error('cancelado'), { name: 'AbortError' });
-    const slice = lines.slice(i, i + MAX_BATCH);
-    const cleaned = slice.map((line) => line.replace(/\s*\n\s*/g, ' ').trim());
-    const joined = cleaned.join('\n');
     let resolved: (string | null)[] | null = null;
-    if (slice.length > 1 && slice.every((line) => line.trim() && !line.includes('\n')) && joined.length <= 1600) {
-      const bulk = await fetchGtxText(fetch, joined, sourceCode, targetCode, opts.signal);
+    if (batch.length > 1) {
+      const bulk = await fetchGtxText(fetch, batch.join(SEP), sourceCode, targetCode, opts.signal);
       if (bulk) {
-        const split = bulk.split(/\r?\n/).map((item) => item.trim());
-        if (split.length === slice.length && split.every((item) => item.length > 0)) {
-          resolved = split;
-        }
+        const parts = bulk.split(/\r?\n/).map((item) => item.trim()).filter((item) => item.length > 0);
+        if (parts.length === batch.length) resolved = parts;
       }
     }
     if (!resolved) {
-      const CONCURRENCY = 6;
-      resolved = new Array<string | null>(slice.length).fill(null);
-      for (let j = 0; j < slice.length; j += CONCURRENCY) {
-        if (opts.signal?.aborted) throw Object.assign(new Error('cancelado'), { name: 'AbortError' });
-        const chunk = slice.slice(j, j + CONCURRENCY);
-        const translatedChunk = await Promise.all(
-          chunk.map((line) => fetchGtxText(fetch, line, sourceCode, targetCode, opts.signal)),
-        );
-        translatedChunk.forEach((value, offset) => {
-          resolved![j + offset] = value;
-        });
-      }
+      resolved = await Promise.all(batch.map((text) => fetchGtxText(fetch, text, sourceCode, targetCode, opts.signal)));
     }
-    resolved.forEach((value, offset) => {
-      const original = slice[offset] ?? '';
-      if (value !== null && (value.trim() || !original.trim())) {
-        out[i + offset] = value;
-      } else if (original.trim()) {
-        failed++;
-      } else {
-        out[i + offset] = '';
-      }
-    });
-    done += slice.length;
-    opts.onProgress?.(done, lines.length);
+    batch.forEach((text, k) => settle(text, resolved![k] ?? null));
+  };
+
+  const PARALLEL = 4;
+  for (let i = 0; i < batches.length; i += PARALLEL) {
+    if (opts.signal?.aborted) throw Object.assign(new Error('cancelado'), { name: 'AbortError' });
+    await Promise.all(batches.slice(i, i + PARALLEL).map(runBatch));
   }
+
+  let failed = 0;
+  out.forEach((value, idx) => {
+    if (value === null && cleaned[idx]) failed++;
+  });
   return { translations: out, failed, usage: { input: 0, output: 0 } };
 }
 

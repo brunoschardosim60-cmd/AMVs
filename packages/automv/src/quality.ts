@@ -208,8 +208,21 @@ export function evaluateAudiovisualQuality(input: QualityInputs): QualityReport 
       const currentAnalysis = input.episodes.get(current.assetId!);
       const priorShot = shotFor(priorAnalysis, previous);
       const currentShot = shotFor(currentAnalysis, current);
-      if (priorShot && currentShot && Math.abs(priorShot.brightness - currentShot.brightness) >= 0.32) {
-        issues.push(issue('visual', current.timelineStartUs, clipEndUs(current), 'medium', 'salto de luminosidade', [`Brilho médio das cenas: ${priorShot.brightness.toFixed(2)} → ${currentShot.brightness.toFixed(2)} (escala 0–1)`], 'A análise por cena encontrou uma diferença de luminância grande na transição.', 'Ajuste exposição/realces/sombras no clipe ou escolha um ponto de corte que preserve melhor a continuidade.', [previous.id, current.id]));
+      const effectiveBrightness = (raw: number, clip: Clip): number => {
+        let delta = 0;
+        for (const fx of clip.effects) {
+          if (fx.effect !== 'color') continue;
+          if (typeof fx.params.exposure === 'number' && Number.isFinite(fx.params.exposure)) delta += fx.params.exposure * 0.35;
+          if (typeof fx.params.brightness === 'number' && Number.isFinite(fx.params.brightness)) delta += fx.params.brightness;
+        }
+        return Math.max(0, Math.min(1, raw + delta));
+      };
+      if (priorShot && currentShot) {
+        const prevB = effectiveBrightness(priorShot.brightness, previous);
+        const currB = effectiveBrightness(currentShot.brightness, current);
+        if (Math.abs(prevB - currB) >= 0.32) {
+          issues.push(issue('visual', current.timelineStartUs, clipEndUs(current), 'medium', 'salto de luminosidade', [`Brilho médio das cenas: ${prevB.toFixed(2)} → ${currB.toFixed(2)} (escala 0–1)`], 'A análise por cena encontrou uma diferença de luminância grande na transição.', 'Ajuste exposição/realces/sombras no clipe ou escolha um ponto de corte que preserve melhor a continuidade.', [previous.id, current.id]));
+        }
       }
 
       const claimSync = /batida|beat|acento|drop|sincroniz/i.test(current.reason ?? '');

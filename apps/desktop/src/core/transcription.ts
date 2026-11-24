@@ -240,25 +240,103 @@ export async function transcribeMediaAsset(
   }
 }
 
-/** Traduz textos usando o provedor configurado (se ativo) e sempre garante fallback gratuito sem chave. */
+const TRANSLATE_CACHE_MAX = 5000;
+let diskCacheLoaded = false;
+const diskTranslateCache = new Map<string, string>();
+
+async function ensureDiskTranslateCache(platform: Platform): Promise<void> {
+  if (diskCacheLoaded) return;
+  diskCacheLoaded = true;
+  try {
+    const file = joinPath(await platform.dataDir(), 'translate-cache.json');
+    if (!(await platform.fs.exists(file))) return;
+    const raw = JSON.parse(new TextDecoder().decode(await platform.fs.readFile(file))) as Record<string, unknown>;
+    if (raw && typeof raw === 'object') {
+      for (const [k, v] of Object.entries(raw)) {
+        if (typeof v === 'string' && v.trim()) diskTranslateCache.set(k, v);
+      }
+    }
+  } catch {
+    // cache corrompido ou inacessível é ignorado silenciosamente
+  }
+}
+
+async function persistDiskTranslateCache(platform: Platform): Promise<void> {
+  try {
+    const dir = await platform.dataDir();
+    await platform.fs.mkdir(dir);
+    while (diskTranslateCache.size > TRANSLATE_CACHE_MAX) {
+      const oldest = diskTranslateCache.keys().next().value;
+      if (oldest === undefined) break;
+      diskTranslateCache.delete(oldest);
+    }
+    const obj = Object.fromEntries(diskTranslateCache.entries());
+    await platform.fs.writeFile(
+      joinPath(dir, 'translate-cache.json'),
+      new TextEncoder().encode(JSON.stringify(obj)),
+    );
+  } catch {
+    // falha ao gravar cache não deve interromper a tradução
+  }
+}
+
+/** Traduz textos usando o provedor configurado (se ativo), cache persistente local e fallback gratuito sem chave. */
 export async function translateTextsAuto(
   platform: Platform,
   lines: string[],
   targetLanguage: string,
   options: { sourceLanguage?: string | null; batchSize?: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {},
 ): Promise<TranslateResult & { usedFallback: boolean }> {
+  if (!lines.length) return { translations: [], failed: 0, usage: { input: 0, output: 0 }, usedFallback: false };
+  await ensureDiskTranslateCache(platform);
+  const langKey = targetLanguage.trim().toLowerCase();
+  const out: (string | null)[] = lines.map(() => null);
+  const missingIndices: number[] = [];
+  const missingLines: string[] = [];
+  lines.forEach((line, idx) => {
+    const cleaned = line.replace(/\s*\n\s*/g, ' ').trim();
+    if (!cleaned) {
+      out[idx] = '';
+      return;
+    }
+    const cached = diskTranslateCache.get(`${langKey}|${cleaned}`);
+    if (cached !== undefined) {
+      out[idx] = cached;
+      return;
+    }
+    missingIndices.push(idx);
+    missingLines.push(line);
+  });
+  if (!missingLines.length) {
+    options.onProgress?.(lines.length, lines.length);
+    return { translations: out, failed: 0, usage: { input: 0, output: 0 }, usedFallback: false };
+  }
   const settings = await loadAiSettings(platform);
   const canUseConfigured = settings.enabled && (isLocal(settings) || settings.allowExternal);
   const key = canUseConfigured && settings.provider.needsKey
     ? await platform.secrets.get(secretName(settings.presetId))
     : null;
   const cfg = canUseConfigured && (!settings.provider.needsKey || !!key) ? settings.provider : null;
-  const result = await translateLinesWithFallback(cfg, key, platform.http, lines, {
+  const cachedCount = lines.length - missingLines.length;
+  const result = await translateLinesWithFallback(cfg, key, platform.http, missingLines, {
     target: targetLanguage,
     source: options.sourceLanguage,
-    batchSize: options.batchSize ?? 16,
+    batchSize: options.batchSize ?? 14,
     signal: options.signal,
-    onProgress: options.onProgress,
+    onProgress: options.onProgress
+      ? (done) => options.onProgress?.(Math.min(lines.length, cachedCount + done), lines.length)
+      : undefined,
   });
-  return { ...result, usedFallback: !cfg };
+  let dirty = false;
+  missingIndices.forEach((origIdx, k) => {
+    const val = result.translations[k] ?? null;
+    out[origIdx] = val;
+    const cleaned = missingLines[k]!.replace(/\s*\n\s*/g, ' ').trim();
+    if (val && val.trim() && cleaned) {
+      diskTranslateCache.set(`${langKey}|${cleaned}`, val.trim());
+      dirty = true;
+    }
+  });
+  if (dirty) void persistDiskTranslateCache(platform);
+  return { translations: out, failed: result.failed, usage: result.usage, usedFallback: !cfg };
 }

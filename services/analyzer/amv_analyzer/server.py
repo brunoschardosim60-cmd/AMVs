@@ -108,8 +108,13 @@ def module_status() -> dict[str, dict[str, object]]:
                 missing.append(f"checkpoint {checkpoint.name}")
         out[name] = {
             "available": not missing,
+            "experimental": name == "segmentation",
             "requires": ", ".join(required),
-            "reason": None if not missing else f"pacotes não instalados: {', '.join(missing)}",
+            "reason": None if not missing else (
+                f"protótipo experimental (fora do instalador) · pacotes não instalados: {', '.join(missing)}"
+                if name == "segmentation"
+                else f"pacotes não instalados: {', '.join(missing)}"
+            ),
         }
     return out
 
