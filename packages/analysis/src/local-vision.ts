@@ -54,6 +54,11 @@ export interface LocalVisualFeatures {
   entropy: number;
   edgeDensity: number;
   centerOfVisualMass: [number, number];
+  /** Foco estimado do personagem/rosto de anime (suprimindo hardsubs na base e clarões nas bordas). */
+  subjectFocus?: [number, number];
+  subjectFocusConfidence?: number;
+  /** Trajetória inicial → final do foco do personagem ao longo do plano (para auto-reframe dinâmico). */
+  focusTrajectory?: [[number, number], [number, number]];
   temporalMotion: number;
   globalShift: [number, number];
   globalMotion: number;
@@ -101,6 +106,8 @@ function describeFrame(frame: RgbFrame): {
   entropy: number;
   edgeDensity: number;
   center: [number, number];
+  subjectFocus: [number, number];
+  subjectFocusConfidence: number;
 } {
   if (!Number.isInteger(frame.width) || !Number.isInteger(frame.height) || frame.width < 2 || frame.height < 2
     || frame.data.length !== frame.width * frame.height * 3) {
@@ -180,15 +187,47 @@ function describeFrame(frame: RgbFrame): {
   let massX = 0;
   let massY = 0;
   let massWeight = 0;
+  let subjX = 0;
+  let subjY = 0;
+  let subjWeight = 0;
+  let subjPeak = 0;
   for (let y = 0; y < frame.height; y += step * 2) {
+    const ny = y / Math.max(1, frame.height - 1);
     for (let x = 0; x < frame.width; x += step * 2) {
-      const weight = Math.abs(luminance(frame, Math.min(frame.width - 1, x + 1), y) - luminance(frame, Math.max(0, x - 1), y))
-        + Math.abs(luminance(frame, x, Math.min(frame.height - 1, y + 1)) - luminance(frame, x, Math.max(0, y - 1))) + 0.001;
-      massX += (x / Math.max(1, frame.width - 1)) * weight;
-      massY += (y / Math.max(1, frame.height - 1)) * weight;
+      const nx = x / Math.max(1, frame.width - 1);
+      const edgeMag = Math.abs(luminance(frame, Math.min(frame.width - 1, x + 1), y) - luminance(frame, Math.max(0, x - 1), y))
+        + Math.abs(luminance(frame, x, Math.min(frame.height - 1, y + 1)) - luminance(frame, x, Math.max(0, y - 1)));
+      const weight = edgeMag + 0.001;
+      massX += nx * weight;
+      massY += ny * weight;
       massWeight += weight;
+
+      // Foco de personagem/rosto de anime:
+      // - Ignora os 16% inferiores (onde legendas gravadas / hardsubs aparecem) e cantos extremos
+      if (ny >= 0.06 && ny <= 0.84 && nx >= 0.05 && nx <= 0.95) {
+        const offset = (y * frame.width + x) * 3;
+        const r = frame.data[offset]! / 255;
+        const g = frame.data[offset + 1]! / 255;
+        const b = frame.data[offset + 2]! / 255;
+        const gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        const sat = Math.max(r, g, b) - Math.min(r, g, b);
+        // Penaliza clarões brancos estourados (explosões/flashes) que puxariam o corte para a borda
+        const notBlownFlash = gray > 0.93 && sat < 0.1 ? 0.15 : 1;
+        // Bônus para tons de pele de anime e contornos de olhos/cabelo no terço superior-central
+        const animeSkinTone = r > 0.35 && r > g * 1.04 && g >= b * 0.82 && sat >= 0.08 && sat <= 0.58 && gray < 0.92 ? 1.85 : 1;
+        const centerPrior = (1 - 0.5 * Math.pow((nx - 0.5) * 1.8, 2)) * (1 - 0.45 * Math.pow((ny - 0.38) * 1.9, 2));
+        const sw = (edgeMag * 1.4 + sat * 0.35) * animeSkinTone * notBlownFlash * Math.max(0.2, centerPrior);
+        subjX += nx * sw;
+        subjY += ny * sw;
+        subjWeight += sw;
+        if (sw > subjPeak) subjPeak = sw;
+      }
     }
   }
+  const focusCenter: [number, number] = subjWeight > 0.01
+    ? [subjX / subjWeight, subjY / subjWeight]
+    : [massWeight ? massX / massWeight : 0.5, massWeight ? massY / massWeight : 0.5];
+  const focusConfidence = clamp01(subjPeak * 0.85);
   return {
     luma,
     edges,
@@ -199,6 +238,8 @@ function describeFrame(frame: RgbFrame): {
     entropy: clamp01(entropy),
     edgeDensity: edgeSum / Math.max(1, edgeSamples),
     center: [massWeight ? massX / massWeight : 0.5, massWeight ? massY / massWeight : 0.5],
+    subjectFocus: focusCenter,
+    subjectFocusConfidence: focusConfidence,
   };
 }
 
@@ -500,6 +541,14 @@ export function analyzeLocalVisualFrames(
         average(descriptions.map((item) => item.center[0])),
         average(descriptions.map((item) => item.center[1])),
       ],
+      subjectFocus: [
+        average(descriptions.map((item) => item.subjectFocus[0])),
+        average(descriptions.map((item) => item.subjectFocus[1])),
+      ],
+      subjectFocusConfidence: average(descriptions.map((item) => item.subjectFocusConfidence)),
+      ...(descriptions.length >= 2
+        ? { focusTrajectory: [descriptions[0]!.subjectFocus, descriptions.at(-1)!.subjectFocus] as [[number, number], [number, number]] }
+        : {}),
       temporalMotion: clamp01(temporalMotion / transitions),
       globalShift: [shiftX / transitions, shiftY / transitions],
       globalMotion: clamp01(globalMotion / transitions),

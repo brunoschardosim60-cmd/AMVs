@@ -99,4 +99,32 @@ describe('subtitle preview/export parity', () => {
     expect(clampTimelineHeight(500, 600)).toBe(320);
     expect(clampTimelineHeight(500, 300)).toBe(96);
   });
+  it('renders pro typography effects (3D extrude, RGB split, outer outline, hero word, sheen) and marks sheen/RGB as animated', () => {
+    const project = createProject({ name: 'ProText' });
+    const clip = subtitleClip(project, 'text', 0, 2e6, 'Nunca vou recuar', 'anime-impact');
+    expect(clip.text?.font).toBe('Anton');
+    expect(clip.text?.heroWord).toBe(true);
+    expect(clip.text?.extrudeDepth).toBeGreaterThan(0);
+    expect(textIsAnimated(clip)).toBe(true);
+    const fontsUsed: string[] = [];
+    const strokes: string[] = [];
+    const ctx = {
+      canvas: { width: 1920, height: 1080 },
+      font: '',
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      globalAlpha: 1,
+      save() {},
+      restore() {},
+      translate() {},
+      rotate() {},
+      measureText: (text: string) => ({ width: text.length * 14 }),
+      fillText() { fontsUsed.push(this.font); },
+      strokeText() { strokes.push(String(this.strokeStyle)); },
+    };
+    drawTextLayer(ctx as unknown as CanvasRenderingContext2D, clip, 1920, 1080, 1, evalClipLook(clip, 0.1, 2), 0.1);
+    expect(fontsUsed.some((f) => f.includes('Anton'))).toBe(true);
+    expect(strokes).toContain('#ff3355');
+  });
 });

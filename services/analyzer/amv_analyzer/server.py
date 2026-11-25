@@ -19,6 +19,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from . import __version__
+from .cutout import cutout_engine_status, extract_and_cutout_frame
 from .segmentation import SegmentationCancelled, checkpoint_path, propagate_character
 from .speech import MODEL_SIZES, TranscriptionCancelled, transcribe
 
@@ -55,6 +56,17 @@ class SegmentationRequest(BaseModel):
     seed_frame: int = Field(ge=0)
     points: list[SegmentationPoint] = Field(min_length=1, max_length=32)
     cache_key: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class CutoutFrameRequest(BaseModel):
+    path: str = Field(min_length=1)
+    ffmpeg_path: str = Field(min_length=1)
+    output_dir: str = Field(min_length=1)
+    time_s: float = Field(ge=0)
+    focus_x: float = Field(default=0.5, ge=0, le=1)
+    focus_y: float = Field(default=0.46, ge=0, le=1)
+    stroke_px: int = Field(default=4, ge=0, le=20)
+    stroke_color: str = Field(default="#ffffff", min_length=4, max_length=9)
 
 
 class SegmentationJob:
@@ -276,6 +288,30 @@ def create_app(token: str) -> FastAPI:
             raise HTTPException(status_code=404, detail="job de isolamento não encontrado")
         job.cancelled.set()
         return {"status": "cancelling"}
+
+    @app.get("/cutout/status", dependencies=[Depends(auth)])
+    def get_cutout_status() -> dict[str, Any]:
+        return cutout_engine_status()
+
+    @app.post("/cutout/frame", dependencies=[Depends(auth)])
+    def run_cutout_frame(request: CutoutFrameRequest) -> dict[str, Any]:
+        if not Path(request.path).is_file():
+            raise HTTPException(status_code=404, detail="arquivo de vídeo não encontrado")
+        if not Path(request.ffmpeg_path).is_file():
+            raise HTTPException(status_code=404, detail="FFmpeg empacotado não encontrado")
+        try:
+            return extract_and_cutout_frame(
+                media_path=request.path,
+                ffmpeg_path=request.ffmpeg_path,
+                output_dir=request.output_dir,
+                time_s=request.time_s,
+                focus_x=request.focus_x,
+                focus_y=request.focus_y,
+                stroke_px=request.stroke_px,
+                stroke_color=request.stroke_color,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"falha no recorte do personagem: {exc}") from exc
 
     return app
 

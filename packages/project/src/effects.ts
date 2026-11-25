@@ -9,7 +9,7 @@
 import type { Clip } from './schema.js';
 
 export type EffectId = 'zoom' | 'shake' | 'flash' | 'fade_in' | 'fade_out' | 'blur' | 'color' | 'rgb_split' | 'vignette';
-export type TransitionId = 'dissolve' | 'dip_black' | 'dip_white' | 'flash' | 'whip_pan' | 'match_cut' | 'cut_on_action';
+export type TransitionId = 'dissolve' | 'dip_black' | 'dip_white' | 'flash' | 'whip_pan' | 'zoom_through' | 'match_cut' | 'cut_on_action';
 export type TransitionCurve = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out';
 
 export interface ParamDef {
@@ -312,6 +312,7 @@ export const TRANSITIONS: { id: TransitionId; label: string; description: string
   { id: 'dip_white', label: 'Passar pelo branco', description: 'As duas cenas passam pelo branco.' },
   { id: 'flash', label: 'Flash', description: 'Clarão breve com pico configurável no corte.' },
   { id: 'whip_pan', label: 'Whip pan', description: 'Deslocamento direcional rápido entre as cenas.' },
+  { id: 'zoom_through', label: 'Zoom through', description: 'Zoom acelerado contínuo entre as cenas.' },
   { id: 'match_cut', label: 'Match cut', description: 'Corte seco entre composição, cor ou escala compatíveis.' },
   { id: 'cut_on_action', label: 'Corte em ação', description: 'Corte seco que continua uma ação ou movimento.' },
 ];
@@ -389,6 +390,7 @@ export function clipRamps(clip: Pick<Clip, 'effects' | 'transitionIn'>, durS: nu
       : 'linear';
     const intensity = Math.max(0, Math.min(1, typeof tr.params.intensity === 'number' ? tr.params.intensity : 1));
     if (tr.transition === 'dissolve') out.push({ target: 'alpha', white: false, startS: 0, durS: d, from: 0, to: 1, curve, intensity });
+    else if (tr.transition === 'zoom_through') out.push({ target: 'alpha', white: false, startS: 0, durS: d, from: 0, to: 1, curve: 'ease-out', intensity });
     else if (tr.transition === 'dip_black' || tr.transition === 'dip_white') {
       const white = tr.transition === 'dip_white';
       out.push({ target: 'alpha', white, startS: 0, durS: d, from: 0, to: 1, curve });
@@ -431,6 +433,25 @@ export function applyWhipPan(
   const x = outgoing ? direction * distance * progress : -direction * distance * (1 - progress);
   const blur = Math.max(0, Math.min(32, typeof transition.params.blur === 'number' ? transition.params.blur : 8));
   return { ...look, dx: look.dx + x, blur: look.blur + blur };
+}
+
+export function applyZoomThrough(
+  look: ClipLook,
+  transition: Clip['transitionIn'],
+  phaseS: number,
+  outgoing: boolean,
+): ClipLook {
+  if (!transition || transition.transition !== 'zoom_through' || transition.durationUs <= 0) return look;
+  const durationS = transition.durationUs / 1e6;
+  const progress = transitionProgress(phaseS / durationS, 'ease-in-out');
+  const intensity = typeof transition.params.intensity === 'number'
+    ? Math.max(0.15, Math.min(1, transition.params.intensity))
+    : 0.55;
+  const factor = outgoing
+    ? 1 + intensity * 0.75 * progress * progress
+    : 1 + intensity * 0.6 * (1 - progress) * (1 - progress);
+  const blur = outgoing ? 6 * intensity * progress : 5 * intensity * (1 - progress);
+  return { ...look, zoom: look.zoom * factor, blur: look.blur + blur };
 }
 
 export interface ClipLook {
@@ -496,6 +517,11 @@ export function evalClipLook(clip: Pick<Clip, 'effects' | 'transitionIn' | 'tran
         const o = shakeOffset(localS, param(fx, 'intensity'), param(fx, 'frequency'), param(fx, 'duration'));
         look.dx += o.dx;
         look.dy += o.dy;
+        // Margem de overscan automática durante a tremida para nunca expor borda preta
+        if (o.dx !== 0 || o.dy !== 0) {
+          const disp = Math.hypot(Math.abs(o.dx), Math.abs(o.dy));
+          look.zoom = Math.max(look.zoom, 1 + Math.min(0.14, disp / 380));
+        }
         break;
       }
       case 'blur':

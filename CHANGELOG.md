@@ -1,5 +1,15 @@
 # Novidades
 
+## 0.7.0
+
+**AMV Studio Pro: fontes reais embutidas, tipografia 3D / Hero Word / RGB Split / Sheen, auto-reframe de anime + Zoom-Through + Velocity suave, isolamento vocal + eco no drop, recorte de personagem em V2 com letra passando atrás e interface enxuta.**
+
+- **Tipografia Pro com Fontes Reais Embutidas:** embutidas no app `Anton`, `Bebas Neue`, `Cinzel Variable` e `Montserrat Variable` (paridade total entre Preview e Exportação), com **Hero Word** (duas fontes/escala/inclinação na palavra-chave), **Extrusão 3D**, **Duplo Contorno**, **RGB Split**, **Reflexo Sheen** e **Motion Blur** nas entradas rápidas.
+- **Cortes, Auto-Reframe de Anime, Transição Zoom-Through e Velocity Suave:** foco automático em personagem/rosto de anime (`subjectFocus` + `focusTrajectory`) evitando hardsubs na base e explosões nas bordas com pan suave em 9:16; reserva automática de abertura/encerramento (OP/ED) em episódios longos; nova transição `zoom_through`; margem automática de overscan contra borda preta em `shake`; e interpolação suave `minterpolate` em trechos de slow-motion.
+- **Voz Limpa nas Falas + Sincronia Percussiva/Vocal:** isolamento central de voz (`voiceIsolation`) e cauda de eco dramática antes do drop (`echoTail`) nas falas dos personagens; ponderação percussiva (bumbo/caixa vs sustentação harmônica) no detector de batidas; e pré-filtragem vocal antes do alinhamento de letras no Whisper.
+- **Recorte de Personagem Real + Texto Atrás do Personagem (`behindCutout`):** motor de recorte `/cutout/frame` (ONNX DirectML GPU no Windows + fallback instantâneo zero-dependência em Python e Canvas), botão de 1 clique **Recortar personagem (V2 + letra atrás)** no Inspector, novas máscaras `subject-focus` e `manga-slash`, e opção **Destacar personagem no drop (letra atrás)** no gerador automático.
+- **Limpeza de Textos na Interface e Documentação:** remoção de blocos prolixos, avisos duplicados e parágrafos longos no diálogo pós-geração, Inspector e Legendas, além do arquivamento de relatórios históricos em `docs/archive/`.
+
 ## 0.6.32
 
 **Revisão profunda do auto-reparo (troca automática de cenas repetidas, segurança de limites na mesclagem de micro-cortes, storyboard pós-reparo) e prévia de tipografia lado a lado com Letra + Fala.**

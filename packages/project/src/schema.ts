@@ -109,7 +109,7 @@ export const TransformSchema = z.object({
 });
 
 export const BlendModeSchema = z.enum(['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'addition']);
-export const LayerMaskSchema = z.enum(['none', 'circle', 'left', 'right', 'top', 'bottom']);
+export const LayerMaskSchema = z.enum(['none', 'circle', 'left', 'right', 'top', 'bottom', 'subject-focus', 'manga-slash']);
 
 export const ClipAudioSchema = z.object({
   gainDb: z.number().default(0),
@@ -121,6 +121,10 @@ export const ClipAudioSchema = z.object({
   streamIndex: z.number().int().nullable().default(null),
   /** Manual: keyframes do clipe substituem o ducking automático da mixagem. */
   duckingMode: z.enum(['auto', 'manual']).optional(),
+  /** Realça a voz central e reduz música/ruído de fundo do episódio. */
+  voiceIsolation: z.boolean().optional(),
+  /** Adiciona cauda reverberante dramática no final da fala (ideal antes do drop). */
+  echoTail: z.boolean().optional(),
 });
 
 export const EffectInstanceSchema = z.object({
@@ -186,6 +190,18 @@ export const TextContentSchema = z.object({
   weight: z.number().int().min(100).max(900).default(700),
   outlineColor: z.string().nullable().default(null),
   outlineWidth: z.number().nonnegative().default(0),
+  outerOutlineColor: z.string().nullable().default(null),
+  outerOutlineWidth: z.number().nonnegative().default(0),
+  extrudeDepth: z.number().min(0).max(24).default(0),
+  extrudeColor: z.string().default('#08080c'),
+  chromaticAberration: z.number().min(0).max(20).default(0),
+  sheen: z.boolean().default(false),
+  heroWord: z.boolean().default(false),
+  heroFont: z.string().nullable().default(null),
+  heroScale: z.number().min(1).max(2).default(1.26),
+  heroColor: z.string().nullable().default(null),
+  heroTiltDeg: z.number().min(-15).max(15).default(0),
+  behindCutout: z.boolean().default(false),
   shadow: z.boolean().default(false),
   animationIn: z.enum(['fade', 'pop', 'slide', 'slide-left', 'slide-right', 'blur', 'typewriter']).nullable().default(null),
   animationOut: z.enum(['fade', 'slide', 'pop', 'blur']).nullable().default(null),

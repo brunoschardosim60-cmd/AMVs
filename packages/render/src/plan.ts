@@ -55,6 +55,7 @@ export function planWindows(project: Project, fps: Rational = project.settings.f
   const durationUs = projectDurationUs(project);
   const totalFrames = frameAt(durationUs, fps);
   const tracks = visualTracksBottomUp(project);
+  const bottomVideoTrackId = tracks.find((t) => t.kind === 'video')?.id;
   const trackIds = new Set(tracks.map((t) => t.id));
   const clips = project.clips.filter((c) => trackIds.has(c.trackId));
 
@@ -108,6 +109,17 @@ export function planWindows(project: Project, fps: Rational = project.settings.f
         transition: active.transitionIn,
         transitionStartUs: active.timelineStartUs,
       });
+    }
+    // Depth Text (behindCutout): quando há camada de vídeo de sobreposição/recorte acima de V1 (ex.: V2),
+    // move o texto marcado com `behindCutout` para trás dessa sobreposição (V1 -> Texto -> V2).
+    const firstOverlayVideoIdx = layers.findIndex((l) => l.track.kind === 'video' && l.track.id !== bottomVideoTrackId);
+    if (firstOverlayVideoIdx >= 0 && layers.some((l) => l.clip.text?.behindCutout)) {
+      const behindText = layers.filter((l) => l.clip.text?.behindCutout);
+      const rest = layers.filter((l) => !l.clip.text?.behindCutout);
+      const insertAt = rest.findIndex((l) => l.track.kind === 'video' && l.track.id !== bottomVideoTrackId);
+      if (insertAt >= 0) rest.splice(insertAt, 0, ...behindText);
+      else rest.push(...behindText);
+      layers.splice(0, layers.length, ...rest);
     }
     windows.push({ index: windows.length, startFrame: a, frames: b - a, startUs, durUs: usAtFrame(b, fps) - startUs, layers });
   }

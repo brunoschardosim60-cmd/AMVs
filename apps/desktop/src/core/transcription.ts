@@ -165,11 +165,14 @@ export async function transcribeMediaAsset(
       if (await platform.fs.exists(partialPath)) await platform.fs.remove(partialPath);
       options.onProgress?.({ stage: 'extracting', progress: 0, duration });
       let progressOutput = '';
+      const vocalFilterArgs = !vadFilter
+        ? ['-af', 'pan=mono|c0=0.5*c0+0.5*c1,highpass=f=135,lowpass=f=6800,acompressor=threshold=-18dB:ratio=3:attack=5:release=50']
+        : [];
       const extracted = await platform.runner.run(
         'ffmpeg',
         [
           '-y', '-hide_banner', '-v', 'error', '-i', asset.path, '-map', `0:${audioIndex}`,
-          '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-progress', 'pipe:1', '-nostats', '-f', 'wav', partialPath,
+          '-vn', ...vocalFilterArgs, '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-progress', 'pipe:1', '-nostats', '-f', 'wav', partialPath,
         ],
         {
           signal: options.signal,

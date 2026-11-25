@@ -3,6 +3,7 @@ import { Eye, EyeOff, Languages, Pause, Pencil, Play, Plus, RotateCcw, SkipForwa
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { applyTranslation, editSubtitleTextManually, langLabel, LOOKS, originalText, restyleSubtitles, selectSubtitleTextVariant } from '@amv/subtitles';
 import type { ProjectSession } from '../../core/session';
+import { createCharacterCutoutOnV2 } from '../../core/cutout';
 import { translateTextsAuto } from '../../core/transcription';
 import type { Platform } from '../../platform/types';
 import { useApp } from '../../store';
@@ -14,21 +15,17 @@ import { TEXT_ANIMATIONS_IN, TEXT_ANIMATIONS_OUT } from './textLayer';
 import { wordPreviewEnded, type WordPreviewRange } from './wordPreview';
 
 export const LOCAL_FONT_FAMILIES = [
+  'Anton',
+  'Bebas Neue',
+  'Cinzel Variable',
+  'Montserrat Variable',
   'Manrope Variable',
-  'Arial',
+  'Impact',
   'Arial Black',
   'Bahnschrift',
-  'Calibri',
-  'Cambria',
-  'Cinzel',
-  'Consolas',
   'Georgia',
-  'Impact',
   'Segoe UI',
-  'Tahoma',
-  'Times New Roman',
   'Trebuchet MS',
-  'Verdana',
 ];
 
 export type FramingPresetId = 'normal' | 'highlight' | 'close' | 'cinemascope' | 'manga' | 'punch' | 'zoom';
@@ -403,7 +400,25 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
           </select>
         </label>
       )}
-      <p className="mt-1 text-2xs text-muted">O preview aplica ganho acima de 0 dB com compressão de pico. A seleção de faixa de áudio ainda só vale na exportação; o preview usa a faixa incluída no proxy.</p>
+      <label className="flex items-center justify-between py-1 text-xs">
+        <span className="text-muted">Limpar fundo da voz</span>
+        <input
+          type="checkbox"
+          className="accent-violet"
+          checked={clip.audio.voiceIsolation ?? false}
+          onChange={(e) => patch('Isolar voz', { audio: { ...clip.audio, voiceIsolation: e.target.checked } })}
+        />
+      </label>
+      <label className="flex items-center justify-between py-1 text-xs">
+        <span className="text-muted">Eco dramático no final</span>
+        <input
+          type="checkbox"
+          className="accent-violet"
+          checked={clip.audio.echoTail ?? false}
+          onChange={(e) => patch('Eco no final', { audio: { ...clip.audio, echoTail: e.target.checked } })}
+        />
+      </label>
+      <p className="mt-1 text-2xs text-faint">Seleção de idioma/isolamento e eco são processados na exportação.</p>
     </Section>
   ) : null;
 
@@ -447,14 +462,31 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
             }}
           />
           {!track.locked && (
-            <button
-              type="button"
-              onClick={openFullClipEditor}
-              className="flex h-7 w-full items-center justify-center gap-1.5 rounded-control border border-violet/40 bg-violet/10 px-2 text-xs font-medium text-ink-soft hover:bg-violet/20 hover:text-ink"
-            >
-              <Pencil size={12} />
-              Trocar cena / Ampliar editor
-            </button>
+            <div className="grid grid-cols-1 gap-1.5">
+              <button
+                type="button"
+                onClick={openFullClipEditor}
+                className="flex h-7 w-full items-center justify-center gap-1.5 rounded-control border border-violet/40 bg-violet/10 px-2 text-xs font-medium text-ink-soft hover:bg-violet/20 hover:text-ink"
+              >
+                <Pencil size={12} />
+                Trocar cena / Ampliar editor
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const { platform: plat, toast: showToast } = useApp.getState();
+                  if (!plat) return;
+                  const ph = useEditor.getState().playheadUs;
+                  void createCharacterCutoutOnV2(plat, session, clip, ph)
+                    .then(({ engine }) => showToast({ tone: 'ok', title: 'Personagem recortado em V2', body: `Camada criada (${engine}) com letra passando atrás.` }))
+                    .catch((err) => showToast({ tone: 'error', title: 'Falha no recorte', body: err instanceof Error ? err.message : String(err) }));
+                }}
+                className="flex h-7 w-full items-center justify-center gap-1.5 rounded-control border border-azure/45 bg-azure/10 px-2 text-xs font-medium text-ink-soft hover:bg-azure/20 hover:text-ink"
+                title="Extrai o personagem deste quadro com contorno em V2 e coloca a letra/legenda atrás dele"
+              >
+                Recortar personagem (V2 + letra atrás)
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -655,10 +687,16 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
             <label className="grid grid-cols-[1fr_140px] items-center gap-2 py-1 text-xs">
               <span className="text-muted">Máscara</span>
               <select className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink" value={clip.mask} onChange={(event) => patch('Máscara', { mask: event.target.value as Clip['mask'] })}>
-                <option value="none">Nenhuma</option><option value="circle">Elipse</option><option value="left">Metade esquerda</option><option value="right">Metade direita</option><option value="top">Metade superior</option><option value="bottom">Metade inferior</option>
+                <option value="none">Nenhuma</option>
+                <option value="subject-focus">Foco no personagem</option>
+                <option value="manga-slash">Corte Mangá diagonal</option>
+                <option value="circle">Elipse</option>
+                <option value="left">Metade esquerda</option>
+                <option value="right">Metade direita</option>
+                <option value="top">Metade superior</option>
+                <option value="bottom">Metade inferior</option>
               </select>
             </label>
-            <p className="mt-1 mb-2 text-2xs text-muted">A máscara é aplicada ao recorte da camada; o modo de mesclagem também vale no render final.</p>
             <div className="mb-2 space-y-1">
               <span className="block text-2xs font-medium text-muted">Enquadramento &amp; recorte rápido</span>
               <div className="grid grid-cols-2 gap-1">
@@ -963,7 +1001,6 @@ function TextSection({ clip, patch, session }: { clip: Clip; patch: (label: stri
           {LOCAL_FONT_FAMILIES.map((fontName) => <option key={fontName} value={fontName} />)}
         </datalist>
       </label>
-      <p className="mb-1 text-2xs text-faint">Use fontes instaladas no Windows. Preview e exportação rasterizada usam a mesma fonte disponível neste computador.</p>
       <NumField label="Tamanho" suffix="px" value={t.size} min={8} max={400} step={2} digits={0} onCommit={(v) => set('Tamanho do texto', { size: v })} />
       <NumField label="Peso" value={t.weight ?? 700} min={100} max={900} step={100} digits={0} onCommit={(v) => set('Peso da fonte', { weight: Math.round(v / 100) * 100 })} />
       <label className="grid grid-cols-[1fr_96px] items-center gap-2 py-1 text-xs">
@@ -1023,6 +1060,20 @@ function TextSection({ clip, patch, session }: { clip: Clip; patch: (label: stri
       )}
       <label className="grid grid-cols-[1fr_96px] items-center gap-2 py-1 text-xs"><span className="text-muted">Cor do glow</span><input type="color" className="h-7 w-full rounded-control border border-line bg-base" value={t.glowColor} onChange={(e) => set('Cor do glow', { glowColor: e.target.value })} /></label>
       <NumField label="Intensidade do glow" suffix="px" value={t.glowIntensity} min={0} max={50} step={1} digits={0} onCommit={(v) => set('Intensidade do glow', { glowIntensity: v })} />
+      <NumField label="Extrusão 3D" suffix="px" value={t.extrudeDepth ?? 0} min={0} max={24} step={1} digits={0} onCommit={(v) => set('Extrusão 3D', { extrudeDepth: v })} />
+      <NumField label="RGB Split" suffix="px" value={t.chromaticAberration ?? 0} min={0} max={20} step={0.5} digits={1} onCommit={(v) => set('RGB Split no texto', { chromaticAberration: v })} />
+      <label className="flex items-center justify-between py-1 text-xs">
+        <span className="text-muted">Hero Word (destaque dupla fonte)</span>
+        <input type="checkbox" className="accent-violet" checked={t.heroWord ?? false} onChange={(e) => set('Hero Word', { heroWord: e.target.checked })} />
+      </label>
+      <label className="flex items-center justify-between py-1 text-xs">
+        <span className="text-muted">Reflexo Sheen</span>
+        <input type="checkbox" className="accent-violet" checked={t.sheen ?? false} onChange={(e) => set('Reflexo Sheen', { sheen: e.target.checked })} />
+      </label>
+      <label className="flex items-center justify-between py-1 text-xs">
+        <span className="text-muted">Atrás do personagem (V2)</span>
+        <input type="checkbox" className="accent-violet" checked={t.behindCutout ?? false} onChange={(e) => set('Atrás do personagem', { behindCutout: e.target.checked })} />
+      </label>
       <label className="grid grid-cols-[1fr_140px] items-center gap-2 py-1 text-xs">
         <span className="text-muted">Animação da palavra</span>
         <select className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink" value={t.wordAnimation} onChange={(e) => set('Animação da palavra ativa', { wordAnimation: e.target.value as NonNullable<typeof t.wordAnimation> })}>

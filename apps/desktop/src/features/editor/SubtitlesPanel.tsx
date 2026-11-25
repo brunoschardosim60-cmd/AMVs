@@ -739,8 +739,8 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
       </div>
 
       {clips.length === 0 ? (
-        <p className="p-3 text-xs leading-relaxed text-muted">
-          Nenhuma legenda ainda. <b>Importar</b> traz um .srt/.ass/.lrc; <b>Do episódio</b> encaixa as falas originais embaixo de cada cena. Também dá para criar uma com <b>T</b>.
+        <p className="p-3 text-xs text-muted">
+          Sem legendas. Use <b>Importar</b> (.srt/.ass/.lrc), <b>Do episódio</b> ou <b>T</b>.
         </p>
       ) : (
         <ul className="shrink-0 py-1">
@@ -826,10 +826,11 @@ function SubRow({ index, clip, selected, onPick, onText, onDelete }: { index: nu
 }
 
 const DISPLAY_FONT_BY_LOOK: Partial<Record<SubtitleLook, string>> = {
-  'anime-impact': 'Impact, "Arial Black", sans-serif',
-  'anime-manga': 'Impact, "Arial Black", sans-serif',
-  'anime-neon': '"Trebuchet MS", "Segoe UI", sans-serif',
-  'anime-gold-epic': 'Cinzel, Georgia, serif',
+  'anime-impact': '"Anton", Impact, sans-serif',
+  'anime-manga': '"Bebas Neue", Impact, sans-serif',
+  'anime-neon': '"Bebas Neue", "Segoe UI", sans-serif',
+  'anime-gold-epic': '"Cinzel Variable", Cinzel, Georgia, serif',
+  'lyrics-cinematic': '"Montserrat Variable", Manrope, sans-serif',
 };
 
 const GENERATOR_GLOW_BY_LOOK: Partial<Record<SubtitleLook, { glowColor: string; glowIntensity: number; highlightColor?: string; useGradient?: boolean }>> = {
@@ -860,7 +861,10 @@ export function TextLookSample({
   const useGradient = tuned?.useGradient ?? spec.fillStyle === 'linear-gradient';
   const outlineColor = spec.outlineColor ?? '#000000';
   const glowShadow = glowIntensity > 0 ? `, 0 0 ${Math.max(6, Math.round(glowIntensity * 1.1))}px ${glowColor}` : '';
-  const shadowStack = `0 2px 3px ${outlineColor}, -1px -1px 0 ${outlineColor}, 1px -1px 0 ${outlineColor}, -1px 1px 0 ${outlineColor}, 1px 1px 0 ${outlineColor}${glowShadow}`;
+  const extrudeShadow = (spec.extrudeDepth ?? 0) > 0 ? `, 2px 2px 0 ${spec.extrudeColor ?? '#000'}, 3px 3px 0 ${spec.extrudeColor ?? '#000'}` : '';
+  const rgbShadow = (spec.chromaticAberration ?? 0) > 0 && !compact ? `, -1.5px 0 0 rgba(0,240,255,0.75), 1.5px 0 0 rgba(255,31,90,0.75)` : '';
+  const outerShadow = spec.outerOutlineColor && (spec.outerOutlineWidth ?? 0) > 0 ? `, 0 0 2px ${spec.outerOutlineColor}` : '';
+  const shadowStack = `0 2px 3px ${outlineColor}, -1px -1px 0 ${outlineColor}, 1px -1px 0 ${outlineColor}, -1px 1px 0 ${outlineColor}, 1px 1px 0 ${outlineColor}${extrudeShadow}${outerShadow}${rgbShadow}${glowShadow}`;
   const tokens = spec.text.trim().split(/\s+/).filter(Boolean);
   const highlightIdx = tokens.length >= 2 ? tokens.length - 1 : -1;
   const resolvedSize = fontSizePx ?? (compact ? 11 : Math.min(24, Math.max(14, Math.round(spec.size * 0.22))));
@@ -880,12 +884,15 @@ export function TextLookSample({
       {tokens.map((word, idx) => {
         const isActive = !compact && idx === highlightIdx;
         if (isActive) {
+          const heroScale = spec.heroWord ? (spec.heroScale ?? 1.18) : 1.08;
+          const heroTilt = spec.heroWord && spec.heroTiltDeg ? ` rotate(${spec.heroTiltDeg}deg)` : '';
           return (
             <span
               key={`${word}-${idx}`}
               style={{
-                color: highlightColor,
-                transform: 'scale(1.08)',
+                fontFamily: spec.heroWord && spec.heroFont ? `"${spec.heroFont}", ${fontFamily}` : undefined,
+                color: (spec.heroWord && spec.heroColor) ? spec.heroColor : highlightColor,
+                transform: `scale(${Math.min(1.22, heroScale)})${heroTilt}`,
                 display: 'inline-block',
               }}
             >

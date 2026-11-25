@@ -1286,4 +1286,36 @@ describe('integração das melhorias do patch', () => {
     const r = generateAmv(project(), m, [episode('ep1', 120, 3)], { ...base, durationS: 10 });
     expect(r.warnings.some((w) => /andamento variável/i.test(w))).toBe(true);
   });
+
+  it('aplica isolamento vocal + eco pré-drop na fala e cria destaque V2 com letra atrás no drop', () => {
+    const ep = episode('ep1', 120, 3);
+    ep.analysis.speech = [
+      { startS: 10, endS: 12, kind: 'fala', confidence: 0.95, text: 'Agora tudo acaba aqui!', language: 'por', impact: 0.96 },
+    ];
+    const p = project();
+    const r = generateAmv(p, music(), [ep], {
+      ...base,
+      durationS: 20,
+      musicStartS: 26, // drop em 40s => 14s na timeline
+      useSpeech: true,
+      voiceMoments: 1,
+      showText: true,
+      useEffects: true,
+      depthCutoutOnDrop: true,
+      lyrics: [{ startS: 39.8, endS: 41.2, text: 'EXPLODE O LIMITE' }],
+    });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const voiceTrack = out.tracks.find((t) => t.name === 'Vozes')!;
+    const v2Track = out.tracks.find((t) => t.name === 'V2')!;
+    const textTrack = out.tracks.find((t) => t.kind === 'text')!;
+    const voiceClip = out.clips.find((c) => c.trackId === voiceTrack.id);
+    const v2Clips = out.clips.filter((c) => c.trackId === v2Track.id);
+    const behindLyric = out.clips.find((c) => c.trackId === textTrack.id && c.text?.behindCutout);
+
+    expect(voiceClip?.audio.voiceIsolation).toBe(true);
+    expect(voiceClip?.audio.echoTail).toBe(true);
+    expect(v2Clips.length).toBeGreaterThanOrEqual(1);
+    expect(v2Clips[0]!.mask).toBe('subject-focus');
+    expect(behindLyric).toBeDefined();
+  });
 });

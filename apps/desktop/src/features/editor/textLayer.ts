@@ -24,6 +24,8 @@ export function textIsAnimated(c: Clip): boolean {
   return !!(
     c.text?.animationIn ||
     c.text?.animationOut ||
+    c.text?.sheen ||
+    (c.text?.chromaticAberration ?? 0) > 0 ||
     c.text?.wordTimings.length ||
     (c.text?.syllableAnimation && c.text.wordTimings.some((word) => word.syllables.length)) ||
     c.keyframes['transform.scale']?.length ||
@@ -223,18 +225,22 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
     if (a === 'pop') {
       scale *= 0.6 + 0.4 * backOut(x);
       alpha *= Math.min(1, x * 2);
+      if (x < 0.45) blur = Math.max(blur, 4 * (1 - x / 0.45));
     }
     if (a === 'slide') {
       dy = 40 * (1 - x) * (1 - x);
       alpha *= x;
+      if (x < 0.5) blur = Math.max(blur, 5 * (1 - x / 0.5));
     }
     if (a === 'slide-left') {
       dx = -Math.min(160, projW * 0.2) * (1 - x) * (1 - x);
       alpha *= x;
+      if (x < 0.55) blur = Math.max(blur, 8 * (1 - x / 0.55));
     }
     if (a === 'slide-right') {
       dx = Math.min(160, projW * 0.2) * (1 - x) * (1 - x);
       alpha *= x;
+      if (x < 0.55) blur = Math.max(blur, 8 * (1 - x / 0.55));
     }
     if (a === 'blur') {
       blur = 14 * (1 - x);
@@ -319,6 +325,23 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
     return reliable && nowUs >= word.startUs && nowUs < word.endUs;
   });
   const y0 = -((lines.length - 1) * lh) / 2;
+  // Escolhe a palavra "Hero" (última palavra forte >= 3 letras, ou maior palavra da frase) quando heroWord=true
+  const allParts = lines.flatMap((l) => l.parts);
+  let heroTimingIdx = -1;
+  if (t.heroWord && allParts.length >= 2) {
+    for (let idx = allParts.length - 1; idx >= 0; idx--) {
+      const cleanLen = allParts[idx]!.word.replace(/[^\p{L}\p{N}]/gu, '').length;
+      if (cleanLen >= 3) {
+        heroTimingIdx = allParts[idx]!.timingIndex;
+        break;
+      }
+    }
+    if (heroTimingIdx < 0) heroTimingIdx = allParts[allParts.length - 1]!.timingIndex;
+  }
+  const sheenPhase = t.sheen && dur > 0 ? Math.max(0, Math.min(1, localS / dur)) : -1;
+  const punchDecay = localS < 0.22 ? 1 - (localS / 0.22) * 0.65 : 0.35;
+  const caShift = (t.chromaticAberration ?? 0) * punchDecay * k;
+
   lines.forEach((line, lineIndex) => {
     const y = y0 + lineIndex * lh;
     const lineStart = t.alignment === 'left' ? -maxWidth / 2 : t.alignment === 'right' ? maxWidth / 2 - line.width : -line.width / 2;
@@ -326,16 +349,49 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
     for (const part of line.parts) {
       const word = wordTimings[part.timingIndex];
       const active = part.timingIndex === activeWord;
+      const isHero = heroTimingIdx >= 0 && part.timingIndex === heroTimingIdx;
       const animation = t.wordAnimation ?? 'highlight';
       const wordProgress = word ? Math.max(0, Math.min(1, (nowUs - word.startUs) / Math.max(1, word.endUs - word.startUs))) : 1;
       const defaultWordScale = active && animation === 'highlight' ? t.highlightScale ?? 1.12 : active && animation === 'pop' ? 1 + 0.12 * backOut(wordProgress) : 1;
-      const wordScale = word?.scale ?? defaultWordScale;
+      const heroBoost = isHero ? (t.heroScale ?? 1.24) : 1;
+      const wordScale = (word?.scale ?? defaultWordScale) * heroBoost;
       const wordX = x + (word?.offsetX ?? 0) * k;
       const wordY = y + (word?.offsetY ?? 0) * k;
       const wordSize = size * wordScale;
+      const wordFont = isHero && t.heroFont ? t.heroFont : t.font;
       ctx.save();
-      ctx.font = `${word?.weight ?? t.weight ?? 700} ${wordSize}px "${t.font}", "Manrope Variable", system-ui, sans-serif`;
+      if (isHero && t.heroTiltDeg && ctx.translate && ctx.rotate) {
+        const cx = wordX + (part.width * heroBoost) / 2;
+        ctx.translate(cx, wordY);
+        ctx.rotate((t.heroTiltDeg * Math.PI) / 180);
+        ctx.translate(-cx, -wordY);
+      }
+      ctx.font = `${word?.weight ?? t.weight ?? 700} ${wordSize}px "${wordFont}", "Manrope Variable", system-ui, sans-serif`;
       if (active && animation === 'fade') ctx.globalAlpha *= Math.min(1, wordProgress * 3);
+
+      // 1. Extrusão 3D / sombra dura diagonal (estilo mangá / edit profissional)
+      const extrudeSteps = Math.min(16, Math.round((t.extrudeDepth ?? 0) * k));
+      if (extrudeSteps > 0) {
+        ctx.save();
+        ctx.fillStyle = t.extrudeColor ?? '#08080c';
+        ctx.strokeStyle = t.extrudeColor ?? '#08080c';
+        ctx.lineWidth = Math.max(1, (t.outlineWidth || 2) * 1.8 * k);
+        for (let step = extrudeSteps; step >= 1; step--) {
+          strokeSpaced(ctx, part.word, wordX + step * 0.85, wordY + step, spacing * wordScale);
+          drawSpaced(ctx, part.word, wordX + step * 0.85, wordY + step, spacing * wordScale);
+        }
+        ctx.restore();
+      }
+
+      // 2. Contorno externo duplo (filete neon / branco / dourado por fora da borda escura)
+      if (t.outerOutlineColor && (t.outerOutlineWidth ?? 0) > 0) {
+        ctx.save();
+        ctx.lineWidth = ((t.outlineWidth ?? 0) + (t.outerOutlineWidth ?? 0)) * 2 * k;
+        ctx.strokeStyle = t.outerOutlineColor;
+        strokeSpaced(ctx, part.word, wordX, wordY, spacing * wordScale);
+        ctx.restore();
+      }
+
       if (t.shadow) {
         ctx.shadowColor = 'rgba(0,0,0,0.85)';
         ctx.shadowBlur = 10 * k;
@@ -346,9 +402,22 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
         ctx.strokeStyle = t.outlineColor;
         strokeSpaced(ctx, part.word, wordX, wordY, spacing * wordScale);
       }
+
+      // 3. Aberração cromática / RGB Split nas bordas da palavra
+      if (caShift >= 0.4) {
+        ctx.save();
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha *= 0.72;
+        ctx.fillStyle = '#00f0ff';
+        drawSpaced(ctx, part.word, wordX - caShift, wordY - caShift * 0.25, spacing * wordScale);
+        ctx.fillStyle = '#ff1f5a';
+        drawSpaced(ctx, part.word, wordX + caShift, wordY + caShift * 0.25, spacing * wordScale);
+        ctx.restore();
+      }
+
       if ((t.glowIntensity ?? 0) > 0) {
         ctx.shadowColor = t.glowColor ?? '#ffde59';
-        ctx.shadowBlur = (t.glowIntensity ?? 0) * k;
+        ctx.shadowBlur = (t.glowIntensity ?? 0) * (isHero ? 1.25 : 1) * k;
         ctx.shadowOffsetY = 0;
       }
       const useSyllables = !!t.syllableAnimation && !!word && !word.uncertain &&
@@ -362,7 +431,7 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
         for (const [index, syllable] of syllables.entries()) {
           const glyphWidth = measured(ctx, syllable.text, spacing * wordScale);
           const activeSyllable = index === syllableIndex;
-          if (t.fillStyle === 'linear-gradient') {
+          if (t.fillStyle === 'linear-gradient' && ctx.createLinearGradient) {
             const gradient = ctx.createLinearGradient(syllableX, wordY - wordSize / 2, syllableX + glyphWidth, wordY + wordSize / 2);
             gradient.addColorStop(0, t.gradientStartColor);
             gradient.addColorStop(1, t.gradientEndColor);
@@ -374,10 +443,27 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
           syllableX += glyphWidth;
         }
       } else {
-        if (t.fillStyle === 'linear-gradient' && !word?.color && !(active && animation === 'highlight')) {
+        const customHeroColor = isHero && t.heroColor ? t.heroColor : null;
+        if (customHeroColor && !(active && animation === 'highlight')) {
+          ctx.fillStyle = customHeroColor;
+        } else if (t.fillStyle === 'linear-gradient' && !word?.color && !(active && animation === 'highlight') && ctx.createLinearGradient) {
           const gradient = ctx.createLinearGradient(wordX, wordY - wordSize / 2, wordX + part.width * wordScale, wordY + wordSize / 2);
           gradient.addColorStop(0, t.gradientStartColor);
+          if (sheenPhase >= 0) {
+            const pos = Math.max(0.08, Math.min(0.92, sheenPhase));
+            gradient.addColorStop(Math.max(0, pos - 0.08), t.gradientStartColor);
+            gradient.addColorStop(pos, '#ffffff');
+            gradient.addColorStop(Math.min(1, pos + 0.08), t.gradientEndColor);
+          }
           gradient.addColorStop(1, t.gradientEndColor);
+          ctx.fillStyle = gradient;
+        } else if (sheenPhase >= 0 && !word?.color && ctx.createLinearGradient) {
+          const baseCol = active && animation === 'highlight' ? (t.highlightColor ?? '#ffd166') : t.color;
+          const sheenX0 = wordX - part.width * 0.3 + (part.width * wordScale * 1.6) * sheenPhase;
+          const gradient = ctx.createLinearGradient(sheenX0 - wordSize * 0.6, wordY - wordSize / 2, sheenX0 + wordSize * 0.6, wordY + wordSize / 2);
+          gradient.addColorStop(0, baseCol);
+          gradient.addColorStop(0.5, '#ffffff');
+          gradient.addColorStop(1, baseCol);
           ctx.fillStyle = gradient;
         } else {
           ctx.fillStyle = word?.color ?? (active && animation === 'highlight' ? t.highlightColor ?? '#ffd166' : t.color);
@@ -385,7 +471,7 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
         drawSpaced(ctx, part.word, wordX, wordY, spacing * wordScale);
       }
       ctx.restore();
-      x += part.width;
+      x += part.width * (isHero ? heroBoost : 1);
     }
   });
   ctx.restore();

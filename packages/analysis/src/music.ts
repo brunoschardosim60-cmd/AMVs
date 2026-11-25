@@ -118,9 +118,14 @@ export function onsetEnvelope(samples: Float32Array, sampleRate: number): OnsetE
   ];
   const env = new Float32Array(n);
   const bandEnvelopes: Float32Array[] = [];
-  for (const [lo, hi] of bands) {
+  // Pesos percussivos: prioriza bumbo (grave) e ataque de caixa/prato (agudo),
+  // suprimindo notas sustentadas (voz/guitarra/synth) na faixa média.
+  const bandWeights = [1.25, 0.78, 1.1] as const;
+  for (let bIdx = 0; bIdx < bands.length; bIdx++) {
+    const [lo, hi] = bands[bIdx]!;
     const band = new Float32Array(n);
     let prevB: Float32Array | null = null;
+    let prev2B: Float32Array | null = null;
     for (let f = 0; f < n; f++) {
       const m = spec.mags[f]!;
       const lm = new Float32Array(hi - lo);
@@ -128,16 +133,19 @@ export function onsetEnvelope(samples: Float32Array, sampleRate: number): OnsetE
       if (prevB) {
         let s2 = 0;
         for (let i = 0; i < lm.length; i++) {
-          const d = lm[i]! - prevB[i]!;
+          const ref = bIdx === 1 && prev2B ? Math.max(prevB[i]!, 0.5 * (prevB[i]! + prev2B[i]!)) : prevB[i]!;
+          const d = lm[i]! - ref;
           if (d > 0) s2 += d;
         }
         band[f] = s2;
       }
+      prev2B = prevB;
       prevB = lm;
     }
     const nb = normalize(band);
     bandEnvelopes.push(nb);
-    for (let f = 0; f < n; f++) env[f] = env[f]! + nb[f]!;
+    const w = bandWeights[bIdx] ?? 1;
+    for (let f = 0; f < n; f++) env[f] = env[f]! + nb[f]! * w;
   }
   // remove a tendência local (deixa só os picos)
   const trend = movingAverage(env, 8);

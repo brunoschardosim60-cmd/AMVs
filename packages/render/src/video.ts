@@ -114,6 +114,8 @@ function keyframeExpr(keyframes: Keyframe[] | undefined, fallback: number, T: st
 function maskExpr(mask: Clip['mask']): string | null {
   switch (mask) {
     case 'circle': return 'if(lt(pow((X-W/2)/(W/2),2)+pow((Y-H/2)/(H/2),2),1),1,0)';
+    case 'subject-focus': return 'clip(1.6-1.6*(pow((X-W/2)/(W*0.31),2)+pow((Y-H*0.47)/(H*0.46),2)),0,1)';
+    case 'manga-slash': return 'if(lt(abs((X/W-0.5)+0.2*(Y/H-0.5)),0.3),1,0)';
     case 'left': return 'if(lt(X,W/2),1,0)';
     case 'right': return 'if(gte(X,W/2),1,0)';
     case 'top': return 'if(lt(Y,H/2),1,0)';
@@ -243,6 +245,18 @@ function whipOffsetExpr(layer: Layer, windowStartUs: number, scale: number, widt
   return layer.underlay
     ? `${direction}*${distance}*${progress}`
     : `${-direction}*${distance}*(1-${progress})`;
+}
+
+function zoomThroughExpr(layer: Layer, windowStartUs: number): string | null {
+  const transition = layer.transition;
+  if (!transition || transition.transition !== 'zoom_through' || transition.durationUs <= 0) return null;
+  const durationS = transition.durationUs / 1e6;
+  const phaseStartS = (windowStartUs - layer.transitionStartUs) / 1e6;
+  const progress = curveExpr(`(it+${n(phaseStartS)})/${n(durationS)}`, 'ease-in-out');
+  const intensity = Math.min(1, Math.max(0.15, transitionNumber(transition, 'intensity', 0.55)));
+  return layer.underlay
+    ? `(1+${n(intensity * 0.75)}*(${progress})*(${progress}))`
+    : `(1+${n(intensity * 0.6)}*(1-(${progress}))*(1-(${progress})))`;
 }
 
 /**
@@ -383,7 +397,8 @@ export function windowArgs(o: WindowInput): WindowJob {
         inputs.push('-ss', n(Math.max(0, srcStart), 6), '-t', n(chainLen * c.speed + 0.5, 3), '-i', src.path);
         chain.push(`[${inputIdx}:v:0]setpts=(PTS-STARTPTS)/${n(c.speed)}`);
       }
-      chain.push(`fps=${FPS}:round=near`);
+      const useSmoothBlend = src.kind === 'video' && (c.speed <= 0.82 || hasSpeedCurve(c)) && o.enc.quality >= 1 && chainLen <= 3.5;
+      chain.push(useSmoothBlend ? `minterpolate=fps=${FPS}:mi_mode=blend` : `fps=${FPS}:round=near`);
       // recorte
       const cr = tr.crop;
       const cw = srcW * (1 - cr.left - cr.right);
@@ -391,12 +406,17 @@ export function windowArgs(o: WindowInput): WindowJob {
       if (cr.left || cr.right || cr.top || cr.bottom) {
         chain.push(`crop=${even(cw)}:${even(ch)}:${Math.round(srcW * cr.left)}:${Math.round(srcH * cr.top)}`);
       }
-      // encaixa (contain) no quadro do projeto e aplica a escala
+      // encaixa no quadro do projeto + margem automática de overscan quando há shake (evita borda preta)
+      const maxShakePx = Math.max(0, ...c.effects.filter((f) => f.enabled && f.effect === 'shake').map((f) => param(f, 'intensity')));
+      const shakeOverscan = maxShakePx > 0 ? Math.max(1, 1 + Math.min(0.14, (maxShakePx * 2.2) / Math.max(1, Math.min(P.width, P.height)))) : 1;
+      const effectiveScale = Math.max(tr.scale, shakeOverscan);
       const fit = Math.min(P.width / cw, P.height / ch);
-      const LW = even(cw * fit * tr.scale * kx);
-      const LH = even(ch * fit * tr.scale * kx);
+      const LW = even(cw * fit * effectiveScale * kx);
+      const LH = even(ch * fit * effectiveScale * kx);
       chain.push(`scale=${LW}:${LH}:flags=lanczos`, 'setsar=1');
-      const z = zoomExpr(c, `it+${n(Ls)}`);
+      const baseZ = zoomExpr(c, `it+${n(Ls)}`);
+      const zt = zoomThroughExpr(layer, w.startUs);
+      const z = baseZ && zt ? `(${baseZ})*(${zt})` : baseZ ?? zt;
       if (z) chain.push(`zoompan=z='${z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${LW}x${LH}:fps=${FPS}`);
       const lutPath = o.colorLutPath?.(c);
       if (lutPath) {
@@ -405,7 +425,9 @@ export function windowArgs(o: WindowInput): WindowJob {
       }
       const whipBlur = layer.transition?.transition === 'whip_pan'
         ? Math.max(0, Math.min(32, transitionNumber(layer.transition, 'blur', 8)))
-        : 0;
+        : layer.transition?.transition === 'zoom_through'
+          ? Math.max(0, Math.min(16, transitionNumber(layer.transition, 'intensity', 0.55) * 5))
+          : 0;
       const blur = sum(c, 'blur', 'amount') + whipBlur;
       if (blur > 0) chain.push(`gblur=sigma=${n(blur * kx, 3)}`);
       const rgb = Math.round(sum(c, 'rgb_split', 'amount') * kx);
@@ -444,7 +466,8 @@ export function windowArgs(o: WindowInput): WindowJob {
     const scaleFrames = c.text ? undefined : c.keyframes['transform.scale'];
     if (scaleFrames?.length) {
       const scale = keyframeExpr(scaleFrames, tr.scale, `n*${fps.den}/${fps.num}+${n(Ls)}`);
-      chain.push(`scale=w='max(2,trunc(iw*(${scale})/${n(tr.scale)}/2)*2)':h='max(2,trunc(ih*(${scale})/${n(tr.scale)}/2)*2)':eval=frame:flags=lanczos`, 'setsar=1');
+      const baseScaleRef = c.text ? tr.scale : Math.max(tr.scale, Math.max(0, ...c.effects.filter((f) => f.enabled && f.effect === 'shake').map((f) => param(f, 'intensity'))) > 0 ? 1 + Math.min(0.14, (Math.max(0, ...c.effects.filter((f) => f.enabled && f.effect === 'shake').map((f) => param(f, 'intensity'))) * 2.2) / Math.max(1, Math.min(P.width, P.height))) : 1);
+      chain.push(`scale=w='max(2,trunc(iw*max(${n(baseScaleRef)},${scale})/${n(baseScaleRef)}/2)*2)':h='max(2,trunc(ih*max(${n(baseScaleRef)},${scale})/${n(baseScaleRef)}/2)*2)':eval=frame:flags=lanczos`, 'setsar=1');
     }
     const opacityFrames = c.keyframes['transform.opacity'];
     if (c.text && !textBaked && (tr.opacity < 1 || opacityFrames?.length)) {

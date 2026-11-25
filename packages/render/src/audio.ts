@@ -161,9 +161,20 @@ export function audioArgs(o: AudioJobInput): string[] {
     }
     const gain = c.audio.gainDb + pl.track.gainDb;
     const chain = [`[${clipLabel}]`];
+    if (c.audio.voiceIsolation) {
+      chain.push(
+        'pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1',
+        'highpass=f=115',
+        'lowpass=f=7600',
+        'afftdn=nf=-22',
+      );
+    }
     if (gain !== 0) chain.push(`volume=${n(gain, 3)}dB`);
     if (c.audio.fadeInUs > 0) chain.push(`afade=t=in:st=0:d=${n(c.audio.fadeInUs / 1e6)}`);
     if (c.audio.fadeOutUs > 0) chain.push(`afade=t=out:st=${n(Math.max(0, dur - c.audio.fadeOutUs / 1e6))}:d=${n(c.audio.fadeOutUs / 1e6)}`);
+    if (c.audio.echoTail) {
+      chain.push('apad=pad_dur=0.42', 'aecho=0.85:0.88:110|220:0.26|0.14');
+    }
     // volume ao longo do tempo (ducking): keyframes de "audio.gainDb"
     const kf = c.keyframes['audio.gainDb'];
     if (kf && kf.length) chain.push(`volume='${gainCurve(kf)}':eval=frame`);

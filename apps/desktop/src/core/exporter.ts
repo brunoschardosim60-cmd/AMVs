@@ -82,6 +82,11 @@ export function startExport(
   const ctrl = new AbortController();
   const project = session.project; // retrato do projeto no momento do clique
   const promise = (async () => {
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      try {
+        await document.fonts.ready;
+      } catch {}
+    }
     const work = joinPath(await platform.cacheDir(), `render-${Date.now().toString(36)}`);
     return renderProject(
       project,

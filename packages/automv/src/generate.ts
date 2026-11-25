@@ -113,6 +113,8 @@ export interface GenerateOptions {
   lyricDisplayMode?: 'kinetic-words' | 'rhythmic-phrases';
   /** Como as falas interagem com o vídeo: 'voiceover' mantém os cortes de ação na batida em V1 enquanto a voz narra por cima; 'hybrid' mostra a cena da fala só antes do drop e narra nas demais; 'scene' mostra o vídeo original da fala em V1. */
   speechVisualMode?: 'voiceover' | 'hybrid' | 'scene';
+  /** Coloca o personagem destacado em V2 no drop com a letra passando atrás dele (Depth Text). */
+  depthCutoutOnDrop?: boolean;
 }
 
 export interface GenerateResult {
@@ -686,11 +688,12 @@ function speechCaptionMatchesAudio(ep: EpisodeInput, speech: SpeechSegment, lang
 function findTracks(p: Project) {
   const visual = p.tracks.filter((t) => t.kind === 'video');
   const v1 = visual.at(-1);
+  const v2 = visual.length >= 2 && visual[0]?.id !== v1?.id ? visual[0] : undefined;
   const text = p.tracks.find((t) => t.kind === 'text');
   const music = p.tracks.find((t) => t.kind === 'audio' && t.role === 'music') ?? p.tracks.find((t) => t.kind === 'audio');
   const voice = p.tracks.find((t) => t.kind === 'audio' && t.role === 'voice') ?? p.tracks.filter((t) => t.kind === 'audio')[1];
   const sfx = p.tracks.find((t) => t.kind === 'audio' && t.role === 'sfx');
-  return { v1, text, music, voice, sfx };
+  return { v1, v2, text, music, voice, sfx };
 }
 
 function generatedVoiceAndMusicAreAudible(project: Project, musicTrack: Track, voiceTrack: Track | undefined): boolean {
@@ -951,12 +954,36 @@ function textClip(
   const useGradient = preset === 'anime-neon' || preset === 'anime-gold-epic' || (isClimaxImpact && !word && preset !== 'anime-manga' && preset !== 'anime-dialogue');
   const useBox = preset === 'anime-manga' || preset === 'anime-dialogue';
   const font = preset === 'anime-gold-epic'
-    ? 'Cinzel'
-    : preset === 'anime-impact' || preset === 'anime-manga'
-      ? 'Impact'
-      : preset === 'anime-neon'
-        ? 'Trebuchet MS'
-        : 'Manrope Variable';
+    ? 'Cinzel Variable'
+    : preset === 'anime-impact'
+      ? 'Anton'
+      : preset === 'anime-neon' || preset === 'anime-manga'
+        ? 'Bebas Neue'
+        : preset === 'lyrics-cinematic'
+          ? 'Montserrat Variable'
+          : 'Manrope Variable';
+  const proFxOn = useEffects && preset !== 'anime-dialogue' && preset !== 'dialogue-dramatic';
+  const outerOutlineColor = !proFxOn ? null
+    : preset === 'anime-impact' ? '#ff3355'
+      : preset === 'anime-manga' ? '#ffffff'
+        : preset === 'anime-gold-epic' ? '#fde68a'
+          : null;
+  const outerOutlineWidth = outerOutlineColor ? (preset === 'anime-manga' ? 1.8 : 1.3) : 0;
+  const extrudeDepth = !proFxOn ? 0
+    : preset === 'anime-manga' ? 5
+      : preset === 'anime-impact' ? 4
+        : preset === 'anime-gold-epic' ? 3
+          : word ? 2.5 : 0;
+  const extrudeColor = preset === 'anime-impact' ? '#1a050a' : preset === 'anime-gold-epic' ? '#241202' : '#000000';
+  const chromaticAberration = !proFxOn ? 0
+    : preset === 'anime-impact' ? (isClimaxImpact || word ? 3.5 : 2)
+      : preset === 'anime-neon' ? 2.5
+        : isClimaxImpact && word ? 2.2 : 0;
+  const sheen = proFxOn && (preset === 'anime-neon' || preset === 'anime-gold-epic' || preset === 'lyrics-cinematic');
+  const heroWord = proFxOn && !word && (preset === 'anime-impact' || preset === 'anime-neon' || preset === 'anime-gold-epic' || preset === 'lyrics-cinematic');
+  const heroFont = preset === 'anime-neon' ? 'Anton' : preset === 'lyrics-cinematic' ? 'Cinzel Variable' : null;
+  const heroColor = preset === 'anime-impact' ? '#ff4d6d' : preset === 'anime-neon' ? '#ff4d9d' : preset === 'lyrics-cinematic' ? '#ffe066' : null;
+  const heroTiltDeg = preset === 'anime-impact' ? -2 : 0;
 
   const renderedText = uppercase ? displayText.toUpperCase() : displayText;
   const effectiveWordTimings = kineticSpeechWords && !word && wordTimings.length === 0
@@ -990,6 +1017,17 @@ function textClip(
       color,
       outlineColor,
       outlineWidth: word || preset === 'anime-impact' || preset === 'anime-manga' || preset === 'anime-gold-epic' ? 5 : 4,
+      outerOutlineColor,
+      outerOutlineWidth,
+      extrudeDepth,
+      extrudeColor,
+      chromaticAberration,
+      sheen,
+      heroWord,
+      heroFont,
+      heroScale: 1.22,
+      heroColor,
+      heroTiltDeg,
       shadow: true,
       animationIn: preset === 'anime-manga' ? 'slide' : preset === 'anime-dialogue' ? 'fade' : 'pop',
       animationOut: preset === 'anime-gold-epic' ? 'blur' : 'fade',
@@ -1174,7 +1212,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const style = editorialStyle(styleDef(opts.style), editorialDirection);
   const warnings: string[] = [];
   const rand = rng(opts.seed);
-  const { v1, text, music: musicTrack, voice, sfx: sfxTrack } = findTracks(project);
+  const { v1, v2, text, music: musicTrack, voice, sfx: sfxTrack } = findTracks(project);
   if (!v1 || !musicTrack) throw new Error('o projeto precisa de uma trilha de vídeo e uma de música');
   const H = project.settings.height;
   const sceneExclusions = new Set(project.sceneAnnotations
@@ -1368,7 +1406,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
           audio: selectedVideoAudio(streamFor(ep), -60),
         }),
       });
-      cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: voiceGainDb(2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
+      cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: voiceGainDb(2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep), voiceIsolation: opts.useEffects !== false, echoTail: false } }) });
       const subtitleTranslations = speechTranslation(ep, s, opts);
       const speechPreset = resolveSpeechPreset(opts.lyricStyle, Boolean(opts.lyrics?.length));
       if (opts.showText && opts.showSpeechCaptions !== false && text && sourceText) addCaptionPhrases(cmds, text.id, t, len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset, opts.useEffects);
@@ -1389,6 +1427,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const REPEAT_WARNING = 'Poucas cenas em sequência para o tamanho do vídeo: algumas se repetem. Importe mais episódios ou escolha mais lutas.';
   const slots = makeSlots(m, range, style, opts.intensity, opts.lyrics, beatOffsetS);
   const candidates: Candidate[] = [];
+  const opEdReserve: Candidate[] = [];
   const darkReserve: Candidate[] = [];
   const consider = (ep: EpisodeInput, shot: Shot) => {
     const id = `${ep.assetId}@${shot.startS}`;
@@ -1397,7 +1436,16 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     if (plan.wanted && !hasCharacter(ep, shot, plan.wanted)) return;
     const sequence = sequenceFor(ep, shot);
     const seq = sequence ? `${ep.assetId}#${sequence.id}` : `${ep.assetId}#-`;
-    const targetList = shot.tags.includes('escura') ? darkReserve : candidates;
+    // Em episódios completos (>= 18 min), desprioriza janelas típicas de abertura/encerramento (créditos)
+    // exceto quando o usuário selecionou manualmente uma luta específica ali.
+    const isLikelyOpEd = !strictFightSelection
+      && ep.analysis.durationS >= 1080
+      && (shot.startS < 92 || shot.endS > ep.analysis.durationS - 92);
+    const targetList = shot.tags.includes('escura')
+      ? darkReserve
+      : isLikelyOpEd
+        ? opEdReserve
+        : candidates;
     const sequenceOrder = sequenceOrders.get(seq) ?? 0;
     const episodeOrder = episodeOrders.get(ep.assetId) ?? Number.MAX_SAFE_INTEGER;
     // Subdivide planos longos em trechos não sobrepostos nos estilos de corte dinâmico
@@ -1453,6 +1501,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     if (candidates.length) {
       warnings.push('A luta selecionada tinha poucas cenas aproveitáveis: usei cenas dinâmicas do restante do episódio para preencher o vídeo.');
     }
+  }
+  if (!candidates.length && opEdReserve.length) {
+    candidates.push(...opEdReserve);
   }
   if (!candidates.length && darkReserve.length) {
     candidates.push(...darkReserve);
@@ -2037,27 +2088,44 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       && visual.confidence >= 0.55
       && ((visual.faceCount ?? 0) >= 1 || visual.characters.length > 0),
     );
-    const centerOfMass = currentLocal?.centerOfVisualMass;
-    const hasCenterOfMass = Boolean(centerOfMass && centerOfMass.length === 2 && Number.isFinite(centerOfMass[0]) && Number.isFinite(centerOfMass[1]));
+    const focusPoint = currentLocal?.subjectFocus ?? currentLocal?.centerOfVisualMass;
+    const hasFocusPoint = Boolean(focusPoint && focusPoint.length === 2 && Number.isFinite(focusPoint[0]) && Number.isFinite(focusPoint[1]));
+    const hasLocalSubject = (currentLocal?.subjectFocusConfidence ?? 0) >= 0.58;
+    const isVerticalProject = project.settings.height > project.settings.width;
     const wantsCharacterPunch = Boolean(
       opts.useEffects
-      && confirmedCharacter
+      && (confirmedCharacter || (hasLocalSubject && isVerticalProject))
       && editorialDirection !== 'cinematic'
       && ((hit && sl.energy >= 0.65)
         || (sl.isDrop && hasVisualImpact)
         || (c.shot.tags.includes('impacto') && sl.energy >= 0.6)
-        || (visual?.framing === 'close-up' && sl.energy >= 0.55)),
+        || (visual?.framing === 'close-up' && sl.energy >= 0.55)
+        || isVerticalProject),
     );
+    let panKeyframesX: Keyframe[] = [];
     if (wantsCharacterPunch) {
       punchScale = sl.isDrop || (hit && sl.energy >= 0.85) ? 1.12 : 1.07;
-      if (hasCenterOfMass) {
-        const [cx, cy] = centerOfMass!;
-        const maxShiftX = (punchScale - 1) * project.settings.width * 0.4;
+      if (hasFocusPoint) {
+        const [cx, cy] = focusPoint!;
+        const maxShiftX = Math.max((punchScale - 1) * project.settings.width * 0.45, isVerticalProject ? project.settings.width * 0.28 : 0);
         const maxShiftY = (punchScale - 1) * project.settings.height * 0.4;
         punchX = Math.round(Math.max(-maxShiftX, Math.min(maxShiftX, -(cx - 0.5) * project.settings.width)));
         punchY = Math.round(Math.max(-maxShiftY, Math.min(maxShiftY, -(cy - 0.5) * project.settings.height)));
+        const traj = currentLocal?.focusTrajectory;
+        if (traj && len >= 0.65 && Math.abs(traj[1][0] - traj[0][0]) >= 0.12) {
+          const xStart = Math.round(Math.max(-maxShiftX, Math.min(maxShiftX, -(traj[0][0] - 0.5) * project.settings.width)));
+          const xEnd = Math.round(Math.max(-maxShiftX, Math.min(maxShiftX, -(traj[1][0] - 0.5) * project.settings.width)));
+          if (Math.abs(xEnd - xStart) >= 12) {
+            panKeyframesX = [
+              { atUs: 0, value: xStart, easing: 'ease-in-out' },
+              { atUs: us(len), value: xEnd, easing: 'ease-in-out' },
+            ];
+          }
+        }
       }
-      characterFramingReason = 'recorte focado no personagem com análise visual confiável';
+      characterFramingReason = confirmedCharacter
+        ? 'recorte focado no personagem com análise visual confiável'
+        : 'auto-reframe focado no sujeito/rosto de anime';
     }
 
     if (fxOn && hit && hasVisualImpact && impactLocalUs !== null) {
@@ -2172,6 +2240,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       clip.reason = `${clip.reason} — movimento de câmera suave no plano`;
     }
     if (visualScaleKeyframes.length) clip.keyframes['transform.scale'] = visualScaleKeyframes;
+    if (panKeyframesX.length) clip.keyframes['transform.x'] = panKeyframesX;
     cmds.push({ type: 'clip.add', clip });
     if (opts.showText && text && sl.word) {
       const timing = sl.wordTiming
@@ -2289,7 +2358,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       }
       cmds.push({ type: 'clip.add', clip: voiceClip });
     }
-    cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: voiceGainDb(b.preDrop ? 3 : 2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep) } }) });
+    cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: voiceGainDb(b.preDrop ? 3 : 2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep), voiceIsolation: opts.useEffects !== false, echoTail: Boolean(opts.useEffects !== false && b.preDrop) } }) });
     const speechPreset = resolveSpeechPreset(opts.lyricStyle, Boolean(opts.lyrics?.length));
     if (opts.showText && opts.showSpeechCaptions !== false && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset, opts.useEffects, true);
     if (visualSpeech) clipsMade++;
@@ -2399,6 +2468,58 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     }
     const omitted = opts.lyrics.filter((cue) => cue.endS > range[0] && cue.startS < range[1] && blocks.some((block) => cue.startS - range[0] < block.atS + block.len && cue.endS - range[0] > block.atS)).length;
     if (omitted) warnings.push(`${omitted} verso(s) foram divididos ou omitidos apenas durante falas para evitar sobreposição de textos.`);
+
+    // Depth Cutout no Drop: destaca o personagem em V2 com a letra gigante passando atrás dele
+    if (opts.depthCutoutOnDrop && opts.useEffects !== false && v2 && dropT !== null) {
+      const dropUs = us(dropT);
+      const dropEndUs = dropUs + us(0.7);
+      const v1DropCmd = cmds.find(
+        (cmd): cmd is Extract<Command, { type: 'clip.add' }> =>
+          cmd.type === 'clip.add'
+          && cmd.clip.trackId === v1.id
+          && Boolean(cmd.clip.assetId)
+          && cmd.clip.timelineStartUs <= dropUs + 40_000
+          && cmd.clip.timelineStartUs + cmd.clip.durationUs > dropUs + 120_000,
+      );
+      const dropLyricCmds = cmds.filter(
+        (cmd): cmd is Extract<Command, { type: 'clip.add' }> =>
+          cmd.type === 'clip.add'
+          && cmd.clip.trackId === text.id
+          && Boolean(cmd.clip.text)
+          && /letra da música|palavra da letra/i.test(cmd.clip.reason ?? '')
+          && cmd.clip.timelineStartUs < dropEndUs
+          && cmd.clip.timelineStartUs + cmd.clip.durationUs > dropUs,
+      );
+      if (v1DropCmd && dropLyricCmds.length > 0) {
+        for (const lc of dropLyricCmds) {
+          lc.clip.text = { ...lc.clip.text!, behindCutout: true };
+        }
+        const base = v1DropCmd.clip;
+        const cutDurUs = Math.min(base.durationUs, us(0.65));
+        const v2Clip = baseClip(
+          v2.id,
+          base.assetId,
+          base.timelineStartUs / S,
+          cutDurUs / S,
+          base.sourceInUs / S,
+          'Destaque de personagem em V2 no drop (letra passando atrás)',
+          {
+            speed: base.speed,
+            sourceOutUs: base.sourceInUs + Math.round(cutDurUs * base.speed),
+            mask: 'subject-focus',
+            audio: { ...base.audio, gainDb: -60 },
+            transform: { ...base.transform, scale: Math.max(1.06, base.transform.scale * 1.04) },
+            keyframes: {
+              'transform.scale': [
+                { atUs: 0, value: Math.max(1.06, base.transform.scale * 1.04), easing: 'ease-out' },
+                { atUs: cutDurUs, value: Math.max(1.14, base.transform.scale * 1.12), easing: 'linear' },
+              ],
+            },
+          },
+        );
+        cmds.push({ type: 'clip.add', clip: v2Clip });
+      }
+    }
   }
 
   const firstSpeech = blocks.find((b) => b.preDrop) ?? blocks[0];

@@ -179,6 +179,19 @@ export function chooseSceneTransition(input: TransitionChoiceInput): TransitionC
     return { transition: null, reason: 'corte seco: preserva a precisão rítmica do drop' };
   }
 
+  // zoom through para continuidade de aproximação ou impactos energéticos
+  const zoomContinuation = (outMotion?.cameraMotion === 'zoom-in' || inMotion?.cameraMotion === 'zoom-in'
+    || outMotion?.apparentScaleChange === 'in' || inMotion?.apparentScaleChange === 'in');
+  if (!isDrop && zoomContinuation && energy >= 0.55 && durationS >= 0.34 && direction !== 'cinematic'
+    && (incoming.shot.tags.includes('ação') || incoming.shot.tags.includes('impacto') || incoming.shot.intensity >= 0.62)) {
+    return {
+      transition: createTransition('zoom_through', Math.min(0.22, durationS / 3.5), {
+        intensity: Math.min(0.75, 0.4 + energy * 0.25),
+      }),
+      reason: 'zoom through: movimento de aproximação contínuo entre cenas de ação',
+    };
+  }
+
   // dip to white para impactos não-drop com alta energia e movimento
   if (!isDrop && energy >= 0.65 && durationS >= 0.35 && durationS <= 1.2
     && direction !== 'cinematic'

@@ -7,7 +7,7 @@
  */
 import { drawTextLayer } from './textLayer';
 import { playbackIndex } from './playbackIndex';
-import { aggregateColorGrade, applyWhipPan, automaticDuckingGain, clipEndUs, createColorGradeLut, evalClipLook, evaluateKeyframes, isColorGradeNeutral, projectDurationUs, sampleColorGradeLut, sourceTimeAt, speedAt, transitionUnderlay, type Clip, type ClipLook, type ColorGradeLut, type Project, type Track } from '@amv/project';
+import { aggregateColorGrade, applyWhipPan, applyZoomThrough, automaticDuckingGain, clipEndUs, createColorGradeLut, evalClipLook, evaluateKeyframes, isColorGradeNeutral, projectDurationUs, sampleColorGradeLut, sourceTimeAt, speedAt, transitionUnderlay, type Clip, type ClipLook, type ColorGradeLut, type Project, type Track } from '@amv/project';
 
 export interface MediaSource {
   /** URL do proxy de vídeo (vídeos) ou do arquivo/proxy de áudio. */
@@ -70,7 +70,14 @@ function clipMask(ctx: CanvasRenderingContext2D, mask: Clip['mask'], x: number, 
   if (mask === 'none') return;
   ctx.beginPath();
   if (mask === 'circle') ctx.ellipse(x + width / 2, y + height / 2, width / 2, height / 2, 0, 0, Math.PI * 2);
-  else if (mask === 'left') ctx.rect(x, y, width / 2, height);
+  else if (mask === 'subject-focus') ctx.ellipse(x + width / 2, y + height * 0.47, width * 0.31, height * 0.46, 0, 0, Math.PI * 2);
+  else if (mask === 'manga-slash') {
+    ctx.moveTo(x + width * 0.3, y);
+    ctx.lineTo(x + width * 0.9, y);
+    ctx.lineTo(x + width * 0.7, y + height);
+    ctx.lineTo(x + width * 0.1, y + height);
+    ctx.closePath();
+  } else if (mask === 'left') ctx.rect(x, y, width / 2, height);
   else if (mask === 'right') ctx.rect(x + width / 2, y, width / 2, height);
   else if (mask === 'top') ctx.rect(x, y, width, height / 2);
   else ctx.rect(x, y + height / 2, width, height / 2);
@@ -695,26 +702,28 @@ export class Player {
     const k = W / p.settings.width; // escala projeto → canvas
 
     // vídeo: de baixo para cima (a última trilha de vídeo da lista é a de baixo)
-    const visual = p.tracks.filter((x) => x.kind !== 'audio');
-    for (let i = visual.length - 1; i >= 0; i--) {
-      const track = visual[i]!;
-      if (track.hidden) continue;
+    const visual = p.tracks.filter((x) => x.kind !== 'audio' && !x.hidden);
+    const bottomVideoId = [...visual].reverse().find((x) => x.kind === 'video')?.id;
+    const drawTrackPass = (track: Track, textFilter?: 'behind' | 'front') => {
       const trackClips = this.index.tracks.get(track.id) ?? [];
-      // pré-carrega só o PRÓXIMO clipe da trilha (com cortes rápidos, seriam vários)
       const next = trackClips.find((c) => c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t);
       for (const c of trackClips) {
+        if (c.text && textFilter) {
+          const isBehind = Boolean(c.text.behindCutout);
+          if (textFilter === 'behind' && !isBehind) continue;
+          if (textFilter === 'front' && isBehind) continue;
+        }
         const near = (t >= c.timelineStartUs && t < clipEndUs(c)) || c === next;
         if (!near) continue;
         const active = t >= c.timelineStartUs;
         const localS = (t - c.timelineStartUs) / 1e6;
         let look = evalClipLook(c, localS, c.durationUs / 1e6);
-        // transição de entrada: o clipe anterior continua por baixo (origem segue além do fim)
         if (active && c.transitionIn && localS < c.transitionIn.durationUs / 1e6) {
-          look = applyWhipPan(look, c.transitionIn, localS, false, p.settings.width);
+          look = applyZoomThrough(applyWhipPan(look, c.transitionIn, localS, false, p.settings.width), c.transitionIn, localS, false);
           const under = transitionUnderlay(trackClips, c);
           if (under) {
             let ulook = evalClipLook(under, (t - under.timelineStartUs) / 1e6, under.durationUs / 1e6);
-            ulook = applyWhipPan(ulook, c.transitionIn, localS, true, p.settings.width);
+            ulook = applyZoomThrough(applyWhipPan(ulook, c.transitionIn, localS, true, p.settings.width), c.transitionIn, localS, true);
             ulook.overlays = [];
             this.drawClip(ctx, under, t, ulook, k, used, true);
           }
@@ -728,6 +737,22 @@ export class Player {
         }
         this.drawClip(ctx, c, t, look, k, used, active);
         if (active) this.drawOverlays(ctx, look);
+      }
+    };
+    let drewBehindText = false;
+    for (let i = visual.length - 1; i >= 0; i--) {
+      const track = visual[i]!;
+      // Antes da primeira sobreposição acima de V1 (ex.: V2), desenha textos com behindCutout=true
+      if (!drewBehindText && track.kind === 'video' && track.id !== bottomVideoId) {
+        for (let j = visual.length - 1; j >= 0; j--) {
+          if (visual[j]!.kind === 'text') drawTrackPass(visual[j]!, 'behind');
+        }
+        drewBehindText = true;
+      }
+      if (track.kind === 'text') {
+        drawTrackPass(track, drewBehindText ? 'front' : undefined);
+      } else {
+        drawTrackPass(track);
       }
     }
 
