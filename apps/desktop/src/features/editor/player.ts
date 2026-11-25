@@ -63,7 +63,10 @@ const MAX_SLOTS = 8;
 const IDLE_RELEASE_MS = 1500;
 
 function canvasBlendMode(mode: Clip['blendMode']): GlobalCompositeOperation {
-  return mode === 'addition' ? 'lighter' : mode === 'normal' ? 'source-over' : mode;
+  if (mode === 'addition') return 'lighter';
+  if (mode === 'hardlight') return 'hard-light';
+  if (mode === 'dodge') return 'color-dodge';
+  return mode === 'normal' ? 'source-over' : mode;
 }
 
 function clipMask(ctx: CanvasRenderingContext2D, mask: Clip['mask'], x: number, y: number, width: number, height: number): void {
@@ -274,6 +277,14 @@ export class Player {
   private endListeners = new Set<() => void>();
   private audioErrorListeners = new Set<(error: Error) => void>();
   private reportedAudioErrors = new Set<string>();
+  private soloClipId: string | null = null;
+  private soloStopAtUs: number | null = null;
+
+  setSoloClip(clipId: string | null, stopAtUs: number | null = null): void {
+    this.soloClipId = clipId;
+    this.soloStopAtUs = clipId ? stopAtUs : null;
+    this.lastRenderAtMs = 0;
+  }
 
   constructor(
     project: Project,
@@ -622,7 +633,15 @@ export class Player {
     const now = performance.now();
     const t = this.timeUs;
     const end = this.index.durationUs;
-    if (this.playing && end > 0 && t >= end) {
+    if (this.playing && this.soloStopAtUs !== null && t >= this.soloStopAtUs) {
+      const stopUs = this.soloStopAtUs;
+      this.soloStopAtUs = null;
+      this.soloClipId = null;
+      this.pause();
+      this.pausedAtUs = stopUs;
+      for (const l of this.listeners) l(stopUs);
+      for (const l of this.endListeners) l();
+    } else if (this.playing && end > 0 && t >= end) {
       this.pause();
       this.pausedAtUs = end;
       for (const l of this.endListeners) l();
@@ -649,6 +668,7 @@ export class Player {
     this.frameUsed = used;
     const mixTracks = p.tracks.filter((track) => track.kind === 'audio' || (track.kind === 'video' && p.audioMix.includeVideoAudio));
     const anySolo = mixTracks.some((track) => track.solo);
+    const soloClip = this.soloClipId ? p.clips.find((x) => x.id === this.soloClipId) : undefined;
 
     // áudio: todas as trilhas de áudio
     for (const track of p.tracks) {
@@ -663,8 +683,12 @@ export class Player {
         if (!slot) continue;
         used.add(slot.slotKey);
         const m = slot.el as HTMLMediaElement;
-        if (t >= c.timelineStartUs) this.syncMedia(m, c, t, clipVolume(c, track, t, anySolo, this.project), slot, 'audio');
-        else {
+        if (t >= c.timelineStartUs) {
+          const vol = soloClip
+            ? (c.id === soloClip.id ? Math.min(2, Math.max(0.35, Math.pow(10, c.audio.gainDb / 20))) : 0)
+            : clipVolume(c, track, t, anySolo, this.project);
+          this.syncMedia(m, c, t, vol, slot, 'audio');
+        } else {
           // pré-carregado: parado no primeiro quadro
           if (!m.paused) m.pause();
           const first = sourceTimeS(c, c.timelineStartUs);
@@ -673,15 +697,18 @@ export class Player {
       }
     }
 
-    if (p.audioMix.includeVideoAudio) {
+    if (p.audioMix.includeVideoAudio || (soloClip && p.tracks.find((tr) => tr.id === soloClip.trackId)?.kind === 'video')) {
       for (const track of p.tracks) {
-        if (track.kind !== 'video' || track.muted || (anySolo && !track.solo)) continue;
+        if (track.kind !== 'video') continue;
+        if (!soloClip && (track.muted || (anySolo && !track.solo))) continue;
         const audioTrack: Track = { ...track, kind: 'audio', role: 'voice' };
         for (const c of this.index.tracks.get(track.id) ?? []) {
           if (!c.assetId) continue;
-          // Só processa áudio embutido para clipe ativo com volume audível
+          if (soloClip && c.id !== soloClip.id) continue;
           if (t < c.timelineStartUs || t >= clipEndUs(c)) continue;
-          const vol = clipVolume(c, audioTrack, t, anySolo, this.project);
+          const vol = soloClip
+            ? (c.audio.gainDb <= -40 ? 1 : Math.min(2, Math.max(0.5, Math.pow(10, c.audio.gainDb / 20))))
+            : clipVolume(c, audioTrack, t, anySolo, this.project);
           if (vol <= 0.003) continue;
           const asset = this.index.assets.get(c.assetId);
           if (!asset?.probe?.audio.length) continue;

@@ -1,5 +1,5 @@
 import { clipEndUs, colorGradingPreset, COLOR_GRADING_PRESETS, defaultParams, isSfxAsset, EFFECTS, evaluateKeyframes, fillScale, formatTimecode, newId, param, removeKeyframeAt, sourceDurationUs, SPEED_PRESETS, speedAt, speedFactorAt, speedKeyframesForPreset, TRANSITIONS, trimClip, upsertKeyframe, type Clip, type Command, type EffectId, type Keyframe, type Project, type TextWordTiming } from '@amv/project';
-import { Eye, EyeOff, Languages, Pause, Pencil, Play, Plus, RotateCcw, SkipForward, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Headphones, Languages, Pause, Pencil, Play, Plus, RotateCcw, SkipForward, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { applyTranslation, editSubtitleTextManually, langLabel, LOOKS, originalText, restyleSubtitles, selectSubtitleTextVariant } from '@amv/subtitles';
 import type { ProjectSession } from '../../core/session';
@@ -11,10 +11,17 @@ import { IconButton } from '../../ui/controls';
 import { AssetDetail } from '../project/AssetDetail';
 import { useEditor } from './editorStore';
 import { ClipRangePreview } from './MomentsPanel';
+import { toggleAuditionClip } from './Preview';
 import { TEXT_ANIMATIONS_IN, TEXT_ANIMATIONS_OUT } from './textLayer';
 import { wordPreviewEnded, type WordPreviewRange } from './wordPreview';
 
 export const LOCAL_FONT_FAMILIES = [
+  'Russo One',
+  'Permanent Marker',
+  'Teko',
+  'Playfair Display Variable',
+  'Black Ops One',
+  'Bungee',
   'Anton',
   'Bebas Neue',
   'Cinzel Variable',
@@ -25,7 +32,6 @@ export const LOCAL_FONT_FAMILIES = [
   'Bahnschrift',
   'Georgia',
   'Segoe UI',
-  'Trebuchet MS',
 ];
 
 export type FramingPresetId = 'normal' | 'highlight' | 'close' | 'cinemascope' | 'manga' | 'punch' | 'zoom';
@@ -432,17 +438,30 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
               {track.name} · {formatTimecode(clip.timelineStartUs, fps)} → {formatTimecode(clipEndUs(clip), fps)}
             </p>
           </div>
-          {!track.locked && (
-            <button
-              type="button"
-              onClick={openFullClipEditor}
-              title="Abrir janela ampliada de modificação deste clipe"
-              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-control border border-violet/45 bg-violet/15 px-2 text-2xs font-medium text-ink hover:bg-violet/25"
-            >
-              <Pencil size={11} />
-              Modificar
-            </button>
-          )}
+          <div className="flex shrink-0 items-center gap-1">
+            {!clip.text && (
+              <button
+                type="button"
+                onClick={() => toggleAuditionClip(session, clip)}
+                title="Isolar e escutar apenas este clipe (atalho: S)"
+                className={`inline-flex h-7 items-center gap-1 rounded-control border px-2 text-2xs font-medium ${useEditor.getState().soloClipId === clip.id ? 'border-azure bg-azure text-action-ink' : 'border-azure/45 bg-azure/10 text-ink hover:bg-azure/20'}`}
+              >
+                <Headphones size={11} />
+                {useEditor.getState().soloClipId === clip.id ? 'Parar' : 'Ouvir'}
+              </button>
+            )}
+            {!track.locked && (
+              <button
+                type="button"
+                onClick={openFullClipEditor}
+                title="Abrir janela ampliada de modificação deste clipe"
+                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-control border border-violet/45 bg-violet/15 px-2 text-2xs font-medium text-ink hover:bg-violet/25"
+              >
+                <Pencil size={11} />
+                Modificar
+              </button>
+            )}
+          </div>
         </div>
         {clip.origin === 'ai' && clip.reason && <p className="mt-2 rounded-md bg-violet/10 px-2 py-1.5 text-xs text-ink-soft">IA: {clip.reason}</p>}
         {track.locked && <p className="mt-2 text-xs text-warn">Trilha travada: destrave para editar.</p>}
@@ -681,7 +700,17 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
             <label className="grid grid-cols-[1fr_140px] items-center gap-2 py-1 text-xs">
               <span className="text-muted">Mesclagem</span>
               <select className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink" value={clip.blendMode} onChange={(event) => patch('Modo de mesclagem', { blendMode: event.target.value as Clip['blendMode'] })}>
-                <option value="normal">Normal</option><option value="multiply">Multiplicar</option><option value="screen">Tela</option><option value="overlay">Sobrepor</option><option value="darken">Escurecer</option><option value="lighten">Clarear</option><option value="addition">Adicionar</option>
+                <option value="normal">Normal</option>
+                <option value="difference">Negativo c/ vídeo (Difference)</option>
+                <option value="exclusion">Exclusão suave</option>
+                <option value="screen">Luz / Tela (Screen)</option>
+                <option value="overlay">Sobrepor (Overlay)</option>
+                <option value="hardlight">Luz forte (Hard Light)</option>
+                <option value="dodge">Superexposição (Dodge)</option>
+                <option value="addition">Adição (Brilho)</option>
+                <option value="multiply">Multiplicar</option>
+                <option value="darken">Escurecer</option>
+                <option value="lighten">Clarear</option>
               </select>
             </label>
             <label className="grid grid-cols-[1fr_140px] items-center gap-2 py-1 text-xs">
@@ -983,23 +1012,28 @@ function TextSection({ clip, patch, session }: { clip: Clip; patch: (label: stri
         </div>
       )}
       <label className="grid grid-cols-[1fr_150px] items-center gap-2 py-1 text-xs">
-        <span className="text-muted">Fonte local instalada</span>
-        <input
-          list="amv-local-fonts"
-          className="h-7 min-w-0 rounded-control border border-line bg-base px-2 text-xs text-ink"
-          value={font}
-          onChange={(event) => setFont(event.target.value)}
-          onBlur={() => {
-            const next = font.trim() || 'Manrope Variable';
-            setFont(next);
-            if (next !== t.font) set('Fonte da tipografia', { font: next });
+        <span className="text-muted">Fonte</span>
+        <select
+          className="h-7 min-w-0 rounded-control border border-line bg-base px-1.5 text-xs text-ink"
+          value={LOCAL_FONT_FAMILIES.includes(t.font) ? t.font : '__custom__'}
+          onChange={(event) => {
+            const val = event.target.value;
+            if (val !== '__custom__') {
+              setFont(val);
+              set('Fonte da tipografia', { font: val });
+            }
           }}
-          onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
           aria-label="Família tipográfica local"
-        />
-        <datalist id="amv-local-fonts">
-          {LOCAL_FONT_FAMILIES.map((fontName) => <option key={fontName} value={fontName} />)}
-        </datalist>
+        >
+          {LOCAL_FONT_FAMILIES.map((fontName) => (
+            <option key={fontName} value={fontName}>{fontName.replace(/ Variable$/, '')}</option>
+          ))}
+          {!LOCAL_FONT_FAMILIES.includes(t.font) && <option value="__custom__">{t.font} (sistema)</option>}
+        </select>
+      </label>
+      <label className="flex items-center justify-between py-1 text-xs">
+        <span className="text-muted">Itálico</span>
+        <input type="checkbox" className="accent-violet" checked={t.italic ?? false} onChange={(e) => set('Itálico', { italic: e.target.checked })} />
       </label>
       <NumField label="Tamanho" suffix="px" value={t.size} min={8} max={400} step={2} digits={0} onCommit={(v) => set('Tamanho do texto', { size: v })} />
       <NumField label="Peso" value={t.weight ?? 700} min={100} max={900} step={100} digits={0} onCommit={(v) => set('Peso da fonte', { weight: Math.round(v / 100) * 100 })} />
@@ -1049,8 +1083,14 @@ function TextSection({ clip, patch, session }: { clip: Clip; patch: (label: stri
       <label className="grid grid-cols-[1fr_140px] items-center gap-2 py-1 text-xs">
         <span className="text-muted">Preenchimento</span>
         <select className="h-7 rounded-control border border-line bg-base px-1 text-xs text-ink" value={t.fillStyle} onChange={(e) => set('Preenchimento tipográfico', { fillStyle: e.target.value as NonNullable<typeof t.fillStyle> })}>
-          <option value="solid">Cor sólida</option><option value="linear-gradient">Gradiente linear</option>
+          <option value="solid">Cor sólida</option>
+          <option value="linear-gradient">Gradiente linear</option>
+          <option value="hollow">Vazado (vídeo por dentro)</option>
         </select>
+      </label>
+      <label className="flex items-center justify-between py-1 text-xs">
+        <span className="text-muted">Faixa Katana Mangá (diagonal)</span>
+        <input type="checkbox" className="accent-violet" checked={t.slashBanner ?? false} onChange={(e) => set('Faixa Katana', { slashBanner: e.target.checked })} />
       </label>
       {t.fillStyle === 'linear-gradient' && (
         <>

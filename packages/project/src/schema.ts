@@ -108,7 +108,7 @@ export const TransformSchema = z.object({
     .default({ left: 0, top: 0, right: 0, bottom: 0 }),
 });
 
-export const BlendModeSchema = z.enum(['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'addition']);
+export const BlendModeSchema = z.enum(['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'addition', 'difference', 'exclusion', 'hardlight', 'dodge']);
 export const LayerMaskSchema = z.enum(['none', 'circle', 'left', 'right', 'top', 'bottom', 'subject-focus', 'manga-slash']);
 
 export const ClipAudioSchema = z.object({
@@ -185,6 +185,7 @@ export const TextContentSchema = z.object({
   manualText: z.string().nullable().default(null),
   translations: z.record(z.string()).default({}),
   font: z.string().default('Inter'),
+  italic: z.boolean().default(false),
   size: z.number().positive().default(64),
   color: z.string().default('#ffffff'),
   weight: z.number().int().min(100).max(900).default(700),
@@ -196,8 +197,10 @@ export const TextContentSchema = z.object({
   extrudeColor: z.string().default('#08080c'),
   chromaticAberration: z.number().min(0).max(20).default(0),
   sheen: z.boolean().default(false),
+  slashBanner: z.boolean().default(false),
   heroWord: z.boolean().default(false),
   heroFont: z.string().nullable().default(null),
+  heroItalic: z.boolean().default(false),
   heroScale: z.number().min(1).max(2).default(1.26),
   heroColor: z.string().nullable().default(null),
   heroTiltDeg: z.number().min(-15).max(15).default(0),
@@ -218,7 +221,7 @@ export const TextContentSchema = z.object({
   letterSpacing: z.number().min(-10).max(40).default(0),
   highlightColor: z.string().default('#ffd166'),
   highlightScale: z.number().min(1).max(2).default(1.12),
-  fillStyle: z.enum(['solid', 'linear-gradient']).default('solid'),
+  fillStyle: z.enum(['solid', 'linear-gradient', 'hollow']).default('solid'),
   gradientStartColor: z.string().default('#ffde59'),
   gradientEndColor: z.string().default('#ff4d9d'),
   glowColor: z.string().default('#ffde59'),

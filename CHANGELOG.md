@@ -1,5 +1,15 @@
 # Novidades
 
+## 0.8.0
+
+**Tipografia mesclada com o vídeo e com as cores do fundo, novas fontes reais de AMV, edição direta clicável/arrastável na tela de Preview, escuta isolada de qualquer clipe clicado, legenda de falas garantida, sincronia vocal cravada, arco Início–Meio–Fim e sons focados em golpes.**
+
+- **Tipografia Mesclada com o Vídeo, Cores do Fundo e Recortes:** embutidas offline `Russo One`, `Permanent Marker`, `Teko` 700, `Playfair Display Variable` (itálico), `Black Ops One` e `Bungee`; modos reais de mesclagem com o vídeo (`difference` / Inversão Negativa, `exclusion`, `hardlight`, `dodge`, `screen`, `overlay`) com paridade 100% entre Preview e FFmpeg; novo preenchimento **Texto Vazado (`hollow`)** deixando o vídeo/fogo brilhar por dentro das letras; **Faixa Katana Mangá** diagonal (zero caixas pretas retangulares nas letras); amostragem automática das cores dominantes da cena (`dominantColors`) para harmonizar gradiente, glow e Hero Word; e recortes de profundidade (`V2` + `behindCutout`) no Drop e nos picos de impacto da música.
+- **Edição Direta na Tela de Preview:** clique direto em qualquer texto ou camada sobreposta no vídeo para selecionar e arrastar na hora; 4 alças de canto para redimensionar + alça superior de rotação; duplo-clique abre editor de texto inline sobre o vídeo; e barra flutuante rápida na própria tela (fonte, estilo, mesclagem com o vídeo, cor, texto vazado, atrás de V2, ouvir cena e recortar V2).
+- **Isolar e Escutar o Clipe Clicado (Solo / Audition):** botão **Ouvir só este clipe** (`Headphones` + atalho `S`) direto no clipe selecionado na timeline (inclusive em clipes curtos), na barra rápida, no Preview e no Inspector — isola instantaneamente falas, efeitos, música ou o áudio original de uma cena de vídeo em V1, além de botão **Solo (`S`)** nos cabeçalhos de trilha.
+- **Sincronização Cravada + Legenda da Fala Garantida:** ancoragem exata de letras nos timestamps reais das palavras cantadas (cortando silêncio instrumental pré-vocal do Whisper sem VAD e dividindo pausas `>= 0,52 s`); prioridade para falas legendadas + transcrição rápida apenas das janelas curtas (`2–5 s`) das falas escolhidas em episódios longos (`>= 3 min`), exibidas em itálico cinematográfico limpo na base.
+- **Arco Completo (Início, Meio e Fim) + Sons Apenas dos Golpes:** progressão cronológica balanceada pelos 3 atos da luta com `fade_in` de abertura e `fade_out` de encerramento; novo modo padrão **Apenas golpes e impactos (`hits-only`)** com síntese `v2` (`hit` + `clash`) e micro-burst (`0,24 s`) do som real do golpe no anime sincronizado no impacto.
+
 ## 0.7.0
 
 **AMV Studio Pro: fontes reais embutidas, tipografia 3D / Hero Word / RGB Split / Sheen, auto-reframe de anime + Zoom-Through + Velocity suave, isolamento vocal + eco no drop, recorte de personagem em V2 com letra passando atrás e interface enxuta.**

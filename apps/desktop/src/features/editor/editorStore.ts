@@ -38,6 +38,10 @@ interface EditorState {
   inspectorOpenSeq: number;
   /** Clipe aberto no modal de edição rápida pela timeline. */
   editingClipId: string | null;
+  /** Clipe isolado (Solo/Audition) para escutar sem interferência da música/outras trilhas. */
+  soloClipId: string | null;
+  /** Quando definido, pausa automaticamente ao final da escuta isolada deste clipe. */
+  soloStopAtUs: number | null;
 
   bind(projectId: string): void;
   setZoom(z: number): void;
@@ -51,6 +55,7 @@ interface EditorState {
   setAssetDrag(d: AssetDrag | null): void;
   requestInspector(): void;
   setEditingClipId(id: string | null): void;
+  setSoloClip(id: string | null, stopAtUs?: number | null): void;
 }
 
 export const ZOOM_MIN = 2;
@@ -72,10 +77,12 @@ export const useEditor = create<EditorState>((set, get) => ({
   projectId: null,
   inspectorOpenSeq: 0,
   editingClipId: null,
+  soloClipId: null,
+  soloStopAtUs: null,
 
   bind(projectId) {
     if (get().projectId === projectId) return;
-    set({ projectId, playheadUs: 0, playing: false, selection: [], zoom: 60, editingClipId: null });
+    set({ projectId, playheadUs: 0, playing: false, selection: [], zoom: 60, editingClipId: null, soloClipId: null, soloStopAtUs: null });
   },
   setZoom(z) {
     set({ zoom: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) });
@@ -110,6 +117,9 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
   setEditingClipId(id) {
     set({ editingClipId: id });
+  },
+  setSoloClip(id, stopAtUs = null) {
+    set({ soloClipId: id, soloStopAtUs: id ? stopAtUs : null });
   },
 }));
 

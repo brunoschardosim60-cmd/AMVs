@@ -6,22 +6,23 @@
 
 export const SFX_SAMPLE_RATE = 48_000;
 
-export type SfxKind = 'impact' | 'hit' | 'whoosh' | 'riser';
+export type SfxKind = 'impact' | 'hit' | 'clash' | 'whoosh' | 'riser';
 
-export const SFX_KINDS: SfxKind[] = ['impact', 'hit', 'whoosh', 'riser'];
+export const SFX_KINDS: SfxKind[] = ['impact', 'hit', 'clash', 'whoosh', 'riser'];
 
 export const SFX_LABEL: Record<SfxKind, string> = {
   impact: 'Impacto (drop)',
-  hit: 'Golpe',
+  hit: 'Golpe pesado (soco/impacto)',
+  clash: 'Golpe cortante (espada/energia)',
   whoosh: 'Whoosh',
   riser: 'Subida (antes do drop)',
 };
 
 /** Duração (s) de cada efeito: a montagem precisa saber para posicioná-lo. */
-export const SFX_DURATION_S: Record<SfxKind, number> = { impact: 1.4, hit: 0.3, whoosh: 0.6, riser: 2.0 };
+export const SFX_DURATION_S: Record<SfxKind, number> = { impact: 1.4, hit: 0.32, clash: 0.34, whoosh: 0.6, riser: 2.0 };
 
 /** Instante (s, dentro do efeito) em que ele "acontece": o pico do golpe ou o fim da subida. */
-export const SFX_ANCHOR_S: Record<SfxKind, number> = { impact: 0.004, hit: 0.004, whoosh: 0.42, riser: 2.0 };
+export const SFX_ANCHOR_S: Record<SfxKind, number> = { impact: 0.004, hit: 0.004, clash: 0.004, whoosh: 0.42, riser: 2.0 };
 
 function rng(seed: number) {
   let s = (seed >>> 0) || 1;
@@ -91,15 +92,41 @@ export function renderSfx(kind: SfxKind, seed = 1): Float32Array {
 
   if (kind === 'hit') {
     let phase = 0;
+    let subPhase = 0;
     const lp = new Svf();
+    const bp = new Svf();
     for (let i = 0; i < n; i++) {
       const t = i / SFX_SAMPLE_RATE;
-      phase += (2 * Math.PI * (60 + 140 * Math.exp(-t / 0.025))) / SFX_SAMPLE_RATE;
-      const body = Math.sin(phase) * Math.exp(-t / 0.07);
-      const slap = lp.step(noise(), 4500, 0.8).low * Math.exp(-t / 0.018);
-      out[i] = Math.tanh(1.4 * (body + slap * 0.9));
+      phase += (2 * Math.PI * (52 + 185 * Math.exp(-t / 0.022))) / SFX_SAMPLE_RATE;
+      subPhase += (2 * Math.PI * (38 + 45 * Math.exp(-t / 0.04))) / SFX_SAMPLE_RATE;
+      const body = Math.sin(phase) * Math.exp(-t / 0.072) + Math.sin(subPhase) * 0.65 * Math.exp(-t / 0.085);
+      const nSample = noise();
+      const slap = lp.step(nSample, 4800, 0.75).low * Math.exp(-t / 0.016);
+      const snap = bp.step(nSample, 2200, 0.55).band * Math.exp(-t / 0.011) * 0.75;
+      out[i] = Math.tanh(1.65 * (body + slap * 0.95 + snap));
     }
     return finish(out, 0.9, 0.02);
+  }
+
+  if (kind === 'clash') {
+    // Golpe metálico/energia estilo anime (choque de lâminas + sub curto)
+    let p1 = 0;
+    let p2 = 0;
+    let p3 = 0;
+    let subP = 0;
+    const hp = new Svf();
+    for (let i = 0; i < n; i++) {
+      const t = i / SFX_SAMPLE_RATE;
+      p1 += (2 * Math.PI * 1480) / SFX_SAMPLE_RATE;
+      p2 += (2 * Math.PI * 2390) / SFX_SAMPLE_RATE;
+      p3 += (2 * Math.PI * 3710) / SFX_SAMPLE_RATE;
+      subP += (2 * Math.PI * (62 + 120 * Math.exp(-t / 0.02))) / SFX_SAMPLE_RATE;
+      const ring = (Math.sin(p1) * 0.45 + Math.sin(p2) * 0.35 + Math.sin(p3) * 0.25) * Math.exp(-t / 0.095);
+      const sub = Math.sin(subP) * 0.85 * Math.exp(-t / 0.055);
+      const spark = hp.step(noise(), 3200, 0.6).high * Math.exp(-t / 0.022) * 0.85;
+      out[i] = Math.tanh(1.55 * (sub + ring + spark));
+    }
+    return finish(out, 0.89, 0.025);
   }
 
   if (kind === 'whoosh') {
@@ -151,4 +178,4 @@ export function toWav(samples: Float32Array, sampleRate = SFX_SAMPLE_RATE): Uint
 }
 
 /** Nome de arquivo estável e versionado (se o som mudar, a versão sobe e o app regrava). */
-export const sfxFileName = (kind: SfxKind) => `amv-sfx-${kind}-v1.wav`;
+export const sfxFileName = (kind: SfxKind) => `amv-sfx-${kind}-v2.wav`;

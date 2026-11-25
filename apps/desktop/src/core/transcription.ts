@@ -243,6 +243,73 @@ export async function transcribeMediaAsset(
   }
 }
 
+/**
+ * Transcreve rapidamente apenas uma janela curta (`startS..endS`, ex.: 2–5 s) de um episódio.
+ * Ideal para garantir legenda nas falas selecionadas em episódios longos (24 min) sem esperar
+ * a transcrição integral do arquivo inteiro.
+ */
+export async function transcribeAudioSlice(
+  platform: Platform,
+  asset: Asset,
+  audioIndex: number,
+  startS: number,
+  endS: number,
+  options: { model?: string; language?: string; signal: AbortSignal },
+): Promise<{ text: string; language: string | null } | null> {
+  if (asset.status === 'missing' || endS <= startS) return null;
+  const padStart = Math.max(0, startS - 0.25);
+  const padDur = Math.max(0.5, Math.min(12, endS - padStart + 0.3));
+  const cacheDir = joinPath(await platform.cacheDir(), 'transcription-slices');
+  await platform.fs.mkdir(cacheDir);
+  const cacheKey = (asset.hash || asset.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+  const sliceKey = `${cacheKey}-s${audioIndex}-${Math.round(padStart * 100)}-${Math.round(padDur * 100)}`;
+  const jsonPath = joinPath(cacheDir, `${sliceKey}.json`);
+  const wavPath = joinPath(cacheDir, `${sliceKey}.wav`);
+  try {
+    if (await platform.fs.exists(jsonPath)) {
+      try {
+        const cached = JSON.parse(new TextDecoder().decode(await platform.fs.readFile(jsonPath))) as { text?: string; language?: string | null };
+        if (cached && typeof cached.text === 'string' && cached.text.trim()) {
+          return { text: cached.text.trim(), language: cached.language ?? null };
+        }
+      } catch {}
+    }
+    const extracted = await platform.runner.run(
+      'ffmpeg',
+      [
+        '-y', '-hide_banner', '-v', 'error',
+        '-ss', padStart.toFixed(3),
+        '-t', padDur.toFixed(3),
+        '-i', asset.path,
+        '-map', `0:${audioIndex}`,
+        '-vn',
+        '-af', 'pan=mono|c0=0.5*c0+0.5*c1,highpass=f=120,lowpass=f=7200',
+        '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-f', 'wav', wavPath,
+      ],
+      { signal: options.signal },
+    );
+    if (options.signal.aborted) throw new DOMException('transcrição cancelada', 'AbortError');
+    if (extracted.code !== 0 || !(await platform.fs.exists(wavPath)) || (await platform.fs.size(wavPath)) <= 44) return null;
+    const connection = await platform.analyzer.start();
+    const transcript = await platform.analyzer.transcribe(
+      connection,
+      { path: wavPath, model: options.model ?? 'small', vadFilter: false, ...(options.language ? { language: options.language } : {}) },
+      { signal: options.signal },
+    );
+    const joined = transcript.segments.map((seg) => seg.text.trim()).filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    if (!joined) return null;
+    const out = { text: joined, language: transcript.language ?? null };
+    try {
+      await platform.fs.writeFile(jsonPath, new TextEncoder().encode(JSON.stringify(out)));
+    } catch {}
+    return out;
+  } finally {
+    try {
+      if (await platform.fs.exists(wavPath)) await platform.fs.remove(wavPath);
+    } catch {}
+  }
+}
+
 const TRANSLATE_CACHE_MAX = 5000;
 let diskCacheLoaded = false;
 const diskTranslateCache = new Map<string, string>();

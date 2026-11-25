@@ -1217,9 +1217,19 @@ describe('integração das melhorias do patch', () => {
     ep.analysis.speech = [
       { startS: 10, endS: 12, kind: 'fala', confidence: 0.92, text: 'Eu não vou perder aqui', language: 'por', impact: 0.95 },
     ];
-    const p = project();
+    let p = project();
+    for (const [sid, dur] of [['sfx-impact', 1.4], ['sfx-hit', 0.32], ['sfx-clash', 0.34], ['sfx-whoosh', 0.6], ['sfx-riser', 2]] as const) {
+      p = applyCommand(p, {
+        type: 'asset.add',
+        asset: {
+          id: sid, name: sid, path: `/m/${sid}`, hash: sid, kind: 'audio', status: 'ok', error: null, importedAt: '', tags: ['sfx'], favorite: false,
+          probe: { container: 'wav', durationUs: Math.round(dur * S), sizeBytes: 1, bitRate: null, video: null, audio: [{ index: 0, codec: 'pcm_s16le', sampleRate: 48000, channels: 1, channelLayout: null, language: null, title: null }], subtitles: [], tags: {} },
+        },
+      }).project;
+    }
     const r = generateAmv(p, music(), [ep], {
       ...base,
+      hitSync: true,
       durationS: 20,
       musicStartS: 26, // drop em 40s (14s no vídeo)
       useSpeech: true,
@@ -1238,10 +1248,11 @@ describe('integração das melhorias do patch', () => {
     const lyricClip = textClips.find((c) => /letra da música|palavra da letra/i.test(c.reason ?? ''));
     expect(speechClip).toBeDefined();
     expect(lyricClip).toBeDefined();
-    // Fala e letra devem ter posição vertical, fonte e estilo de fundo distintos
+    // Fala e letra devem ter posição vertical, fonte, itálico e cor distintos (sem caixa preta feia)
     expect(speechClip!.transform.y).not.toBe(lyricClip!.transform.y);
     expect(speechClip!.text?.font).not.toBe(lyricClip!.text?.font);
-    expect(speechClip!.text?.background).toBe('box');
+    expect(speechClip!.text?.italic).toBe(true);
+    expect(lyricClip!.text?.italic).toBe(false);
     expect(lyricClip!.text?.background).toBe('none');
   });
 
@@ -1292,9 +1303,19 @@ describe('integração das melhorias do patch', () => {
     ep.analysis.speech = [
       { startS: 10, endS: 12, kind: 'fala', confidence: 0.95, text: 'Agora tudo acaba aqui!', language: 'por', impact: 0.96 },
     ];
-    const p = project();
+    let p = project();
+    for (const [sid, dur] of [['sfx-impact', 1.4], ['sfx-hit', 0.32], ['sfx-clash', 0.34], ['sfx-whoosh', 0.6], ['sfx-riser', 2]] as const) {
+      p = applyCommand(p, {
+        type: 'asset.add',
+        asset: {
+          id: sid, name: sid, path: `/m/${sid}`, hash: sid, kind: 'audio', status: 'ok', error: null, importedAt: '', tags: ['sfx'], favorite: false,
+          probe: { container: 'wav', durationUs: Math.round(dur * S), sizeBytes: 1, bitRate: null, video: null, audio: [{ index: 0, codec: 'pcm_s16le', sampleRate: 48000, channels: 1, channelLayout: null, language: null, title: null }], subtitles: [], tags: {} },
+        },
+      }).project;
+    }
     const r = generateAmv(p, music(), [ep], {
       ...base,
+      hitSync: true,
       durationS: 20,
       musicStartS: 26, // drop em 40s => 14s na timeline
       useSpeech: true,
@@ -1317,5 +1338,110 @@ describe('integração das melhorias do patch', () => {
     expect(v2Clips.length).toBeGreaterThanOrEqual(1);
     expect(v2Clips[0]!.mask).toBe('subject-focus');
     expect(behindLyric).toBeDefined();
+  });
+
+  it('sincroniza cores da tipografia com dominantColors da cena, mescla anime-blend, prioriza fala legendada, aplica fade_in/fade_out e sfxMode hits-only', () => {
+    const ep = episode('ep1', 120, 2);
+    ep.analysis.speech = [
+      // Grito sem texto (ruído) com impacto alto vs fala real legendada: deve escolher a fala legendada
+      { startS: 8, endS: 9.8, kind: 'grito', confidence: 0.98, text: null, impact: 0.99 },
+      { startS: 12, endS: 14.2, kind: 'fala', confidence: 0.9, text: 'Esse golpe vai decidir tudo!', language: 'por', impact: 0.85 },
+    ];
+    for (const sh of ep.analysis.shots) {
+      sh.tags = ['ação', 'impacto'];
+      sh.motion = 0.82;
+      sh.peakS = sh.startS;
+    }
+    const firstKey = shotKey(ep.analysis.shots[0]!.startS);
+    ep.vision = {
+      version: 'v2',
+      model: 'local',
+      shots: Object.fromEntries(
+        ep.analysis.shots.slice(0, 25).map((sh) => [
+          shotKey(sh.startS),
+          {
+            characters: ['Shinra'],
+            action: 'combate' as const,
+            fight: true,
+            note: 'Fogo intenso',
+            confidence: 0.9,
+            local: {
+              version: 3 as const,
+              samples: 4,
+              lumaGrid: [],
+              edgeGrid: [],
+              colorHistogram: [],
+              dominantColors: ['#ff5500', '#221108'],
+              brightness: 0.62,
+              saturation: 0.78,
+              entropy: 0.6,
+              edgeDensity: 0.5,
+              centerOfVisualMass: [0.5, 0.4],
+              subjectFocus: [0.5, 0.36] as [number, number],
+              subjectFocusConfidence: 0.85,
+              temporalMotion: 0.8,
+              globalShift: [0, 0] as [number, number],
+              globalMotion: 0.5,
+              motionEvents: [],
+              motionConfidence: 0.8,
+              fingerprint: firstKey,
+              sceneType: 'action' as const,
+              sceneTypeConfidence: 0.9,
+            },
+          },
+        ]),
+      ),
+    };
+    let p = project();
+    for (const [sid, dur] of [['sfx-impact', 1.4], ['sfx-hit', 0.32], ['sfx-clash', 0.34], ['sfx-whoosh', 0.6], ['sfx-riser', 2]] as const) {
+      p = applyCommand(p, {
+        type: 'asset.add',
+        asset: {
+          id: sid, name: sid, path: `/m/${sid}`, hash: sid, kind: 'audio', status: 'ok', error: null, importedAt: '', tags: ['sfx'], favorite: false,
+          probe: { container: 'wav', durationUs: Math.round(dur * S), sizeBytes: 1, bitRate: null, video: null, audio: [{ index: 0, codec: 'pcm_s16le', sampleRate: 48000, channels: 1, channelLayout: null, language: null, title: null }], subtitles: [], tags: {} },
+        },
+      }).project;
+    }
+    const r = generateAmv(p, music(), [ep], {
+      ...base,
+      hitSync: true,
+      durationS: 20,
+      musicStartS: 26,
+      useSpeech: true,
+      voiceMoments: 1,
+      showText: true,
+      showSpeechCaptions: true,
+      useEffects: true,
+      useSfx: true,
+      sfxMode: 'hits-only',
+      animeHitAudio: true,
+      sfxAssets: { impact: 'sfx-impact', hit: 'sfx-hit', clash: 'sfx-clash', whoosh: 'sfx-whoosh', riser: 'sfx-riser' },
+      lyricStyle: 'anime-blend',
+      lyrics: [{ startS: 30, endS: 32, text: 'Chama imortal' }],
+    });
+    const out = applyCommand(p, { type: 'batch', commands: r.commands }).project;
+    const v1Track = out.tracks.find((t) => t.name === 'V1')!;
+    const textTrack = out.tracks.find((t) => t.kind === 'text')!;
+    const sfxTrack = out.tracks.find((t) => t.name === 'Efeitos')!;
+    const voiceTrack = out.tracks.find((t) => t.name === 'Vozes')!;
+
+    const v1Clips = out.clips.filter((c) => c.trackId === v1Track.id).sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+    expect(v1Clips[0]!.effects.some((e) => e.effect === 'fade_in')).toBe(true);
+    expect(v1Clips.at(-1)!.effects.some((e) => e.effect === 'fade_out')).toBe(true);
+
+    const speechCap = out.clips.find((c) => c.trackId === textTrack.id && c.reason === 'Legenda da fala');
+    expect(speechCap?.text?.text).toBe('Esse golpe vai decidir tudo!');
+    expect(speechCap?.text?.background).toBe('none');
+
+    const lyricCap = out.clips.find((c) => c.trackId === textTrack.id && /letra da música/i.test(c.reason ?? ''));
+    expect(lyricCap?.blendMode).toBe('difference');
+    expect(lyricCap?.text?.fillStyle).toBe('hollow');
+    expect(lyricCap?.text?.glowColor).not.toBe('#ffffff'); // sincronizou com o laranja dominante da cena
+
+    const sfxClips = out.clips.filter((c) => c.trackId === sfxTrack.id);
+    expect(sfxClips.some((c) => c.assetId === 'sfx-whoosh' || c.assetId === 'sfx-riser')).toBe(false);
+    expect(sfxClips.some((c) => c.assetId === 'sfx-hit' || c.assetId === 'sfx-clash')).toBe(true);
+    const animeHitBursts = out.clips.filter((c) => c.trackId === voiceTrack.id && c.label === 'Golpe anime');
+    expect(animeHitBursts.length).toBeGreaterThan(0);
   });
 });

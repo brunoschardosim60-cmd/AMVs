@@ -4,7 +4,7 @@ import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVisi
 import { alignUntimedLyrics, alignUntimedLyricsWithFallback, promoteAlignedCuesForTypography } from '@amv/subtitles';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { loadCreativeProfiles, saveCreativeProfiles } from '../../core/creativeProfiles';
-import { extractTranscriptWords, mergeSpeechSegments, transcribeMediaAsset, translateTextsAuto } from '../../core/transcription';
+import { extractTranscriptWords, mergeSpeechSegments, transcribeAudioSlice, transcribeMediaAsset, translateTextsAuto } from '../../core/transcription';
 import { getAnalysisReadiness } from './analysis-readiness';
 import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2, Zap } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -21,12 +21,14 @@ import { getPlayer } from '../editor/Preview';
 import { TextLookSample } from '../editor/SubtitlesPanel';
 
 const TYPOGRAPHY_PREVIEW_PILLS: { id: LyricTypographyStyle; label: string; sample: string }[] = [
-  { id: 'anime-impact', label: 'Anime · impacto', sample: 'IMPACTO' },
-  { id: 'anime-neon', label: 'Anime · neon', sample: 'NEON' },
+  { id: 'anime-blend', label: 'Anime · mesclado c/ vídeo', sample: 'FOGO VIVO' },
+  { id: 'anime-impact', label: 'Anime · impacto brutal', sample: 'IMPACTO' },
+  { id: 'anime-katana', label: 'Anime · katana brush', sample: 'KATANA' },
+  { id: 'anime-neon', label: 'Anime · neon vazado', sample: 'NEON' },
   { id: 'anime-gold-epic', label: 'Anime · ouro épico', sample: 'ÉPICO' },
-  { id: 'anime-manga', label: 'Anime · mangá', sample: 'MANGÁ' },
-  { id: 'lyrics-cinematic', label: 'Letras cinematográficas', sample: 'CINEMA' },
-  { id: 'anime-dialogue', label: 'Anime · diálogo', sample: 'DIÁLOGO' },
+  { id: 'anime-manga', label: 'Anime · slash mangá', sample: 'MANGÁ' },
+  { id: 'lyrics-cinematic', label: 'Cinema editorial', sample: 'CINEMA' },
+  { id: 'anime-dialogue', label: 'Fala do personagem', sample: 'DIÁLOGO' },
 ];
 
 const ICONS: Record<StyleId, typeof Flame> = { hype: Flame, rapido: Zap, superacao: Sparkles, letra: Type, discurso: Mic, emocional: Heart };
@@ -92,6 +94,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [adaptiveSpeed, setAdaptiveSpeed] = useState(true);
   const [beatOffsetMs, setBeatOffsetMs] = useState(0);
   const [useSfx, setUseSfx] = useState(true);
+  const [sfxMode, setSfxMode] = useState<'hits-only' | 'full' | 'off'>('hits-only');
   const [characters, setCharacters] = useState<string[]>([]);
   const [characterDrafts, setCharacterDrafts] = useState<Record<string, string>>({});
   const [visionScope, setVisionScope] = useState<VisionScope>('fights');
@@ -113,7 +116,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
   const [matchLyrics, setMatchLyrics] = useState(false);
   const [lyricSceneMatches, setLyricSceneMatches] = useState<NonNullable<GenerateOptions['lyricSceneMatches']>>({});
   const [suggestedMatches, setSuggestedMatches] = useState<NonNullable<GenerateOptions['lyricSceneMatches']> | null>(null);
-  const [lyricStyle, setLyricStyle] = useState<LyricTypographyStyle>('anime-impact');
+  const [lyricStyle, setLyricStyle] = useState<LyricTypographyStyle>('anime-blend');
   const [seed, setSeed] = useState(1);
   const [result, setResult] = useState<{
     warnings: string[];
@@ -688,14 +691,40 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         }),
       });
       let rawCues: Cue[] = transcript.segments
-        .map((segment) => ({
-          startS: segment.start,
-          endS: segment.end,
-          text: segment.text.replace(/\s+/g, ' ').trim(),
-          words: (segment.words ?? [])
-            .filter((w) => w.text.trim() && w.end > w.start)
-            .map((w) => ({ startS: w.start, endS: w.end, text: w.text.trim(), source: 'whisper' as const, confidence: 0.85 })),
-        }))
+        .flatMap((segment) => {
+          const segWords = (segment.words ?? [])
+            .filter((w) => w.text.trim() && Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start)
+            .sort((a, b) => a.start - b.start);
+          if (!segWords.length) {
+            const clean = segment.text.replace(/\s+/g, ' ').trim();
+            return clean.length >= 2 && segment.end > segment.start
+              ? [{ startS: segment.start, endS: segment.end, text: clean }]
+              : [];
+          }
+          // Divide segmentos longos em pausas vocais (>= 0,52 s) e ancora exatamente no início/fim da voz cantada
+          const groups: (typeof segWords)[] = [[segWords[0]!]];
+          for (let i = 1; i < segWords.length; i++) {
+            const prev = segWords[i - 1]!;
+            const curr = segWords[i]!;
+            if (curr.start - prev.end >= 0.52 || groups[groups.length - 1]!.length >= 8) {
+              groups.push([curr]);
+            } else {
+              groups[groups.length - 1]!.push(curr);
+            }
+          }
+          return groups.map((grp) => ({
+            startS: grp[0]!.start,
+            endS: grp[grp.length - 1]!.end,
+            text: grp.map((w) => w.text.trim()).join(' ').replace(/\s+/g, ' ').trim(),
+            words: grp.map((w) => ({
+              startS: w.start,
+              endS: w.end,
+              text: w.text.trim(),
+              source: 'whisper' as const,
+              confidence: 0.92,
+            })),
+          }));
+        })
         .filter((c) => c.text.length >= 2 && c.endS > c.startS);
       if (!rawCues.length) {
         toast({ tone: 'warn', title: 'Nenhuma letra reconhecida na música', body: 'Essa faixa parece instrumental ou tem vocais muito baixos. Cole a letra manualmente.' });
@@ -1055,59 +1084,6 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         };
       });
 
-      const speechTranslations: Record<string, string> = {};
-      const wantsSpeech = voiceMoments > 0 || selectedStyle === 'discurso';
-      const speechController = wantsSpeech ? new AbortController() : null;
-      const transcribedAssetIds = new Set<string>();
-      if (speechController) {
-        transcriptionAbort.current = speechController;
-        let completed = 0;
-        for (const episodeInput of directorInputs) {
-          const existingWithText = episodeInput.analysis.speech.filter((s) => s.text && s.text.trim().length >= 3);
-          const hasUsableSubtitles = existingWithText.length >= 3
-            && (voiceLang !== 'pt' || existingWithText.some((s) => s.language?.toLowerCase().startsWith('pt') || s.language?.toLowerCase().startsWith('por')));
-          if (hasUsableSubtitles) {
-            completed++;
-            continue;
-          }
-          const asset = selectedEpisodes.find((item) => item.id === episodeInput.assetId);
-          const streams = asset?.probe?.audio ?? [];
-          const audioIndex = pickAudioStreamByLanguage(streams, voiceLang)
-            ?? (voiceLang === 'pt' && streams.length > 1 ? undefined : streams[0]?.index);
-          if (!asset || audioIndex === undefined) {
-            automaticSpeechWarnings.push(`Não encontrei uma faixa de áudio para reconhecer as falas de ${episodeInput.name}.`);
-            completed++;
-            continue;
-          }
-          setGenerationStep(`Entendendo as falas do anime · ${episodeInput.name}`);
-          setGenerationProgress(27 + (completed / Math.max(1, directorInputs.length)) * 5);
-          try {
-            const epDuration = Math.max(1, (asset.probe?.durationUs ?? 0) / S);
-            const transcript = await transcribeMediaAsset(platform!, asset, audioIndex, {
-              model: 'small',
-              vadFilter: true,
-              signal: speechController.signal,
-              onProgress: ({ stage, progress, duration: d }) => {
-                setGenerationStep(`${stage === 'extracting' ? 'Extraindo áudio' : stage === 'preparing' ? 'Preparando Whisper' : 'Reconhecendo falas'} · ${episodeInput.name}`);
-                setGenerationProgress(27 + ((completed + Math.min(1, progress / Math.max(1, d || epDuration))) / Math.max(1, directorInputs.length)) * 5);
-              },
-            });
-            const fallbackLang = streams.find((stream) => stream.index === audioIndex)?.language
-              ?? streams.find((stream) => stream.index === audioIndex)?.title
-              ?? null;
-            episodeInput.analysis.speech = mergeSpeechSegments(episodeInput.analysis.speech, transcript, fallbackLang);
-            transcribedAssetIds.add(episodeInput.assetId);
-            if (!episodeInput.analysis.speech.some((s) => !!s.text?.trim())) {
-              automaticSpeechWarnings.push(`O reconhecimento automático não encontrou falas claras em ${episodeInput.name}; usei apenas os textos existentes.`);
-            }
-          } catch (error) {
-            if ((error as Error).name === 'AbortError') throw error;
-            automaticSpeechWarnings.push(`Não consegui transcrever ${episodeInput.name}: ${(error as Error).message}`);
-          }
-          completed++;
-        }
-      }
-
       const annotationExclusions = session.project.sceneAnnotations
         .filter((annotation) => annotation.excludedFromAuto)
         .map((annotation) => annotation.assetId + '@' + annotation.sceneKey);
@@ -1122,6 +1098,89 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         characters,
         editorialDirection,
       }, music);
+
+      const speechTranslations: Record<string, string> = {};
+      const wantsSpeech = voiceMoments > 0 || selectedStyle === 'discurso';
+      const speechController = wantsSpeech ? new AbortController() : null;
+      const transcribedAssetIds = new Set<string>();
+      if (speechController) {
+        transcriptionAbort.current = speechController;
+        let completed = 0;
+        for (const episodeInput of directorInputs) {
+          const asset = selectedEpisodes.find((item) => item.id === episodeInput.assetId);
+          const streams = asset?.probe?.audio ?? [];
+          const audioIndex = pickAudioStreamByLanguage(streams, voiceLang)
+            ?? (voiceLang === 'pt' && streams.length > 1 ? undefined : streams[0]?.index);
+          const epDuration = Math.max(1, (asset?.probe?.durationUs ?? 0) / S);
+          const nearFightSpeech = (s: SpeechSegment) =>
+            editorialFootagePlan.mode !== 'fight'
+            || editorialFootagePlan.pool.some((entry) => entry.ep.assetId === episodeInput.assetId && s.startS >= entry.seq.startS - 15 && s.endS <= entry.seq.endS + 5);
+          const relevantWithText = episodeInput.analysis.speech.filter((s) => nearFightSpeech(s) && s.text && s.text.trim().length >= 3);
+          const hasUsableSubtitles = relevantWithText.length >= Math.max(2, voiceMoments)
+            && (voiceLang !== 'pt' || relevantWithText.some((s) => s.language?.toLowerCase().startsWith('pt') || s.language?.toLowerCase().startsWith('por')));
+          if (hasUsableSubtitles) {
+            completed++;
+            continue;
+          }
+          if (!asset || audioIndex === undefined) {
+            automaticSpeechWarnings.push(`Não encontrei uma faixa de áudio para reconhecer as falas de ${episodeInput.name}.`);
+            completed++;
+            continue;
+          }
+          setGenerationStep(`Entendendo as falas do anime · ${episodeInput.name}`);
+          setGenerationProgress(27 + (completed / Math.max(1, directorInputs.length)) * 5);
+          try {
+            // Em episódios longos (>= 3 min) com momentos de fala já detectados por voz, transcreve apenas
+            // as janelas curtas candidatas (2–5 s cada) em vez do episódio inteiro de 24 min.
+            const untitledRelevant = episodeInput.analysis.speech
+              .filter((s) => !s.text?.trim() && s.endS - s.startS >= 0.6 && s.endS - s.startS <= 6 && nearFightSpeech(s))
+              .sort((a, b) => scoreSpeechCandidate(b) - scoreSpeechCandidate(a))
+              .slice(0, selectedStyle === 'discurso' ? 10 : Math.max(4, voiceMoments * 2));
+            if (epDuration >= 180 && untitledRelevant.length > 0) {
+              const fallbackLang = streams.find((stream) => stream.index === audioIndex)?.language
+                ?? streams.find((stream) => stream.index === audioIndex)?.title
+                ?? null;
+              let slicesRecognized = 0;
+              for (const [sliceIdx, targetSeg] of untitledRelevant.entries()) {
+                setGenerationStep(`Transcrevendo fala ${sliceIdx + 1}/${untitledRelevant.length} · ${episodeInput.name}`);
+                const res = await transcribeAudioSlice(platform!, asset, audioIndex, targetSeg.startS, targetSeg.endS, {
+                  model: 'small',
+                  signal: speechController.signal,
+                });
+                if (res?.text.trim()) {
+                  targetSeg.text = res.text.trim();
+                  targetSeg.language = res.language ?? fallbackLang;
+                  targetSeg.impact = Math.max(targetSeg.impact, impactScore(targetSeg.text));
+                  slicesRecognized++;
+                }
+              }
+              if (slicesRecognized > 0) transcribedAssetIds.add(episodeInput.assetId);
+            } else {
+              const transcript = await transcribeMediaAsset(platform!, asset, audioIndex, {
+                model: 'small',
+                vadFilter: true,
+                signal: speechController.signal,
+                onProgress: ({ stage, progress, duration: d }) => {
+                  setGenerationStep(`${stage === 'extracting' ? 'Extraindo áudio' : stage === 'preparing' ? 'Preparando Whisper' : 'Reconhecendo falas'} · ${episodeInput.name}`);
+                  setGenerationProgress(27 + ((completed + Math.min(1, progress / Math.max(1, d || epDuration))) / Math.max(1, directorInputs.length)) * 5);
+                },
+              });
+              const fallbackLang = streams.find((stream) => stream.index === audioIndex)?.language
+                ?? streams.find((stream) => stream.index === audioIndex)?.title
+                ?? null;
+              episodeInput.analysis.speech = mergeSpeechSegments(episodeInput.analysis.speech, transcript, fallbackLang);
+              transcribedAssetIds.add(episodeInput.assetId);
+            }
+            if (!episodeInput.analysis.speech.some((s) => !!s.text?.trim())) {
+              automaticSpeechWarnings.push(`O reconhecimento automático não encontrou falas claras em ${episodeInput.name}; usei apenas os textos existentes.`);
+            }
+          } catch (error) {
+            if ((error as Error).name === 'AbortError') throw error;
+            automaticSpeechWarnings.push(`Não consegui transcrever ${episodeInput.name}: ${(error as Error).message}`);
+          }
+          completed++;
+        }
+      }
 
       const targetLanguage: Record<string, string> = {
         'pt-BR': 'português brasileiro',
@@ -1205,7 +1264,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       setGenerationProgress(38);
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      if (useSfx) {
+      const effectiveUseSfx = useSfx && sfxMode !== 'off';
+      if (effectiveUseSfx) {
         try {
           sfxAssets = await session.ensureSfx();
         } catch (e) {
@@ -1217,7 +1277,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         effectiveLyricSceneMatches = { ...effectiveLyricSceneMatches };
         for (const [scene, cues] of Object.entries(suggestedMatches)) effectiveLyricSceneMatches[scene] = { ...(effectiveLyricSceneMatches[scene] ?? {}), ...cues };
       }
-      const opts: GenerateOptions = { useSfx, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: resolvedLyrics, lyricSceneMatches: effectiveLyricSceneMatches, lyricStyle, lyricDisplayMode: musicDriveMode === 'lyric-kinetic' ? 'kinetic-words' : 'rhythmic-phrases', speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, speechVisualMode, useEffects, showText, showSpeechCaptions, depthCutoutOnDrop, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
+      const opts: GenerateOptions = { useSfx: effectiveUseSfx, sfxMode, animeHitAudio: true, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: resolvedLyrics, lyricSceneMatches: effectiveLyricSceneMatches, lyricStyle, lyricDisplayMode: musicDriveMode === 'lyric-kinetic' ? 'kinetic-words' : 'rhythmic-phrases', speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, speechVisualMode, useEffects, showText, showSpeechCaptions, depthCutoutOnDrop, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
       const m = musics.find((a) => a.id === musicId)!;
       const suggestedEditorialRange = chosenStart !== null
         ? null
@@ -2323,8 +2383,26 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                   </select>
                 </label>
               )}
-              <label className="flex items-center gap-2">
-                <input type="checkbox" className="accent-violet" checked={useSfx} onChange={(e) => setUseSfx(e.target.checked)} /> Efeitos sonoros (impacto, subida, whoosh)
+              <label className="flex items-center justify-between gap-2">
+                <span>Sons de impacto</span>
+                <select
+                  className="h-7 rounded-control border border-line bg-base px-1.5 text-xs"
+                  value={useSfx ? sfxMode : 'off'}
+                  onChange={(e) => {
+                    const v = e.target.value as 'hits-only' | 'full' | 'off';
+                    if (v === 'off') {
+                      setUseSfx(false);
+                      setSfxMode('off');
+                    } else {
+                      setUseSfx(true);
+                      setSfxMode(v);
+                    }
+                  }}
+                >
+                  <option value="hits-only">Apenas golpes e impactos (imersão)</option>
+                  <option value="full">Completo (+ subida e whoosh)</option>
+                  <option value="off">Desligado</option>
+                </select>
               </label>
               <label className="flex items-center gap-2">
                 <input type="checkbox" className="accent-violet" checked={useEffects} onChange={(e) => setUseEffects(e.target.checked)} />

@@ -99,10 +99,11 @@ describe('subtitle preview/export parity', () => {
     expect(clampTimelineHeight(500, 600)).toBe(320);
     expect(clampTimelineHeight(500, 300)).toBe(96);
   });
-  it('renders pro typography effects (3D extrude, RGB split, outer outline, hero word, sheen) and marks sheen/RGB as animated', () => {
+  it('renders pro typography effects (3D extrude, RGB split, outer outline, hero word, hollow video-blend, estimateTextBounds)', () => {
     const project = createProject({ name: 'ProText' });
     const clip = subtitleClip(project, 'text', 0, 2e6, 'Nunca vou recuar', 'anime-impact');
-    expect(clip.text?.font).toBe('Anton');
+    expect(clip.text?.font).toBe('Russo One');
+    expect(clip.text?.heroFont).toBe('Permanent Marker');
     expect(clip.text?.heroWord).toBe(true);
     expect(clip.text?.extrudeDepth).toBeGreaterThan(0);
     expect(textIsAnimated(clip)).toBe(true);
@@ -124,7 +125,15 @@ describe('subtitle preview/export parity', () => {
       strokeText() { strokes.push(String(this.strokeStyle)); },
     };
     drawTextLayer(ctx as unknown as CanvasRenderingContext2D, clip, 1920, 1080, 1, evalClipLook(clip, 0.1, 2), 0.1);
-    expect(fontsUsed.some((f) => f.includes('Anton'))).toBe(true);
+    expect(fontsUsed.some((f) => f.includes('Russo One'))).toBe(true);
+    expect(fontsUsed.some((f) => f.includes('Permanent Marker'))).toBe(true);
     expect(strokes).toContain('#ff3355');
+
+    const blendClip = subtitleClip(project, 'text', 0, 2e6, 'Pele clara', 'anime-blend');
+    expect(blendClip.blendMode).toBe('difference');
+    expect(blendClip.text?.fillStyle).toBe('hollow');
+    expect(blendClip.text?.heroItalic).toBe(true);
+    drawTextLayer(ctx as unknown as CanvasRenderingContext2D, blendClip, 1920, 1080, 1, evalClipLook(blendClip, 0.2, 2), 0.2);
+    expect(fontsUsed.some((f) => f.includes('italic') && f.includes('Playfair Display Variable'))).toBe(true);
   });
 });

@@ -45,7 +45,9 @@ export interface MusicInput {
 
 export type LyricTypographyStyle =
   | 'lyrics-cinematic'
+  | 'anime-blend'
   | 'anime-impact'
+  | 'anime-katana'
   | 'anime-neon'
   | 'anime-manga'
   | 'anime-gold-epic'
@@ -98,6 +100,10 @@ export interface GenerateOptions {
   editorialDirection?: EditorialDirection;
   /** Efeitos sonoros (subida, impacto no drop, golpes, whoosh). Padrão: ligado, se `sfxAssets` vier. */
   useSfx?: boolean;
+  /** Modo de sonorização: 'hits-only' enfatiza apenas golpes/impactos sincronizados; 'full' inclui whoosh/subida; 'off' desliga. */
+  sfxMode?: 'hits-only' | 'full' | 'off';
+  /** Extrai também um micro-burst (0,24 s) do áudio real do golpe no anime nos impactos sincronizados. */
+  animeHitAudio?: boolean;
   /**
    * Só cenas em que aparece algum destes personagens (exige a análise com visão). Se não houver
    * cenas suficientes, usa todas e avisa.
@@ -392,8 +398,14 @@ export function scoreSpeechCandidate(s: SpeechSegment): number {
   return confidence * 0.2 + impact * 0.2 + durationFit * 0.2 + textQuality * 0.4 + (s.kind === 'grito' ? 0.02 : 0);
 }
 
-/** Escolhe uma fala marcante antes do drop, priorizando frase compreensível e completa. */
-export function pickSpeech(eps: EpisodeInput[], maxS: number, exclude: Set<string>, accept?: (ep: EpisodeInput, s: SpeechSegment) => boolean): { ep: EpisodeInput; s: SpeechSegment } | null {
+/** Escolhe uma fala marcante antes do drop, priorizando frase compreensível, legendada e completa. */
+export function pickSpeech(
+  eps: EpisodeInput[],
+  maxS: number,
+  exclude: Set<string>,
+  accept?: (ep: EpisodeInput, s: SpeechSegment) => boolean,
+  preferCaptioned = false,
+): { ep: EpisodeInput; s: SpeechSegment } | null {
   let best: { ep: EpisodeInput; s: SpeechSegment; score: number } | null = null;
   for (const ep of eps) {
     if (!ep.hasAudio || exclude.has(ep.assetId)) continue;
@@ -401,7 +413,8 @@ export function pickSpeech(eps: EpisodeInput[], maxS: number, exclude: Set<strin
       const d = s.endS - s.startS;
       if (d < 0.6 || d > maxS) continue;
       if (accept && !accept(ep, s)) continue;
-      const score = scoreSpeechCandidate(s);
+      const captionBonus = preferCaptioned && (s.text?.trim().length ?? 0) >= 3 ? 0.32 : 0;
+      const score = scoreSpeechCandidate(s) + captionBonus;
       if (!best || score > best.score || (score === best.score && s.startS < best.s.startS)) best = { ep, s, score };
     }
   }
@@ -859,6 +872,67 @@ function splitKineticChunks(text: string, durS: number): string[] {
   return chunks;
 }
 
+interface SceneTypographyPalette {
+  accent: string;
+  highlight: string;
+  brightness: number;
+  focusY: number | null;
+}
+
+function parseHexRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const n = Number.parseInt(m[1]!, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function toHexRgb(r: number, g: number, b: number): string {
+  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  return `#${[clamp(r), clamp(g), clamp(b)].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function extractScenePalette(local?: ShotVision['local']): SceneTypographyPalette | null {
+  if (!local) return null;
+  let bestRgb: [number, number, number] | null = null;
+  let bestScore = -1;
+  for (const hex of local.dominantColors ?? []) {
+    const rgb = parseHexRgb(hex);
+    if (!rgb) continue;
+    const [r, g, b] = rgb.map((v) => v / 255) as [number, number, number];
+    const mx = Math.max(r, g, b);
+    const mn = Math.min(r, g, b);
+    const sat = mx - mn;
+    const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const score = sat * 1.8 + (luma >= 0.12 && luma <= 0.88 ? 0.35 : 0);
+    if (score > bestScore) {
+      bestScore = score;
+      bestRgb = rgb;
+    }
+  }
+  if (!bestRgb) return null;
+  const [r, g, b] = bestRgb;
+  const avg = (r + g + b) / 3;
+  // Amplifica croma e luminância para produzir um acento vibrante que conversa com a cena
+  const boostR = Math.min(255, Math.max(60, avg + (r - avg) * 1.85 + 42));
+  const boostG = Math.min(255, Math.max(60, avg + (g - avg) * 1.85 + 42));
+  const boostB = Math.min(255, Math.max(60, avg + (b - avg) * 1.85 + 42));
+  const accent = toHexRgb(boostR, boostG, boostB);
+  const highlight = toHexRgb(
+    boostR * 0.45 + 255 * 0.55,
+    boostG * 0.45 + 250 * 0.55,
+    boostB * 0.45 + 235 * 0.55,
+  );
+  const focusY = local.subjectFocus && (local.subjectFocusConfidence ?? 0) >= 0.5
+    ? local.subjectFocus[1]
+    : null;
+  return {
+    accent,
+    highlight,
+    brightness: Number.isFinite(local.brightness) ? local.brightness : 0.45,
+    focusY,
+  };
+}
+
 function textClip(
   trackId: string,
   startS: number,
@@ -874,6 +948,7 @@ function textClip(
   translation?: SubtitleTranslations | string | null,
   useEffects = true,
   kineticSpeechWords = false,
+  scenePalette?: SceneTypographyPalette | null,
 ): Clip {
   const word = kind === 'word';
   const startUs = Math.round(startS * 1e6);
@@ -892,29 +967,31 @@ function textClip(
       uncertain: item.uncertain ?? (item.confidence != null && item.confidence < 0.78),
     }];
   });
-  const isLyrics = preset !== 'dialogue-dramatic';
-  const isClimaxImpact = highlight || impact >= 0.75 || preset === 'anime-impact' || preset === 'anime-gold-epic';
-  const isDialogue = preset === 'dialogue-dramatic';
+  const isLyrics = preset !== 'dialogue-dramatic' && preset !== 'anime-dialogue';
+  const isClimaxImpact = highlight || impact >= 0.75 || preset === 'anime-impact' || preset === 'anime-blend' || preset === 'anime-katana' || preset === 'anime-gold-epic';
+  const isDialogue = preset === 'dialogue-dramatic' || preset === 'anime-dialogue';
   const sizeMultiplier = 1 + (isClimaxImpact ? 0.35 : 0.25) * Math.max(0, Math.min(1, impact));
   const presetBaseSize: Record<LyricTypographyStyle | 'dialogue-dramatic', number> = {
     'lyrics-cinematic': 0.09,
-    'dialogue-dramatic': impact < 0.45 ? 0.056 : 0.065,
-    'anime-dialogue': 0.052,
-    'anime-impact': 0.11,
-    'anime-neon': 0.1,
-    'anime-manga': 0.088,
+    'dialogue-dramatic': impact < 0.45 ? 0.052 : 0.058,
+    'anime-dialogue': 0.048,
+    'anime-blend': 0.118,
+    'anime-impact': 0.112,
+    'anime-katana': 0.112,
+    'anime-neon': 0.125,
+    'anime-manga': 0.09,
     'anime-gold-epic': 0.11,
   };
-  const baseSize = word ? 0.115 : presetBaseSize[preset];
-  const glowIntensity = preset === 'anime-neon' ? 14
-    : preset === 'anime-gold-epic' ? 12
-      : preset === 'anime-impact' ? 8
-        : isClimaxImpact ? Math.round(12 + 16 * Math.max(0, Math.min(1, impact))) : 0;
+  const baseSize = word ? (preset === 'anime-neon' ? 0.132 : 0.118) : presetBaseSize[preset];
+  const glowIntensity = !useEffects ? 0
+    : preset === 'anime-neon' ? 18
+      : preset === 'anime-gold-epic' ? 14
+        : preset === 'anime-katana' || preset === 'anime-impact' ? 12
+          : preset === 'anime-blend' ? 10
+            : isClimaxImpact ? Math.round(12 + 16 * Math.max(0, Math.min(1, impact))) : 0;
   const transObj: Record<string, string> | undefined = typeof translation === 'string'
     ? { pt: translation }
     : (translation as Record<string, string> | null | undefined) ?? undefined;
-  // Preferência histórica por português e inglês quando há mais de uma tradução;
-  // traduções automáticas novas normalmente contêm somente o idioma de destino.
   const preferredTranslation = ['pt', 'pt-BR', 'en']
     .map((language) => [language, transObj?.[language]] as const)
     .find((entry) => !!entry[1]?.trim());
@@ -922,68 +999,113 @@ function textClip(
   const translationLanguage = translationEntry?.[0];
   const chosenTranslation = translationEntry?.[1];
   const displayText = chosenTranslation && chosenTranslation !== text ? chosenTranslation : text;
-  const uppercase = word || ['anime-impact', 'anime-neon', 'anime-manga', 'anime-gold-epic'].includes(preset);
-  const yRatio = word || preset === 'anime-impact' || preset === 'anime-gold-epic' ? 0
-    : preset === 'anime-neon' ? 0.14
-      : preset === 'anime-manga' ? 0.24
-        : preset === 'anime-dialogue' ? 0.34
-          : isLyrics ? 0.22 : 0.28;
-  const color = preset === 'anime-neon' ? '#d8fbff'
-    : preset === 'anime-impact' ? '#fff4e6'
-      : preset === 'anime-gold-epic' ? '#fff7d1'
-        : preset === 'anime-dialogue' ? '#f1f5f9'
-          : highlight ? '#fff0a6' : '#ffffff';
-  const outlineColor = preset === 'anime-neon' ? '#05121d'
-    : preset === 'anime-impact' ? '#14090d'
+  const uppercase = word || ['anime-blend', 'anime-impact', 'anime-katana', 'anime-neon', 'anime-manga', 'anime-gold-epic'].includes(preset);
+  let yRatio = word || preset === 'anime-blend' || preset === 'anime-impact' || preset === 'anime-gold-epic' ? 0
+    : preset === 'anime-katana' ? 0.04
+      : preset === 'anime-neon' ? 0.1
+        : preset === 'anime-manga' ? 0.22
+          : preset === 'anime-dialogue' ? 0.36
+            : isLyrics ? 0.2 : 0.34;
+  // Se o rosto do personagem estiver no terço superior-central, desce levemente a letra para não cobrir os olhos
+  if (isLyrics && scenePalette?.focusY !== null && scenePalette?.focusY !== undefined && Math.abs(yRatio) < 0.08) {
+    if (scenePalette.focusY < 0.44) yRatio = 0.13;
+    else if (scenePalette.focusY > 0.62) yRatio = -0.09;
+  }
+  const sceneAccent = useEffects && isLyrics ? scenePalette?.accent : undefined;
+  const sceneHighlight = useEffects && isLyrics ? scenePalette?.highlight : undefined;
+
+  const color = preset === 'anime-blend' ? '#ffffff'
+    : preset === 'anime-neon' ? '#e0fbff'
+      : preset === 'anime-impact' || preset === 'anime-katana' ? '#fff6eb'
+        : preset === 'anime-gold-epic' ? '#fff7d1'
+          : preset === 'anime-dialogue' || preset === 'dialogue-dramatic' ? '#fef9c3'
+            : highlight ? '#fff0a6' : '#ffffff';
+  const outlineColor = preset === 'anime-neon' ? '#041019'
+    : preset === 'anime-impact' || preset === 'anime-katana' ? '#12070b'
       : preset === 'anime-gold-epic' ? '#1a0e04'
-        : '#000000';
-  const highlightColor = preset === 'anime-neon' ? '#ff4d9d'
-    : preset === 'anime-impact' ? '#ff5364'
+        : '#05070c';
+  const highlightColor = sceneAccent ?? (preset === 'anime-neon' ? '#ff4d9d'
+    : preset === 'anime-impact' || preset === 'anime-katana' ? '#ff5364'
       : preset === 'anime-manga' ? '#ffe047'
-        : highlight ? '#fff0a6' : '#ffd166';
-  const gradientStartColor = preset === 'anime-neon' ? '#e0ffff'
+        : highlight ? '#fff0a6' : '#ffd166');
+  const gradientStartColor = sceneHighlight ?? (preset === 'anime-neon' ? '#e0ffff'
     : preset === 'anime-gold-epic' ? '#fff9d6'
-      : highlight ? '#fff8cc' : '#ffe259';
-  const gradientEndColor = preset === 'anime-neon' ? '#38bdf8'
+      : highlight ? '#fff8cc' : '#ffe259');
+  const gradientEndColor = sceneAccent ?? (preset === 'anime-neon' ? '#38bdf8'
     : preset === 'anime-gold-epic' ? '#f59e0b'
-      : highlight ? '#ffd166' : '#ff6b6b';
-  const glowColor = preset === 'anime-neon' ? '#00d4ff'
-    : preset === 'anime-impact' ? '#ff5364'
+      : highlight ? '#ffd166' : '#ff6b6b');
+  const glowColor = sceneAccent ?? (preset === 'anime-neon' ? '#00d4ff'
+    : preset === 'anime-impact' || preset === 'anime-katana' ? '#ff4d6d'
       : preset === 'anime-gold-epic' ? '#f59e0b'
-        : highlight ? '#ffd166' : '#ff7a00';
-  const useGradient = preset === 'anime-neon' || preset === 'anime-gold-epic' || (isClimaxImpact && !word && preset !== 'anime-manga' && preset !== 'anime-dialogue');
-  const useBox = preset === 'anime-manga' || preset === 'anime-dialogue';
+        : preset === 'anime-blend' ? '#ffffff'
+          : highlight ? '#ffd166' : '#ff7a00');
+  const fillStyle: 'solid' | 'linear-gradient' | 'hollow' = useEffects && preset === 'anime-blend'
+    ? 'hollow'
+    : (preset === 'anime-neon' || preset === 'anime-gold-epic' || (isClimaxImpact && !word && preset !== 'anime-manga' && !isDialogue))
+      ? 'linear-gradient'
+      : 'solid';
   const font = preset === 'anime-gold-epic'
     ? 'Cinzel Variable'
-    : preset === 'anime-impact'
-      ? 'Anton'
-      : preset === 'anime-neon' || preset === 'anime-manga'
-        ? 'Bebas Neue'
-        : preset === 'lyrics-cinematic'
-          ? 'Montserrat Variable'
-          : 'Manrope Variable';
-  const proFxOn = useEffects && preset !== 'anime-dialogue' && preset !== 'dialogue-dramatic';
-  const outerOutlineColor = !proFxOn ? null
-    : preset === 'anime-impact' ? '#ff3355'
-      : preset === 'anime-manga' ? '#ffffff'
-        : preset === 'anime-gold-epic' ? '#fde68a'
-          : null;
-  const outerOutlineWidth = outerOutlineColor ? (preset === 'anime-manga' ? 1.8 : 1.3) : 0;
-  const extrudeDepth = !proFxOn ? 0
+    : preset === 'anime-impact' || preset === 'anime-blend'
+      ? 'Russo One'
+      : preset === 'anime-katana'
+        ? 'Permanent Marker'
+        : preset === 'anime-neon'
+          ? 'Teko'
+          : preset === 'anime-manga'
+            ? 'Black Ops One'
+            : preset === 'dialogue-dramatic'
+              ? 'Playfair Display Variable'
+              : 'Montserrat Variable';
+  const proFxOn = useEffects && !isDialogue;
+  const outerOutlineColor = !proFxOn
+    ? (preset === 'anime-dialogue' ? '#38bdf8' : null)
+    : preset === 'anime-impact' || preset === 'anime-katana' ? (sceneAccent ?? '#ff3355')
+      : preset === 'anime-neon' ? (sceneAccent ?? '#00f0ff')
+        : preset === 'anime-manga' ? (sceneAccent ?? '#ffe047')
+          : preset === 'anime-gold-epic' ? '#fde68a'
+            : preset === 'anime-blend' ? (sceneAccent ?? '#ffffff')
+              : null;
+  const outerOutlineWidth = outerOutlineColor ? (preset === 'anime-dialogue' ? 0.8 : preset === 'anime-manga' ? 1.7 : 1.4) : 0;
+  const extrudeDepth = !proFxOn || fillStyle === 'hollow' ? 0
     : preset === 'anime-manga' ? 5
-      : preset === 'anime-impact' ? 4
+      : preset === 'anime-impact' || preset === 'anime-katana' ? 4
         : preset === 'anime-gold-epic' ? 3
           : word ? 2.5 : 0;
-  const extrudeColor = preset === 'anime-impact' ? '#1a050a' : preset === 'anime-gold-epic' ? '#241202' : '#000000';
+  const extrudeColor = preset === 'anime-impact' || preset === 'anime-katana' ? '#1a050a' : preset === 'anime-gold-epic' ? '#241202' : '#000000';
   const chromaticAberration = !proFxOn ? 0
-    : preset === 'anime-impact' ? (isClimaxImpact || word ? 3.5 : 2)
-      : preset === 'anime-neon' ? 2.5
+    : preset === 'anime-impact' || preset === 'anime-katana' ? (isClimaxImpact || word ? 3.5 : 2)
+      : preset === 'anime-neon' ? 2.6
         : isClimaxImpact && word ? 2.2 : 0;
-  const sheen = proFxOn && (preset === 'anime-neon' || preset === 'anime-gold-epic' || preset === 'lyrics-cinematic');
-  const heroWord = proFxOn && !word && (preset === 'anime-impact' || preset === 'anime-neon' || preset === 'anime-gold-epic' || preset === 'lyrics-cinematic');
-  const heroFont = preset === 'anime-neon' ? 'Anton' : preset === 'lyrics-cinematic' ? 'Cinzel Variable' : null;
-  const heroColor = preset === 'anime-impact' ? '#ff4d6d' : preset === 'anime-neon' ? '#ff4d9d' : preset === 'lyrics-cinematic' ? '#ffe066' : null;
-  const heroTiltDeg = preset === 'anime-impact' ? -2 : 0;
+  const sheen = proFxOn && (preset === 'anime-blend' || preset === 'anime-neon' || preset === 'anime-gold-epic' || preset === 'lyrics-cinematic');
+  const slashBanner = proFxOn && preset === 'anime-manga';
+  const italic = isDialogue;
+  const heroWord = proFxOn && (!word || text.trim().includes(' ')) && (
+    preset === 'anime-blend' || preset === 'anime-impact' || preset === 'anime-katana' || preset === 'anime-neon' || preset === 'anime-gold-epic' || preset === 'lyrics-cinematic'
+  );
+  const heroFont = preset === 'anime-blend' || preset === 'anime-gold-epic' || preset === 'lyrics-cinematic'
+    ? 'Playfair Display Variable'
+    : preset === 'anime-impact'
+      ? 'Permanent Marker'
+      : preset === 'anime-katana'
+        ? 'Russo One'
+        : preset === 'anime-neon'
+          ? 'Bungee'
+          : null;
+  const heroItalic = preset === 'anime-blend' || preset === 'anime-gold-epic' || preset === 'lyrics-cinematic';
+  const heroColor = preset === 'anime-blend'
+    ? '#ffffff'
+    : sceneAccent ?? (preset === 'anime-impact' ? '#ff5c77' : preset === 'anime-katana' ? '#ffbe0b' : preset === 'anime-neon' ? '#ff4d9d' : preset === 'lyrics-cinematic' ? '#ffe066' : null);
+  const heroTiltDeg = preset === 'anime-impact' || preset === 'anime-katana' ? -3 : 0;
+  const blendMode: Clip['blendMode'] = !proFxOn
+    ? 'normal'
+    : preset === 'anime-blend'
+      ? ((scenePalette?.brightness ?? 0.5) >= 0.34 || isClimaxImpact ? 'difference' : 'screen')
+      : preset === 'anime-neon'
+        ? 'screen'
+        : (preset === 'anime-impact' && word && isClimaxImpact && (scenePalette?.brightness ?? 0) >= 0.62)
+          ? 'difference'
+          : 'normal';
 
   const renderedText = uppercase ? displayText.toUpperCase() : displayText;
   const effectiveWordTimings = kineticSpeechWords && !word && wordTimings.length === 0
@@ -997,7 +1119,7 @@ function textClip(
   const textScaleKeyframes: Keyframe[] | undefined = useEffects && (
     (word && durUs >= 140_000)
     || (isLyrics && isClimaxImpact && durUs >= 400_000)
-    || (kineticSpeechWords && preset !== 'anime-dialogue' && durUs >= 220_000)
+    || (kineticSpeechWords && !isDialogue && durUs >= 220_000)
   )
     ? [
         { atUs: 0, value: word ? 1.28 : kineticSpeechWords ? 1.2 : 1.12, easing: 'ease-out' },
@@ -1007,32 +1129,36 @@ function textClip(
     : undefined;
 
   return baseClip(trackId, null, startS, durS, 0, reason, {
-    transform: { x: 0, y: Math.round(H * yRatio), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
+    blendMode,
+    transform: { x: 0, y: Math.round(H * yRatio), scale: 1, rotation: preset === 'anime-katana' && proFxOn ? -2 : 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
     ...(textScaleKeyframes ? { keyframes: { 'transform.scale': textScaleKeyframes } } : {}),
     text: TextContentSchema.parse({
       text: renderedText,
       font,
+      italic,
       size: Math.round(H * baseSize * sizeMultiplier),
-      weight: word || isClimaxImpact || preset === 'anime-neon' || preset === 'anime-manga' ? 900 : isLyrics ? 800 : 700,
+      weight: preset === 'anime-neon' ? 700 : word || isClimaxImpact || preset === 'anime-manga' ? 900 : isLyrics ? 800 : 700,
       color,
       outlineColor,
-      outlineWidth: word || preset === 'anime-impact' || preset === 'anime-manga' || preset === 'anime-gold-epic' ? 5 : 4,
+      outlineWidth: preset === 'anime-blend' ? 2.5 : word || preset === 'anime-impact' || preset === 'anime-katana' || preset === 'anime-manga' || preset === 'anime-gold-epic' ? 5 : 4,
       outerOutlineColor,
       outerOutlineWidth,
       extrudeDepth,
       extrudeColor,
       chromaticAberration,
       sheen,
+      slashBanner,
       heroWord,
       heroFont,
-      heroScale: 1.22,
+      heroItalic,
+      heroScale: preset === 'anime-neon' ? 1.14 : 1.25,
       heroColor,
       heroTiltDeg,
-      shadow: true,
-      animationIn: preset === 'anime-manga' ? 'slide' : preset === 'anime-dialogue' ? 'fade' : 'pop',
+      shadow: blendMode !== 'difference',
+      animationIn: preset === 'anime-manga' || preset === 'anime-katana' ? 'slide-left' : isDialogue ? 'fade' : 'pop',
       animationOut: preset === 'anime-gold-epic' ? 'blur' : 'fade',
-      background: useBox ? 'box' : 'none',
-      backgroundOpacity: preset === 'anime-manga' ? 0.88 : preset === 'anime-dialogue' ? 0.62 : isDialogue ? (impact < 0.45 ? 0.65 : 0.8) : 0.78,
+      background: 'none',
+      backgroundOpacity: 0.78,
       alignment: 'center',
       maxWidthRatio: 0.86,
       marginX: Math.round(H * 0.06),
@@ -1040,14 +1166,14 @@ function textClip(
       padding: Math.round(H * 0.025),
       highlightColor,
       highlightScale: isClimaxImpact ? 1.25 : 1.18,
-      wordAnimation: kineticSpeechWords ? (preset === 'anime-dialogue' ? 'highlight' : 'pop') : 'highlight',
-      fillStyle: useGradient ? 'linear-gradient' : 'solid',
+      wordAnimation: kineticSpeechWords ? (isDialogue ? 'highlight' : 'pop') : 'highlight',
+      fillStyle,
       gradientStartColor,
       gradientEndColor,
       glowColor,
       glowIntensity,
       section: isClimaxImpact ? 'climax' : word || preset === 'anime-neon' ? 'chorus' : 'verse',
-      letterSpacing: word || preset === 'anime-neon' || preset === 'anime-manga' ? 2 : preset === 'anime-gold-epic' ? 3 : 0,
+      letterSpacing: word || preset === 'anime-neon' || preset === 'anime-manga' || preset === 'anime-blend' ? 2 : preset === 'anime-gold-epic' ? 3 : 0,
       timingPrecision: effectiveWordTimings.length ? 'word' : 'segment',
       wordTimings: effectiveWordTimings,
       ...(transObj
@@ -1292,13 +1418,14 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const showSpeechVideo = (b: VoiceBlock) => speechVisualMode === 'voiceover' ? false : speechVisualMode === 'hybrid' ? b.preDrop : true;
   const wantVoice = opts.useSpeech && voice && opts.style !== 'discurso';
   const totalVoice = wantVoice ? Math.max(0, Math.min(6, Math.round(opts.voiceMoments ?? (style.speechBeforeDrop ? 1 : 0)))) : 0;
+  const preferCaptionedSpeech = Boolean(opts.showText && opts.showSpeechCaptions !== false);
   if (wantVoice && totalVoice > 0 && style.speechBeforeDrop && dropT !== null) {
     const acceptSpeech = (ep: EpisodeInput, speech: SpeechSegment) =>
       hasRequestedSpeechAudio(ep, lang) && speechMatchesWanted(ep, speech);
-    let pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) => nearPool(ep, speech) && acceptSpeech(ep, speech));
+    let pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) => nearPool(ep, speech) && acceptSpeech(ep, speech), preferCaptionedSpeech);
     if (!pick && fight && !strictFightSelection && !plan.wanted) {
       pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) =>
-        poolEps.has(ep.assetId) && acceptSpeech(ep, speech));
+        poolEps.has(ep.assetId) && acceptSpeech(ep, speech), preferCaptionedSpeech);
     }
     if (pick) {
       const len = pick.s.endS - pick.s.startS;
@@ -1308,6 +1435,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const extraWanted = totalVoice - blocks.length;
   if (wantVoice && extraWanted > 0) {
     const taken = new Set(blocks.map((b) => `${b.ep.assetId}@${b.s.startS}`));
+    const speechRank = (s: SpeechSegment) => scoreSpeechCandidate(s) + (preferCaptionedSpeech && (s.text?.trim().length ?? 0) >= 3 ? 0.32 : 0);
     const lines = episodes
       .filter((e) => e.hasAudio && !exclude.has(e.assetId) && hasRequestedSpeechAudio(e, lang))
       .flatMap((ep) => ep.analysis.speech
@@ -1315,7 +1443,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         .map((sp) => ({ ep, sp })))
       .filter(({ sp }) => sp.endS - sp.startS >= 0.8 && sp.endS - sp.startS <= 4)
       .filter(({ ep, sp }) => !taken.has(`${ep.assetId}@${sp.startS}`))
-      .sort((a, b) => scoreSpeechCandidate(b.sp) - scoreSpeechCandidate(a.sp) || a.sp.startS - b.sp.startS);
+      .sort((a, b) => speechRank(b.sp) - speechRank(a.sp) || a.sp.startS - b.sp.startS);
     // onde cabe: começa num compasso, trecho calmo (ou ao longo da ação em modo voiceover/hybrid), afastado das outras falas e do drop
     const quiet = (a: number, b: number) => {
       let sum = 0;
@@ -1666,8 +1794,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     score: (slot, candidate, previous, previousSlot, history) => scoreCandidate(slot, candidate, previous, previousSlot, history)?.score ?? Number.NEGATIVE_INFINITY,
     candidateWindow: fight
       ? (_slotIndex, musicSlot, forward) => {
-          // No foco em lutas, abre uma janela progressiva (mantendo ordem cronológica estrita)
-          // para percorrer começo, meio, clímax e desfecho da luta com base no score narrativo.
+          // No foco em lutas, percorre começo (Ato I), escalada/clímax (Ato II) e desfecho (Ato III)
+          // em ordem cronológica estrita sem ficar preso apenas nos primeiros 30% da luta.
           const ordered = [...forward].sort((a, b) =>
             a.episodeOrder - b.episodeOrder || a.sourceStartS - b.sourceStartS,
           );
@@ -1678,8 +1806,20 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
           if (!fits.length) return [];
           const remainingSlots = Math.max(1, fitSlots.length - _slotIndex);
           const stride = Math.max(1, Math.floor(fits.length / remainingSlots));
-          const windowSize = Math.min(fits.length, Math.max(4, Math.min(10, stride * 2 + 2)));
-          const windowFits = fits.slice(0, windowSize);
+          const windowSize = Math.min(fits.length, Math.max(5, Math.min(12, stride * 2 + 3)));
+          let windowFits: Candidate[];
+          if (fits.length > remainingSlots * 1.35 && fitSlots.length >= 6) {
+            const nearSlice = fits.slice(0, Math.ceil(windowSize * 0.5));
+            const pacedStart = Math.min(
+              Math.max(0, fits.length - Math.ceil(windowSize * 0.5)),
+              Math.max(1, stride - 1),
+            );
+            const pacedSlice = fits.slice(pacedStart, pacedStart + Math.ceil(windowSize * 0.5));
+            const endSlice = _slotIndex >= Math.floor(fitSlots.length * 0.85) ? fits.slice(-3) : [];
+            windowFits = [...new Map([...nearSlice, ...pacedSlice, ...endSlice].map((c) => [c.id, c])).values()];
+          } else {
+            windowFits = fits.slice(0, windowSize);
+          }
           const highEnergy = musicSlot.isDrop || musicSlot.energy >= 0.7;
           if (highEnergy) {
             // Respeita rótulos explícitos de "não é luta". Análises antigas não
@@ -1808,8 +1948,24 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   let lastDecorativeTransitionS = Number.NEGATIVE_INFINITY;
   let prev: Candidate | null = null;
   let prevSlot: Slot | null = null;
-  /** Para os efeitos sonoros: onde cada corte/golpe aconteceu na timeline. */
-  const cutsLog: { startS: number; len: number; energy: number; intensity: number; isDrop: boolean; hitAtS: number | null; lyricCueKey?: string; lyricMatchScore?: number; lyricMatchReason?: string }[] = [];
+  /** Para os efeitos sonoros e tipografia reativa: onde cada corte/golpe/paleta aconteceu na timeline. */
+  const cutsLog: {
+    startS: number;
+    len: number;
+    energy: number;
+    intensity: number;
+    isDrop: boolean;
+    hitAtS: number | null;
+    peakSrcS: number | null;
+    assetId: string;
+    hasAudio: boolean;
+    streamIndex: number | null;
+    palette: SceneTypographyPalette | null;
+    hasSubject: boolean;
+    lyricCueKey?: string;
+    lyricMatchScore?: number;
+    lyricMatchReason?: string;
+  }[] = [];
 
   const selectedHistory: Candidate[] = [];
   const usedIntervals = new Map<string, Array<[number, number]>>();
@@ -1931,15 +2087,15 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const speed = shotLen >= len ? 1 : Math.max(0.6, shotLen / len);
     const srcLen = len * speed;
 
-    // golpe na batida: o instante de maior movimento da cena cai logo depois do corte (que está na batida)
+    // golpe na batida: o instante de maior movimento da cena cai no corte (na batida) ou numa batida interna do plano
     let srcIn = best.srcIn;
     let hit = false;
+    let internalBeatHit = false;
     const wantsHit = opts.hitSync !== false && (sl.isDrop || sl.energy >= 0.5 || c.shot.tags.includes('impacto')) && c.shot.motion >= 0.3 && Number.isFinite(c.shot.peakS);
     if (wantsHit) {
       hitSlots++;
-      const lead = 0;
-      const want = c.shot.peakS - lead * speed;
-      const lo = c.shot.startS + Math.min(0.08, Math.max(0, shotLen - srcLen));
+      const want = c.shot.peakS;
+      const lo = Math.max(c.shot.startS, Math.min(want, c.shot.startS + Math.min(0.08, Math.max(0, shotLen - srcLen))));
       const hi = c.shot.endS - srcLen;
       if (hi >= lo) {
         const at = Math.min(hi, Math.max(lo, want));
@@ -1976,6 +2132,21 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         if (eventCenterS >= motionStartS && eventCenterS <= motionStartS + srcLen) {
           srcIn = motionStartS;
           motionCropReason = 'recorte guiado por movimento localizado com confiança';
+        }
+      } else if (wantsHit) {
+        const lo = c.shot.startS;
+        const hi = c.shot.endS - srcLen;
+        const toleranceS = project.settings.fps.den / project.settings.fps.num;
+        const internalBeat = m.beats
+          .map((b) => b + beatOffsetS - range[0])
+          .find((b) => b >= sl.startS + 0.14 && b <= sl.endS - 0.08 && c.shot.peakS - (b - sl.startS) * speed >= lo - toleranceS && c.shot.peakS - (b - sl.startS) * speed <= hi + toleranceS);
+        if (internalBeat !== undefined && hi >= lo) {
+          const wantInternal = Math.min(hi, Math.max(lo, c.shot.peakS - (internalBeat - sl.startS) * speed));
+          if (Math.abs((c.shot.peakS - wantInternal) / speed - (internalBeat - sl.startS)) <= toleranceS) {
+            srcIn = wantInternal;
+            internalBeatHit = true;
+            syncedHits++;
+          }
         }
       }
     }
@@ -2178,6 +2349,13 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       else lastDecorativeTransitionS = sl.startS;
     }
     const clipEffects = refineImpactEffects(effects, len, visualScaleKeyframes.length > 0, transition, sl.isDrop);
+    // Arco Início → Meio → Fim: abertura do preto e encerramento suave no preto
+    if (opts.useEffects && D >= 8 && slotIndex === 0 && !clipEffects.some((e) => e.effect === 'fade_in')) {
+      clipEffects.push(fx('fade_in', { duration: Math.round(Math.min(0.45, len * 0.65) * 100) / 100 }));
+    }
+    if (opts.useEffects && D >= 8 && slotIndex === fitSlots.length - 1 && !clipEffects.some((e) => e.effect === 'fade_out')) {
+      clipEffects.push(fx('fade_out', { duration: Math.round(Math.min(0.65, len * 0.75) * 100) / 100 }));
+    }
     const why = [
       narrativeBeat ? `${narrativeRoleLabel(narrativeBeat.role)} (${narrativeBeat.section})` : null,
       sl.isDrop ? `Drop em ${fmt(sl.startS)}` : `${sl.section || 'trecho'} (energia ${sl.energy.toFixed(2)})`,
@@ -2191,7 +2369,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       lyricMatch && lyricMatch.score >= 0.6 ? `combina com a letra "${opts.lyrics?.find((cue) => lyricCueKey(cue) === sl.lyricCueKey)?.text ?? ''}": ${lyricMatch.reason}` : null,
       best.breakdown.reasons.length ? `critérios: ${best.breakdown.reasons.join(', ')}` : null,
       sequencePlan.repeatedSlots.includes(slotIndex) ? 'cena repetida por falta de material novo' : null,
-      hit ? 'golpe na batida' : null,
+      hit ? 'golpe na batida' : internalBeatHit ? 'impacto sincronizado na batida interna' : null,
       characterFramingReason,
       motionCropReason,
       speed < 1 ? `câmera lenta ${speed.toFixed(2)}×` : null,
@@ -2239,6 +2417,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       ];
       clip.reason = `${clip.reason} — movimento de câmera suave no plano`;
     }
+    const slotScenePalette = extractScenePalette(currentLocal);
     if (visualScaleKeyframes.length) clip.keyframes['transform.scale'] = visualScaleKeyframes;
     if (panKeyframesX.length) clip.keyframes['transform.x'] = panKeyframesX;
     cmds.push({ type: 'clip.add', clip });
@@ -2246,7 +2425,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const timing = sl.wordTiming
         ? [{ ...sl.wordTiming, startS: sl.startS, endS: sl.endS }]
         : undefined;
-      cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra', sl.isDrop, sl.energy, timing, opts.lyricStyle ?? 'lyrics-cinematic', undefined, opts.useEffects) });
+      cmds.push({ type: 'clip.add', clip: textClip(text.id, sl.startS, len, sl.word, H, 'word', 'Palavra da letra', sl.isDrop, sl.energy, timing, opts.lyricStyle ?? 'lyrics-cinematic', undefined, opts.useEffects, false, slotScenePalette) });
     }
     used.add(c.id);
     lastUsedSlot.set(c.id, slotIndex);
@@ -2256,8 +2435,24 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     // Mantém o mesmo histórico usado pelo planejador para justificar a escolha.
     selectedHistory.push(c);
     if (selectedHistory.length > RECENT_WINDOW) selectedHistory.shift();
-    const impactAtUs = hit ? timelineLocalAtSource(clip, us(c.shot.peakS)) : null;
-    cutsLog.push({ startS: sl.startS, len, energy: sl.energy, intensity: c.shot.intensity, isDrop: sl.isDrop, hitAtS: impactAtUs === null ? null : sl.startS + impactAtUs / S, ...(sl.lyricCueKey ? { lyricCueKey: sl.lyricCueKey } : {}), ...(lyricMatch ? { lyricMatchScore: lyricMatch.score, lyricMatchReason: lyricMatch.reason } : {}) });
+    const anyHitSynced = hit || internalBeatHit;
+    const impactAtUs = anyHitSynced ? timelineLocalAtSource(clip, us(c.shot.peakS)) : null;
+    cutsLog.push({
+      startS: sl.startS,
+      len,
+      energy: sl.energy,
+      intensity: c.shot.intensity,
+      isDrop: sl.isDrop,
+      hitAtS: impactAtUs === null ? null : sl.startS + impactAtUs / S,
+      peakSrcS: anyHitSynced && Number.isFinite(c.shot.peakS) ? c.shot.peakS : null,
+      assetId: c.ep.assetId,
+      hasAudio: c.ep.hasAudio,
+      streamIndex: streamFor(c.ep),
+      palette: slotScenePalette,
+      hasSubject: confirmedCharacter || hasLocalSubject,
+      ...(sl.lyricCueKey ? { lyricCueKey: sl.lyricCueKey } : {}),
+      ...(lyricMatch ? { lyricMatchScore: lyricMatch.score, lyricMatchReason: lyricMatch.reason } : {}),
+    });
     prev = c;
     prevSlot = sl;
     clipsMade++;
@@ -2268,52 +2463,63 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   if (opts.hitSync !== false && hitSlots > 0 && syncedHits < hitSlots * 0.5) warnings.push(`Só ${syncedHits} de ${hitSlots} cortes fortes tiveram o golpe encaixado na batida (as cenas escolhidas têm o golpe longe do começo).`);
 
 
-  // ---------------------------------------------------------------- efeitos sonoros
-  const sfxCount = sfxTrack && opts.useSfx !== false && opts.sfxAssets ? placeSfx() : 0;
+  // ---------------------------------------------------------------- efeitos sonoros (golpes e impactos)
+  const sfxCount = sfxTrack && opts.useSfx !== false && opts.sfxMode !== 'off' && opts.sfxAssets ? placeSfx() : 0;
   function placeSfx(): number {
     const assets = opts.sfxAssets!;
+    const hitsOnly = opts.sfxMode === 'hits-only';
     const r2 = rng(((opts.seed * 2654435761) ^ 0x51f15e) >>> 0); // sorteio próprio: não mexe na escolha das cenas
-    type Cand = { kind: SfxKind; startS: number; srcIn: number; durS: number; gainDb: number; prio: number; why: string };
+    type Cand = { kind: SfxKind; startS: number; srcIn: number; durS: number; gainDb: number; prio: number; why: string; animeBurst?: { assetId: string; peakSrcS: number; streamIndex: number | null } };
     const cands: Cand[] = [];
-    const anchored = (kind: SfxKind, atS: number, gainDb: number, prio: number, why: string) => {
+    const anchored = (kind: SfxKind, atS: number, gainDb: number, prio: number, why: string, animeBurst?: Cand['animeBurst']) => {
       let start = atS - SFX_ANCHOR_S[kind];
       let srcIn = 0;
       if (start < 0) {
-        srcIn = -start; // começa no meio do efeito para o ponto-chave cair no instante certo
+        srcIn = -start;
         start = 0;
       }
       const dur = Math.min(SFX_DURATION_S[kind] - srcIn, D - start);
-      if (assets[kind] && dur > 0.05) cands.push({ kind, startS: start, srcIn, durS: dur, gainDb, prio, why });
+      if (assets[kind] && dur > 0.05) cands.push({ kind, startS: start, srcIn, durS: dur, gainDb, prio, why, animeBurst });
     };
     const hasPreDropVoice = blocks.some((b) => b.preDrop);
     if (dropT !== null) {
       anchored('impact', dropT, 0, 1000, 'Impacto no drop');
-      // a subida termina quando o impacto começa; não entra por cima da fala que vem antes do drop
-      if (!hasPreDropVoice) anchored('riser', dropT - SFX_ANCHOR_S.impact, -5, 900, 'Subida até o drop');
+      // Em 'hits-only' não coloca subida artificial nem whoosh: apenas golpes reais e impacto no drop
+      if (!hitsOnly && !hasPreDropVoice) anchored('riser', dropT - SFX_ANCHOR_S.impact, -5, 900, 'Subida até o drop');
     }
-    // golpes e whoosh são seletivos: os cortes mais fortes primeiro, com respiro entre eles
     const perHit = Math.min(1, 0.35 + 0.65 * style.impactFx);
+    let hitIdx = 0;
     for (const c of cutsLog) {
       if (c.isDrop) continue;
-      if (c.hitAtS !== null && c.energy >= 0.5 && r2() < 0.5 * perHit) anchored('hit', c.hitAtS, -7, 50 + 40 * c.intensity, 'Golpe');
-      else if (c.len >= 0.9 && c.energy >= 0.3 && c.energy < 0.8 && r2() < 0.22 * perHit) anchored('whoosh', c.startS, -9, 30, 'Whoosh antes do corte');
+      if (hitsOnly) {
+        if (c.hitAtS !== null && c.energy >= 0.45) {
+          const hitKind: SfxKind = assets.clash && hitIdx % 3 === 1 ? 'clash' : 'hit';
+          hitIdx++;
+          const burst = opts.animeHitAudio !== false && c.hasAudio && c.peakSrcS !== null
+            ? { assetId: c.assetId, peakSrcS: c.peakSrcS, streamIndex: c.streamIndex }
+            : undefined;
+          anchored(hitKind, c.hitAtS, -4.5, 80 + 40 * c.intensity, hitKind === 'clash' ? 'Golpe cortante na batida' : 'Golpe na batida', burst);
+        }
+      } else {
+        if (c.hitAtS !== null && c.energy >= 0.5 && r2() < 0.5 * perHit) anchored('hit', c.hitAtS, -6, 50 + 40 * c.intensity, 'Golpe');
+        else if (c.len >= 0.9 && c.energy >= 0.3 && c.energy < 0.8 && r2() < 0.22 * perHit) anchored('whoosh', c.startS, -9, 30, 'Whoosh antes do corte');
+      }
     }
-    // resolve conflitos: o mais importante primeiro; nada por cima de fala nem de outro efeito (mesma trilha)
     cands.sort((a, b) => b.prio - a.prio || a.startS - b.startS);
     const kept: Cand[] = [];
-    const maxN = Math.max(4, Math.ceil(D / 1.6));
-    const SPACING_S = 0.75; // entre golpes/whoosh (impacto e subida ficam de fora)
+    const maxN = hitsOnly ? Math.max(6, Math.ceil(D / 1.1)) : Math.max(4, Math.ceil(D / 1.6));
+    const SPACING_S = hitsOnly ? 0.45 : 0.75;
     for (const c of cands) {
       if (kept.length >= maxN) break;
       const end = c.startS + c.durS;
-      // 20 ms de tolerância: o impacto começa 4 ms antes do drop, onde a fala e a subida terminam
       if (blocks.some((b) => c.startS < b.atS + b.len - 0.02 && end > b.atS + 0.02)) continue;
       if (kept.some((k) => c.startS < k.startS + k.durS - 0.02 && end > k.startS + 0.02)) continue;
-      const soft = c.kind === 'hit' || c.kind === 'whoosh';
-      if (soft && kept.some((k) => (k.kind === 'hit' || k.kind === 'whoosh') && Math.abs(k.startS - c.startS) < SPACING_S)) continue;
+      const soft = c.kind === 'hit' || c.kind === 'clash' || c.kind === 'whoosh';
+      if (soft && kept.some((k) => (k.kind === 'hit' || k.kind === 'clash' || k.kind === 'whoosh') && Math.abs(k.startS - c.startS) < SPACING_S)) continue;
       kept.push(c);
     }
     kept.sort((a, b) => a.startS - b.startS);
+    const usedVoiceBursts: Array<[number, number]> = blocks.map((b) => [b.atS - 0.08, b.atS + b.len + 0.08]);
     for (const k of kept) {
       cmds.push({
         type: 'clip.add',
@@ -2321,6 +2527,30 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
           audio: { gainDb: k.gainDb, fadeInUs: k.kind === 'riser' ? us(0.08) : 0, fadeOutUs: k.kind === 'riser' ? 0 : us(0.03), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null },
         }),
       });
+      // Micro-burst do impacto real do episódio (apenas o transiente do golpe 0,24s na trilha de voz livre)
+      if (k.animeBurst && voice && opts.style !== 'discurso') {
+        const burstDur = 0.24;
+        const burstStart = Math.max(0, Math.min(D - burstDur, k.startS - 0.03));
+        const burstSrcIn = Math.max(0, k.animeBurst.peakSrcS - 0.04);
+        const overlapsVoice = usedVoiceBursts.some(([a, b]) => burstStart < b && burstStart + burstDur > a);
+        if (!overlapsVoice && burstDur > 0.1) {
+          usedVoiceBursts.push([burstStart - 0.15, burstStart + burstDur + 0.15]);
+          cmds.push({
+            type: 'clip.add',
+            clip: baseClip(voice.id, k.animeBurst.assetId, burstStart, burstDur, burstSrcIn, 'Som real do golpe no anime (imersão)', {
+              label: 'Golpe anime',
+              audio: {
+                gainDb: -3.5,
+                fadeInUs: us(0.025),
+                fadeOutUs: us(0.09),
+                pitchSemitones: 0,
+                pitchMode: 'preserve',
+                streamIndex: k.animeBurst.streamIndex,
+              },
+            }),
+          });
+        }
+      }
     }
     return kept.length;
   }
@@ -2369,6 +2599,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const timedWordCueKeys = new Set(slots.filter((slot) => slot.word && slot.lyricCueKey).map((slot) => slot.lyricCueKey));
     const chosenLyricStyle = opts.lyricStyle ?? 'lyrics-cinematic';
     const timelineBeats = m.beats.map((t) => t + beatOffsetS - range[0]).filter((t) => t >= 0 && t <= D);
+    const paletteAtTime = (timeS: number): SceneTypographyPalette | null =>
+      cutsLog.find((cut) => timeS >= cut.startS && timeS < cut.startS + cut.len)?.palette ?? null;
     for (const cue of layoutLyrics(opts.lyrics, range, blocks)) {
       const originalCue = opts.lyrics.find((item) => item.text === cue.text && item.startS - range[0] <= cue.startS + 1e-6 && item.endS - range[0] >= cue.endS - 1e-6);
       const cueKey = originalCue ? lyricCueKey(originalCue) : undefined;
@@ -2438,6 +2670,8 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
                 kineticPreset,
                 undefined,
                 opts.useEffects,
+                false,
+                paletteAtTime((cStart + cEnd) / 2),
               ),
             });
           }
@@ -2463,50 +2697,69 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
           chosenLyricStyle,
           undefined,
           opts.useEffects,
+          false,
+          paletteAtTime((cue.startS + cue.endS) / 2),
         ),
       });
     }
     const omitted = opts.lyrics.filter((cue) => cue.endS > range[0] && cue.startS < range[1] && blocks.some((block) => cue.startS - range[0] < block.atS + block.len && cue.endS - range[0] > block.atS)).length;
     if (omitted) warnings.push(`${omitted} verso(s) foram divididos ou omitidos apenas durante falas para evitar sobreposição de textos.`);
 
-    // Depth Cutout no Drop: destaca o personagem em V2 com a letra gigante passando atrás dele
-    if (opts.depthCutoutOnDrop && opts.useEffects !== false && v2 && dropT !== null) {
-      const dropUs = us(dropT);
-      const dropEndUs = dropUs + us(0.7);
-      const v1DropCmd = cmds.find(
-        (cmd): cmd is Extract<Command, { type: 'clip.add' }> =>
-          cmd.type === 'clip.add'
-          && cmd.clip.trackId === v1.id
-          && Boolean(cmd.clip.assetId)
-          && cmd.clip.timelineStartUs <= dropUs + 40_000
-          && cmd.clip.timelineStartUs + cmd.clip.durationUs > dropUs + 120_000,
-      );
-      const dropLyricCmds = cmds.filter(
-        (cmd): cmd is Extract<Command, { type: 'clip.add' }> =>
-          cmd.type === 'clip.add'
-          && cmd.clip.trackId === text.id
-          && Boolean(cmd.clip.text)
-          && /letra da música|palavra da letra/i.test(cmd.clip.reason ?? '')
-          && cmd.clip.timelineStartUs < dropEndUs
-          && cmd.clip.timelineStartUs + cmd.clip.durationUs > dropUs,
-      );
-      if (v1DropCmd && dropLyricCmds.length > 0) {
-        for (const lc of dropLyricCmds) {
+    // Depth Cutout em V2: destaca o personagem na frente da letra gigante no Drop e nos picos de impacto da música
+    if (opts.depthCutoutOnDrop && opts.useEffects !== false && v2) {
+      const anchorMomentsS: number[] = [];
+      if (dropT !== null) anchorMomentsS.push(dropT);
+      for (const cut of [...cutsLog].sort((a, b) => (b.energy + b.intensity) - (a.energy + a.intensity))) {
+        if (anchorMomentsS.length >= 4) break;
+        if (!cut.hasSubject && cut.energy < 0.78) continue;
+        if (anchorMomentsS.some((t) => Math.abs(t - cut.startS) < 4.5)) continue;
+        anchorMomentsS.push(cut.startS);
+      }
+      const placedV2Ranges: Array<[number, number]> = [];
+      for (const [momentIdx, momentS] of anchorMomentsS.entries()) {
+        const momentUs = us(momentS);
+        const momentEndUs = momentUs + us(0.75);
+        const v1TargetCmd = cmds.find(
+          (cmd): cmd is Extract<Command, { type: 'clip.add' }> =>
+            cmd.type === 'clip.add'
+            && cmd.clip.trackId === v1.id
+            && Boolean(cmd.clip.assetId)
+            && cmd.clip.timelineStartUs <= momentUs + 50_000
+            && cmd.clip.timelineStartUs + cmd.clip.durationUs > momentUs + 120_000,
+        );
+        const lyricCmdsAtMoment = cmds.filter(
+          (cmd): cmd is Extract<Command, { type: 'clip.add' }> =>
+            cmd.type === 'clip.add'
+            && cmd.clip.trackId === text.id
+            && Boolean(cmd.clip.text)
+            && /letra da música|palavra da letra/i.test(cmd.clip.reason ?? '')
+            && cmd.clip.timelineStartUs < momentEndUs
+            && cmd.clip.timelineStartUs + cmd.clip.durationUs > momentUs,
+        );
+        if (!v1TargetCmd || lyricCmdsAtMoment.length === 0) continue;
+        const base = v1TargetCmd.clip;
+        const cutDurUs = Math.min(base.durationUs, us(0.72));
+        const v2Start = base.timelineStartUs;
+        const v2End = v2Start + cutDurUs;
+        if (placedV2Ranges.some(([a, b]) => v2Start < b && v2End > a)) continue;
+        placedV2Ranges.push([v2Start, v2End]);
+        for (const lc of lyricCmdsAtMoment) {
           lc.clip.text = { ...lc.clip.text!, behindCutout: true };
         }
-        const base = v1DropCmd.clip;
-        const cutDurUs = Math.min(base.durationUs, us(0.65));
+        const maskKind: Clip['mask'] = momentIdx % 2 === 1 && chosenLyricStyle === 'anime-katana' ? 'manga-slash' : 'subject-focus';
         const v2Clip = baseClip(
           v2.id,
           base.assetId,
-          base.timelineStartUs / S,
+          v2Start / S,
           cutDurUs / S,
           base.sourceInUs / S,
-          'Destaque de personagem em V2 no drop (letra passando atrás)',
+          momentS === dropT
+            ? 'Destaque de personagem em V2 no drop (letra passando atrás)'
+            : 'Recorte de profundidade em V2 (letra mesclada atrás do personagem)',
           {
             speed: base.speed,
             sourceOutUs: base.sourceInUs + Math.round(cutDurUs * base.speed),
-            mask: 'subject-focus',
+            mask: maskKind,
             audio: { ...base.audio, gainDb: -60 },
             transform: { ...base.transform, scale: Math.max(1.06, base.transform.scale * 1.04) },
             keyframes: {

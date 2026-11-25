@@ -20,7 +20,7 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   const project = session.project;
   const tracks = textTracks(project);
   const [trackId, setTrackId] = useState(tracks[0]?.id ?? '');
-  const [look, setLook] = useState<SubtitleLook>('legenda');
+  const [look, setLook] = useState<SubtitleLook>('anime-impact');
   const [lang, setLang] = useState('pt-BR');
   const [translating, setTranslating] = useState<{ done: number; total: number } | null>(null);
   const [speechAssetId, setSpeechAssetId] = useState(project.assets.find((asset) => asset.kind === 'video')?.id ?? '');
@@ -874,10 +874,13 @@ export function TextLookSample({
       className="inline-flex flex-wrap items-baseline justify-center gap-x-1 leading-tight"
       style={{
         fontFamily,
+        fontStyle: spec.italic ? 'italic' : 'normal',
         fontWeight: spec.weight ?? 700,
         fontSize: `${resolvedSize}px`,
         letterSpacing: `${Math.min(2, spec.letterSpacing ?? 0)}px`,
-        WebkitTextStroke: spec.outlineWidth > 0 ? `0.8px ${outlineColor}` : undefined,
+        WebkitTextStroke: spec.fillStyle === 'hollow'
+          ? `1px ${spec.outerOutlineColor ?? spec.glowColor ?? '#38bdf8'}`
+          : spec.outlineWidth > 0 ? `0.8px ${outlineColor}` : undefined,
         textShadow: shadowStack,
       }}
     >
@@ -891,6 +894,8 @@ export function TextLookSample({
               key={`${word}-${idx}`}
               style={{
                 fontFamily: spec.heroWord && spec.heroFont ? `"${spec.heroFont}", ${fontFamily}` : undefined,
+                fontStyle: spec.heroWord && spec.heroItalic ? 'italic' : undefined,
+                WebkitTextStroke: spec.outlineWidth > 0 ? `0.8px ${outlineColor}` : undefined,
                 color: (spec.heroWord && spec.heroColor) ? spec.heroColor : highlightColor,
                 transform: `scale(${Math.min(1.22, heroScale)})${heroTilt}`,
                 display: 'inline-block',
@@ -904,14 +909,16 @@ export function TextLookSample({
           <span
             key={`${word}-${idx}`}
             style={
-              useGradient
-                ? {
-                    backgroundImage: `linear-gradient(180deg, ${spec.gradientStartColor}, ${spec.gradientEndColor})`,
-                    WebkitBackgroundClip: 'text',
-                    backgroundClip: 'text',
-                    WebkitTextFillColor: 'transparent',
-                  }
-                : { color: spec.color }
+              spec.fillStyle === 'hollow'
+                ? { color: 'rgba(255,255,255,0.14)' }
+                : useGradient
+                  ? {
+                      backgroundImage: `linear-gradient(180deg, ${spec.gradientStartColor}, ${spec.gradientEndColor})`,
+                      WebkitBackgroundClip: 'text',
+                      backgroundClip: 'text',
+                      WebkitTextFillColor: 'transparent',
+                    }
+                  : { color: spec.color }
             }
           >
             {word}
@@ -924,7 +931,7 @@ export function TextLookSample({
   if (compact) {
     return (
       <span
-        className={`inline-flex shrink-0 items-center justify-center rounded border border-line-soft px-2 py-0.5 ${spec.background === 'box' ? 'bg-black/90' : 'bg-[#090b10]'}`}
+        className={`inline-flex shrink-0 items-center justify-center rounded border border-line-soft px-2 py-0.5 ${spec.slashBanner ? '-skew-x-12 border-amber-400/70 bg-black/85' : spec.background === 'box' ? 'bg-black/90' : 'bg-[#090b10]'}`}
         title={`Prévia visual: ${spec.text}`}
       >
         {content}
@@ -934,7 +941,7 @@ export function TextLookSample({
 
   return (
     <span
-      className={`inline-flex max-w-full items-center justify-center rounded px-2.5 py-1 ${spec.background === 'box' ? 'border border-white/20 bg-black/85' : ''}`}
+      className={`inline-flex max-w-full items-center justify-center rounded px-2.5 py-1 ${spec.slashBanner ? '-skew-x-12 border-l-2 border-amber-400 bg-black/85' : spec.background === 'box' ? 'border border-white/20 bg-black/85' : ''}`}
     >
       {content}
     </span>

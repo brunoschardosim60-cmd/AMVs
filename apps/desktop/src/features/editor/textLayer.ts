@@ -266,6 +266,7 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
 
   const shown = Array.from(t.text).slice(0, Math.max(0, visibleChars)).join('');
   let size = t.size * scale * k;
+  const baseFontStyle = t.italic ? 'italic ' : '';
   ctx.save();
   ctx.globalAlpha = Math.min(1, alpha);
   if (blur > 0) ctx.filter = `blur(${blur * k}px)`;
@@ -275,7 +276,7 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
     ctx.restore();
   }
-  ctx.font = `${t.weight ?? 700} ${size}px "${t.font}", "Manrope Variable", system-ui, sans-serif`;
+  ctx.font = `${baseFontStyle}${t.weight ?? 700} ${size}px "${t.font}", "Manrope Variable", system-ui, sans-serif`;
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
   const spacing = (t.letterSpacing ?? 0) * k;
@@ -287,7 +288,7 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   // Reflow long dialogue until the entire block fits; preview and export share this layout.
   for (let attempt = 0; attempt < 12 && lines.length * size * (t.lineSpacing ?? 1.18) > safeHeight; attempt++) {
     size *= Math.min(0.9, safeHeight / (lines.length * size * (t.lineSpacing ?? 1.18)));
-    ctx.font = `${t.weight ?? 700} ${size}px "${t.font}", "Manrope Variable", system-ui, sans-serif`;
+    ctx.font = `${baseFontStyle}${t.weight ?? 700} ${size}px "${t.font}", "Manrope Variable", system-ui, sans-serif`;
     lines = layoutLines(ctx, shown, maxWidth, spacing, wordTimings);
   }
   const lh = size * (t.lineSpacing ?? 1.18);
@@ -303,7 +304,27 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   const rotation = evaluateKeyframes(c.keyframes['transform.rotation'], atUs, c.transform.rotation);
   if (rotation) ctx.rotate((rotation * Math.PI) / 180);
 
-  if (t.background === 'bar' || t.background === 'box') {
+  if (t.slashBanner && ctx.beginPath && ctx.lineTo) {
+    ctx.save();
+    const bw = longestLine + padding * 2.4;
+    const bh = totalHeight + padding * 1.4;
+    const skew = bh * 0.28;
+    const by = -bh / 2;
+    ctx.globalAlpha *= Math.max(0.55, t.backgroundOpacity ?? 0.78);
+    ctx.fillStyle = '#07080d';
+    ctx.beginPath();
+    ctx.moveTo(-bw / 2 + skew, by);
+    ctx.lineTo(bw / 2 + skew, by);
+    ctx.lineTo(bw / 2 - skew, by + bh);
+    ctx.lineTo(-bw / 2 - skew, by + bh);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = Math.min(1, alpha);
+    ctx.strokeStyle = t.outerOutlineColor ?? t.glowColor ?? '#ff4d6d';
+    ctx.lineWidth = Math.max(2, 3 * k);
+    ctx.stroke();
+    ctx.restore();
+  } else if (t.background === 'bar' || t.background === 'box') {
     ctx.save();
     ctx.globalAlpha *= t.backgroundOpacity;
     ctx.fillStyle = '#000000';
@@ -359,6 +380,8 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
       const wordY = y + (word?.offsetY ?? 0) * k;
       const wordSize = size * wordScale;
       const wordFont = isHero && t.heroFont ? t.heroFont : t.font;
+      const wordItalic = isHero ? (t.heroItalic || t.italic) : t.italic;
+      const wordIsHollow = t.fillStyle === 'hollow' && !isHero && !(active && animation === 'highlight');
       ctx.save();
       if (isHero && t.heroTiltDeg && ctx.translate && ctx.rotate) {
         const cx = wordX + (part.width * heroBoost) / 2;
@@ -366,12 +389,12 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
         ctx.rotate((t.heroTiltDeg * Math.PI) / 180);
         ctx.translate(-cx, -wordY);
       }
-      ctx.font = `${word?.weight ?? t.weight ?? 700} ${wordSize}px "${wordFont}", "Manrope Variable", system-ui, sans-serif`;
+      ctx.font = `${wordItalic ? 'italic ' : ''}${word?.weight ?? t.weight ?? 700} ${wordSize}px "${wordFont}", "Manrope Variable", system-ui, sans-serif`;
       if (active && animation === 'fade') ctx.globalAlpha *= Math.min(1, wordProgress * 3);
 
-      // 1. Extrusão 3D / sombra dura diagonal (estilo mangá / edit profissional)
+      // 1. Extrusão 3D / sombra dura diagonal (em modo hollow desenha apenas aramado externo)
       const extrudeSteps = Math.min(16, Math.round((t.extrudeDepth ?? 0) * k));
-      if (extrudeSteps > 0) {
+      if (extrudeSteps > 0 && !wordIsHollow) {
         ctx.save();
         ctx.fillStyle = t.extrudeColor ?? '#08080c';
         ctx.strokeStyle = t.extrudeColor ?? '#08080c';
@@ -381,6 +404,30 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
           drawSpaced(ctx, part.word, wordX + step * 0.85, wordY + step, spacing * wordScale);
         }
         ctx.restore();
+      }
+
+      if (wordIsHollow) {
+        // Texto Vazado / Vidro Neon: o vídeo brilha por dentro da letra com borda luminosa dupla
+        ctx.save();
+        if ((t.glowIntensity ?? 0) > 0 || t.shadow) {
+          ctx.shadowColor = t.glowColor ?? '#00f0ff';
+          ctx.shadowBlur = Math.max(10, t.glowIntensity ?? 12) * k;
+          ctx.shadowOffsetY = 0;
+        }
+        ctx.lineWidth = Math.max(2.5, (t.outlineWidth || 3) * 1.35 * k);
+        ctx.strokeStyle = t.outerOutlineColor ?? t.glowColor ?? t.gradientEndColor ?? '#38bdf8';
+        strokeSpaced(ctx, part.word, wordX, wordY, spacing * wordScale);
+        ctx.shadowBlur = 0;
+        ctx.lineWidth = Math.max(1.5, (t.outlineWidth || 3) * 0.72 * k);
+        ctx.strokeStyle = t.color || '#ffffff';
+        strokeSpaced(ctx, part.word, wordX, wordY, spacing * wordScale);
+        ctx.globalAlpha *= 0.14;
+        ctx.fillStyle = t.gradientStartColor ?? t.color ?? '#ffffff';
+        drawSpaced(ctx, part.word, wordX, wordY, spacing * wordScale);
+        ctx.restore();
+        ctx.restore();
+        x += part.width * (isHero ? heroBoost : 1);
+        continue;
       }
 
       // 2. Contorno externo duplo (filete neon / branco / dourado por fora da borda escura)
@@ -475,4 +522,50 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
     }
   });
   ctx.restore();
+}
+
+/**
+ * Estima a caixa delimitadora de um clipe de texto em coordenadas do projeto (`projW × projH`)
+ * para seleção direta por clique, arrasto e alças de redimensionamento/rotação no Preview.
+ */
+export function estimateTextBounds(
+  c: Clip,
+  projW: number,
+  projH: number,
+  localUs: number,
+): { centerX: number; centerY: number; width: number; height: number; rotation: number; x: number; y: number; scale: number } | null {
+  const t = c.text;
+  if (!t || !t.text.trim()) return null;
+  const x = evaluateKeyframes(c.keyframes['transform.x'], localUs, c.transform.x);
+  const y = evaluateKeyframes(c.keyframes['transform.y'], localUs, c.transform.y);
+  const scale = evaluateKeyframes(c.keyframes['transform.scale'], localUs, c.transform.scale);
+  const rotation = evaluateKeyframes(c.keyframes['transform.rotation'], localUs, c.transform.rotation);
+  const size = Math.max(16, t.size * scale);
+  const maxWidth = Math.max(size * 2, Math.min(projW * (t.maxWidthRatio ?? 0.9), projW - 2 * (t.marginX ?? 48)));
+  const avgCharW = size * (/Cinzel|Playfair|Montserrat|Manrope/i.test(t.font) ? 0.56 : 0.48) + (t.letterSpacing ?? 0);
+  const rawParagraphs = t.text.split('\n');
+  let estLines = 0;
+  let maxLineW = size * 2;
+  for (const para of rawParagraphs) {
+    const pw = Math.max(size * 1.4, Array.from(para.trim()).length * avgCharW * (t.heroWord ? 1.12 : 1));
+    const wrapped = Math.max(1, Math.ceil(pw / maxWidth));
+    estLines += wrapped;
+    maxLineW = Math.max(maxLineW, Math.min(maxWidth, pw));
+  }
+  const padding = Math.max(16, t.padding ?? 24);
+  const lh = size * (t.lineSpacing ?? 1.18);
+  const totalH = Math.max(lh, estLines * lh) + 2 * padding;
+  const totalW = Math.min(projW * 0.96, maxLineW + 2 * padding);
+  const verticalLimit = Math.max(0, projH / 2 - (t.marginY ?? 0) - totalH / 2);
+  const clampedY = Math.max(-verticalLimit, Math.min(verticalLimit, y));
+  return {
+    centerX: projW / 2 + x,
+    centerY: projH / 2 + clampedY,
+    width: totalW,
+    height: totalH,
+    rotation,
+    x,
+    y: clampedY,
+    scale,
+  };
 }

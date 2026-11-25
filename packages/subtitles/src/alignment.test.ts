@@ -78,4 +78,24 @@ describe('local lyric alignment', () => {
     expect(promoted[0]!.words).toHaveLength(3);
     expect(promoted[0]!.words![0]!.source).toBe('lrc');
   });
+
+  it('aperta início/fim da letra traduzida aos tempos reais das palavras cantadas (evita adiantar durante intro instrumental)', () => {
+    const cues = promoteAlignedCuesForTypography([
+      {
+        startS: 4.0, // Whisper sem VAD começou 3,8s antes na introdução instrumental
+        endS: 11.5,
+        text: 'Pele clara,',
+        words: [
+          { startS: 7.8, endS: 8.4, text: 'Clear', source: 'whisper', confidence: 0.92 },
+          { startS: 8.5, endS: 9.2, text: 'pale', source: 'whisper', confidence: 0.92 },
+          { startS: 9.25, endS: 9.9, text: 'skin', source: 'whisper', confidence: 0.92 },
+        ],
+      },
+    ]);
+    expect(cues[0]!.startS).toBeCloseTo(7.8, 3);
+    expect(cues[0]!.endS).toBeCloseTo(9.9, 3);
+    expect(cues[0]!.words?.map((w) => w.text)).toEqual(['Pele', 'clara,']);
+    expect(cues[0]!.words![0]!.startS).toBeCloseTo(7.8, 3);
+    expect(cues[0]!.words![1]!.endS).toBeCloseTo(9.9, 3);
+  });
 });

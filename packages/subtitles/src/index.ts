@@ -12,26 +12,28 @@ const us = (s: number) => Math.round(s * S);
 
 export type SubtitleLook =
   | 'legenda' | 'destaque' | 'palavra' | 'karaoke' | 'lyrics-cinematic' | 'dialogue-dramatic' | 'impact-typography'
-  | 'anime-dialogue' | 'anime-impact' | 'anime-neon' | 'anime-manga' | 'anime-gold-epic'
+  | 'anime-dialogue' | 'anime-impact' | 'anime-blend' | 'anime-katana' | 'anime-neon' | 'anime-manga' | 'anime-gold-epic'
   | 'section-intro' | 'section-verse' | 'section-chorus' | 'section-climax';
 
 export const LOOKS: { id: SubtitleLook; label: string; description: string }[] = [
-  { id: 'anime-dialogue', label: 'Anime · diálogo', description: 'Base limpa com contorno forte.' },
-  { id: 'anime-impact', label: 'Anime · impacto', description: 'Anton 3D, Hero Word, duplo contorno e RGB split.' },
-  { id: 'anime-neon', label: 'Anime · neon', description: 'Bebas ciano elétrico, brilho sheen e RGB split.' },
-  { id: 'anime-manga', label: 'Anime · mangá', description: 'Bebas 3D em painel mangá com filete branco.' },
-  { id: 'anime-gold-epic', label: 'Anime · ouro épico', description: 'Cinzel dourado 3D com reflexo sheen.' },
-  { id: 'legenda', label: 'Legenda', description: 'Base discreta com contorno.' },
+  { id: 'anime-blend', label: 'Anime · mesclado c/ vídeo', description: 'Inversão negativa/luz viva + vazado + Playfair itálico.' },
+  { id: 'anime-impact', label: 'Anime · impacto brutal', description: 'Russo One + Hero em Permanent Marker, 3D e RGB split.' },
+  { id: 'anime-katana', label: 'Anime · katana brush', description: 'Pincel Permanent Marker inclinado + faixa slash.' },
+  { id: 'anime-neon', label: 'Anime · neon vazado', description: 'Teko 700 vazado + Hero em Bungee com luz ciano/magenta.' },
+  { id: 'anime-gold-epic', label: 'Anime · ouro épico', description: 'Cinzel + Playfair itálico dourado 3D com reflexo sheen.' },
+  { id: 'anime-manga', label: 'Anime · slash mangá', description: 'Black Ops One 3D em faixa katana diagonal.' },
+  { id: 'lyrics-cinematic', label: 'Cinema editorial', description: 'Montserrat + Hero em Playfair Display itálico.' },
+  { id: 'anime-dialogue', label: 'Fala do personagem', description: 'Itálico cinematográfico limpo na base, sem caixa pesada.' },
+  { id: 'legenda', label: 'Legenda simples', description: 'Base discreta com contorno.' },
   { id: 'destaque', label: 'Destaque', description: 'Central grande com pop.' },
   { id: 'palavra', label: 'Palavra', description: 'Caixa alta gigante com pulo.' },
   { id: 'karaoke', label: 'Letra', description: 'Base amarela para música.' },
-  { id: 'lyrics-cinematic', label: 'Lyrics Cinematic', description: 'Montserrat + Hero Word em Cinzel.' },
-  { id: 'dialogue-dramatic', label: 'Dialogue Dramatic', description: 'Fala dramática com caixa translúcida.' },
+  { id: 'dialogue-dramatic', label: 'Diálogo dramático', description: 'Fala na base com destaque sutil.' },
   { id: 'impact-typography', label: 'Impact Typography', description: 'Anton gigante central.' },
   { id: 'section-intro', label: 'Intro', description: 'Cinzel espaçado cinematográfico.' },
   { id: 'section-verse', label: 'Verso', description: 'Discreto na base.' },
   { id: 'section-chorus', label: 'Refrão', description: 'Gradiente vibrante no refrão.' },
-  { id: 'section-climax', label: 'Clímax', description: 'Anton explosivo com RGB split e glow.' },
+  { id: 'section-climax', label: 'Clímax', description: 'Russo One explosivo com RGB split e glow.' },
 ];
 
 export interface UntimedLyricAlignment {
@@ -184,14 +186,19 @@ function splitDisplayWords(text: string): string[] {
  */
 export function promoteAlignedCuesForTypography(cues: Cue[]): Cue[] {
   return cues.map((cue) => {
-    const startS = Math.max(0, cue.startS);
-    const endS = Math.max(startS + 0.04, cue.endS);
     const tokens = splitDisplayWords(cue.text);
-    if (!tokens.length) return cue;
-
     const existing = (cue.words ?? []).filter(
       (word) => Number.isFinite(word.startS) && Number.isFinite(word.endS) && word.endS > word.startS,
     );
+    // Aperta os limites da linha aos tempos reais das palavras cantadas (evita que o Whisper sem VAD
+    // antecipe a legenda em 2–4s durante introduções instrumentais antes do vocal começar).
+    const hasRealVocalWords = existing.length > 0 && existing.some((w) => w.source !== 'estimated');
+    const firstWordStart = hasRealVocalWords ? existing[0]!.startS : cue.startS;
+    const lastWordEnd = hasRealVocalWords ? existing[existing.length - 1]!.endS : cue.endS;
+    const startS = Math.max(0, hasRealVocalWords && firstWordStart >= cue.startS && firstWordStart < cue.endS - 0.04 ? firstWordStart : cue.startS);
+    const endS = Math.max(startS + 0.04, hasRealVocalWords && lastWordEnd > startS + 0.04 && lastWordEnd <= cue.endS + 0.05 ? lastWordEnd : cue.endS);
+    if (!tokens.length) return { ...cue, startS, endS };
+
     if (existing.length === tokens.length) {
       const words: CueWord[] = tokens.map((token, idx) => {
         const w = existing[idx]!;
@@ -209,9 +216,48 @@ export function promoteAlignedCuesForTypography(cues: Cue[]): Cue[] {
       return { ...cue, startS, endS, words };
     }
 
-    const totalDur = endS - startS;
     const weights = tokens.map((token) => Math.max(1, Array.from(token).length));
     const totalWeight = weights.reduce((acc, w) => acc + w, 0);
+
+    // Quando há palavras vocais reais (ex.: música em inglês/japonês traduzida para PT-BR com outro número de palavras),
+    // interpola ao longo dos intervalos vocais reais preservando pausas internas da voz cantada.
+    if (existing.length >= 2) {
+      const activeSpans = existing.map((w) => ({
+        start: Math.max(startS, Math.min(endS, w.startS)),
+        end: Math.max(startS, Math.min(endS, w.endS)),
+      })).filter((s) => s.end - s.start > 0.005);
+      const totalActive = activeSpans.reduce((acc, s) => acc + (s.end - s.start), 0);
+      if (totalActive >= 0.04) {
+        const vocalTimeAt = (frac: number): number => {
+          let rem = Math.max(0, Math.min(1, frac)) * totalActive;
+          for (const sp of activeSpans) {
+            const d = sp.end - sp.start;
+            if (rem <= d + 1e-9) return sp.start + rem;
+            rem -= d;
+          }
+          return activeSpans[activeSpans.length - 1]!.end;
+        };
+        let accW = 0;
+        const words: CueWord[] = tokens.map((token, idx) => {
+          const f0 = accW / totalWeight;
+          accW += weights[idx]!;
+          const f1 = accW / totalWeight;
+          const wStart = idx === 0 ? activeSpans[0]!.start : vocalTimeAt(f0);
+          const wEnd = idx === tokens.length - 1 ? activeSpans[activeSpans.length - 1]!.end : Math.max(wStart + 0.02, vocalTimeAt(f1));
+          return {
+            startS: wStart,
+            endS: Math.max(wStart + 0.02, wEnd),
+            text: token,
+            source: 'lrc',
+            confidence: 0.95,
+            uncertain: false,
+          };
+        });
+        return { ...cue, startS, endS, words };
+      }
+    }
+
+    const totalDur = endS - startS;
     let cursor = startS;
     const words: CueWord[] = tokens.map((token, idx) => {
       const share = (weights[idx]! / totalWeight) * totalDur;
@@ -234,24 +280,45 @@ export function promoteAlignedCuesForTypography(cues: Cue[]): Cue[] {
 function buildVocalSpans(
   transcriptWords: { start: number; end: number; text: string }[],
   transcriptSegments?: { start: number; end: number; text: string }[],
-): { start: number; end: number }[] {
-  const segs = (transcriptSegments ?? [])
-    .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start + 0.05)
-    .map((s) => ({ start: Math.max(0, s.start), end: s.end }))
-    .sort((a, b) => a.start - b.start);
-  if (segs.length) return segs;
-
+): { start: number; end: number; text?: string }[] {
   const words = transcriptWords
     .filter((w) => Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start)
     .sort((a, b) => a.start - b.start);
-  if (!words.length) return [];
 
+  const segs = (transcriptSegments ?? [])
+    .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start + 0.05)
+    .sort((a, b) => a.start - b.start);
+
+  if (segs.length) {
+    return segs.flatMap((s) => {
+      const segTokens = s.text.trim().split(/\s+/).filter(Boolean);
+      const inSeg = words.filter((w) => w.start >= s.start - 0.05 && w.end <= s.end + 0.05);
+      // Quando todas as palavras do segmento têm timestamp real, aperta início/fim para cortar silêncio instrumental pré-vocal
+      if (inSeg.length > 0 && inSeg.length >= segTokens.length) {
+        const subSpans: { start: number; end: number }[] = [];
+        let curStart = Math.max(0, inSeg[0]!.start);
+        let curEnd = inSeg[0]!.end;
+        for (let i = 1; i < inSeg.length; i++) {
+          if (inSeg[i]!.start - curEnd > 0.65) {
+            subSpans.push({ start: curStart, end: curEnd });
+            curStart = Math.max(0, inSeg[i]!.start);
+          }
+          curEnd = Math.max(curEnd, inSeg[i]!.end);
+        }
+        subSpans.push({ start: curStart, end: curEnd });
+        return subSpans;
+      }
+      return [{ start: Math.max(0, s.start), end: s.end }];
+    });
+  }
+
+  if (!words.length) return [];
   const spans: { start: number; end: number }[] = [];
   let curStart = Math.max(0, words[0]!.start);
   let curEnd = words[0]!.end;
   for (let i = 1; i < words.length; i++) {
     const w = words[i]!;
-    if (w.start - curEnd > 1.2) {
+    if (w.start - curEnd > 0.8) {
       spans.push({ start: curStart, end: curEnd });
       curStart = Math.max(0, w.start);
     }
@@ -419,42 +486,142 @@ export function alignUntimedLyricsWithFallback(
   };
 }
 
-export function lookText(look: SubtitleLook, H: number, text: string): { transform: Clip['transform']; text: NonNullable<Clip['text']> } {
-  const t = (y: number) => ({ x: 0, y: Math.round(H * y), scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } });
+export function lookText(look: SubtitleLook, H: number, text: string): { transform: Clip['transform']; text: NonNullable<Clip['text']>; blendMode?: Clip['blendMode'] } {
+  const t = (y: number, rotation = 0) => ({ x: 0, y: Math.round(H * y), scale: 1, rotation, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } });
   const content = (values: Partial<NonNullable<Clip['text']>> & { text: string }) => TextContentSchema.parse(values);
   switch (look) {
+    case 'anime-blend':
+      return {
+        transform: t(0),
+        blendMode: 'difference',
+        text: content({
+          text: text.toUpperCase(),
+          font: 'Russo One',
+          size: Math.round(H * 0.12),
+          weight: 900,
+          color: '#ffffff',
+          outlineColor: '#000000',
+          outlineWidth: 2,
+          fillStyle: 'hollow',
+          sheen: true,
+          heroWord: true,
+          heroFont: 'Playfair Display Variable',
+          heroItalic: true,
+          heroScale: 1.28,
+          heroColor: '#ffffff',
+          shadow: false,
+          animationIn: 'pop',
+          animationOut: 'blur',
+          animationInUs: 160_000,
+          animationOutUs: 140_000,
+          highlightColor: '#ffffff',
+          highlightScale: 1.2,
+          glowColor: '#ffffff',
+          glowIntensity: 10,
+          letterSpacing: 2,
+          marginX: Math.round(H * 0.06),
+          marginY: Math.round(H * 0.06),
+          maxWidthRatio: 0.86,
+          background: 'none',
+          section: 'climax',
+        }),
+      };
+    case 'anime-katana':
+      return {
+        transform: t(0.04, -2),
+        blendMode: 'normal',
+        text: content({
+          text: text.toUpperCase(),
+          font: 'Permanent Marker',
+          size: Math.round(H * 0.115),
+          weight: 700,
+          color: '#fff8eb',
+          outlineColor: '#090408',
+          outlineWidth: 5,
+          outerOutlineColor: '#ff3b5c',
+          outerOutlineWidth: 1.6,
+          extrudeDepth: 4,
+          extrudeColor: '#17040a',
+          chromaticAberration: 3.5,
+          slashBanner: false,
+          heroWord: true,
+          heroFont: 'Russo One',
+          heroScale: 1.22,
+          heroColor: '#ffbe0b',
+          heroTiltDeg: -3,
+          shadow: true,
+          animationIn: 'slide-left',
+          animationOut: 'fade',
+          animationInUs: 150_000,
+          animationOutUs: 110_000,
+          highlightColor: '#ffbe0b',
+          highlightScale: 1.2,
+          glowColor: '#ff3b5c',
+          glowIntensity: 12,
+          letterSpacing: 1,
+          marginX: Math.round(H * 0.06),
+          marginY: Math.round(H * 0.06),
+          maxWidthRatio: 0.86,
+          background: 'none',
+        }),
+      };
     case 'anime-dialogue':
-      return { transform: t(0.35), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.048), weight: 800, color: '#f1f5f9', outlineColor: '#08090c', outlineWidth: 3, shadow: true, animationIn: 'fade', animationOut: 'fade', animationInUs: 120_000, animationOutUs: 100_000, marginX: Math.round(H * 0.07), marginY: Math.round(H * 0.05), maxWidthRatio: 0.86, lineSpacing: 1.2, background: 'box', backgroundOpacity: 0.62 }) };
+      return {
+        transform: t(0.36),
+        blendMode: 'normal',
+        text: content({
+          text,
+          font: 'Montserrat Variable',
+          italic: true,
+          size: Math.round(H * 0.048),
+          weight: 700,
+          color: '#fef9c3',
+          outlineColor: '#06080f',
+          outlineWidth: 4,
+          outerOutlineColor: '#38bdf8',
+          outerOutlineWidth: 0.8,
+          shadow: true,
+          animationIn: 'fade',
+          animationOut: 'fade',
+          animationInUs: 120_000,
+          animationOutUs: 100_000,
+          marginX: Math.round(H * 0.07),
+          marginY: Math.round(H * 0.05),
+          maxWidthRatio: 0.86,
+          lineSpacing: 1.2,
+          background: 'none',
+        }),
+      };
     case 'anime-impact':
-      return { transform: t(0), text: content({ text: text.toUpperCase(), font: 'Anton', size: Math.round(H * 0.115), weight: 900, color: '#fff4e6', outlineColor: '#14090d', outlineWidth: 5, outerOutlineColor: '#ff3355', outerOutlineWidth: 1.5, extrudeDepth: 4, extrudeColor: '#1a050a', chromaticAberration: 3.2, heroWord: true, heroScale: 1.22, heroColor: '#ff4d6d', heroTiltDeg: -2, shadow: true, animationIn: 'pop', animationOut: 'fade', animationInUs: 180_000, animationOutUs: 120_000, highlightColor: '#ff5364', highlightScale: 1.15, glowColor: '#ff5364', glowIntensity: 8, marginX: Math.round(H * 0.07), marginY: Math.round(H * 0.06), maxWidthRatio: 0.84, background: 'none' }) };
+      return { transform: t(0), blendMode: 'normal', text: content({ text: text.toUpperCase(), font: 'Russo One', size: Math.round(H * 0.115), weight: 900, color: '#fff4e6', outlineColor: '#14090d', outlineWidth: 5, outerOutlineColor: '#ff3355', outerOutlineWidth: 1.6, extrudeDepth: 4, extrudeColor: '#1a050a', chromaticAberration: 3.2, heroWord: true, heroFont: 'Permanent Marker', heroScale: 1.24, heroColor: '#ff5c77', heroTiltDeg: -3, shadow: true, animationIn: 'pop', animationOut: 'fade', animationInUs: 180_000, animationOutUs: 120_000, highlightColor: '#ff5364', highlightScale: 1.18, glowColor: '#ff5364', glowIntensity: 12, marginX: Math.round(H * 0.07), marginY: Math.round(H * 0.06), maxWidthRatio: 0.84, background: 'none' }) };
     case 'anime-neon':
-      return { transform: t(0.14), text: content({ text: text.toUpperCase(), font: 'Bebas Neue', size: Math.round(H * 0.11), weight: 900, color: '#d8fbff', outlineColor: '#05121d', outlineWidth: 4, chromaticAberration: 2.4, sheen: true, heroWord: true, heroFont: 'Anton', heroScale: 1.2, heroColor: '#ff4d9d', shadow: true, animationIn: 'pop', animationOut: 'fade', animationInUs: 160_000, animationOutUs: 120_000, fillStyle: 'linear-gradient', gradientStartColor: '#e0ffff', gradientEndColor: '#38bdf8', highlightColor: '#ff4d9d', highlightScale: 1.18, wordAnimation: 'pop', glowColor: '#00d4ff', glowIntensity: 14, letterSpacing: 2, marginX: Math.round(H * 0.06), marginY: Math.round(H * 0.05), maxWidthRatio: 0.86, background: 'none', section: 'chorus' }) };
+      return { transform: t(0.1), blendMode: 'screen', text: content({ text: text.toUpperCase(), font: 'Teko', size: Math.round(H * 0.13), weight: 900, color: '#e0fbff', outlineColor: '#041019', outlineWidth: 4, outerOutlineColor: '#00f0ff', outerOutlineWidth: 1.4, chromaticAberration: 2.6, sheen: true, heroWord: true, heroFont: 'Bungee', heroScale: 1.14, heroColor: '#ff4d9d', shadow: true, animationIn: 'pop', animationOut: 'blur', animationInUs: 160_000, animationOutUs: 120_000, fillStyle: 'hollow', gradientStartColor: '#e0ffff', gradientEndColor: '#38bdf8', highlightColor: '#ff4d9d', highlightScale: 1.18, wordAnimation: 'pop', glowColor: '#00e5ff', glowIntensity: 18, letterSpacing: 3, marginX: Math.round(H * 0.06), marginY: Math.round(H * 0.05), maxWidthRatio: 0.86, background: 'none', section: 'chorus' }) };
     case 'anime-manga':
-      return { transform: t(0.24), text: content({ text: text.toUpperCase(), font: 'Bebas Neue', size: Math.round(H * 0.092), weight: 900, color: '#ffffff', outlineColor: '#090a0d', outlineWidth: 5, outerOutlineColor: '#ffffff', outerOutlineWidth: 1.8, extrudeDepth: 5, extrudeColor: '#000000', shadow: true, animationIn: 'slide', animationOut: 'fade', animationInUs: 140_000, animationOutUs: 100_000, background: 'box', backgroundOpacity: 0.88, highlightColor: '#ffe047', highlightScale: 1.15, letterSpacing: 2, padding: Math.round(H * 0.026), marginX: Math.round(H * 0.07), marginY: Math.round(H * 0.05), maxWidthRatio: 0.84 }) };
+      return { transform: t(0.22), blendMode: 'normal', text: content({ text: text.toUpperCase(), font: 'Black Ops One', size: Math.round(H * 0.092), weight: 900, color: '#ffffff', outlineColor: '#090a0d', outlineWidth: 5, outerOutlineColor: '#ffe047', outerOutlineWidth: 1.6, extrudeDepth: 5, extrudeColor: '#000000', slashBanner: true, shadow: true, animationIn: 'slide-left', animationOut: 'fade', animationInUs: 140_000, animationOutUs: 100_000, background: 'none', backgroundOpacity: 0.82, highlightColor: '#ffe047', highlightScale: 1.16, letterSpacing: 2, padding: Math.round(H * 0.024), marginX: Math.round(H * 0.07), marginY: Math.round(H * 0.05), maxWidthRatio: 0.84 }) };
     case 'anime-gold-epic':
-      return { transform: t(0), text: content({ text: text.toUpperCase(), font: 'Cinzel Variable', size: Math.round(H * 0.105), weight: 900, color: '#fff7d1', outlineColor: '#1a0e04', outlineWidth: 5, outerOutlineColor: '#fde68a', outerOutlineWidth: 1, extrudeDepth: 3, extrudeColor: '#241202', sheen: true, heroWord: true, heroScale: 1.2, shadow: true, animationIn: 'pop', animationOut: 'blur', animationInUs: 200_000, animationOutUs: 150_000, fillStyle: 'linear-gradient', gradientStartColor: '#fff9d6', gradientEndColor: '#f59e0b', highlightColor: '#ffffff', highlightScale: 1.2, wordAnimation: 'highlight', glowColor: '#f59e0b', glowIntensity: 12, letterSpacing: 3, marginX: Math.round(H * 0.06), marginY: Math.round(H * 0.06), maxWidthRatio: 0.86, background: 'none', section: 'climax' }) };
+      return { transform: t(0), blendMode: 'normal', text: content({ text: text.toUpperCase(), font: 'Cinzel Variable', size: Math.round(H * 0.105), weight: 900, color: '#fff7d1', outlineColor: '#1a0e04', outlineWidth: 5, outerOutlineColor: '#fde68a', outerOutlineWidth: 1.2, extrudeDepth: 3, extrudeColor: '#241202', sheen: true, heroWord: true, heroFont: 'Playfair Display Variable', heroItalic: true, heroScale: 1.25, shadow: true, animationIn: 'pop', animationOut: 'blur', animationInUs: 200_000, animationOutUs: 150_000, fillStyle: 'linear-gradient', gradientStartColor: '#fff9d6', gradientEndColor: '#f59e0b', highlightColor: '#ffffff', highlightScale: 1.2, wordAnimation: 'highlight', glowColor: '#f59e0b', glowIntensity: 14, letterSpacing: 3, marginX: Math.round(H * 0.06), marginY: Math.round(H * 0.06), maxWidthRatio: 0.86, background: 'none', section: 'climax' }) };
     case 'destaque':
-      return { transform: t(0), text: content({ text, font: 'Montserrat Variable', size: Math.round(H * 0.075), weight: 800, color: '#ffffff', outlineColor: '#000000', outlineWidth: 4, shadow: true, animationIn: 'pop', animationOut: 'fade' }) };
+      return { transform: t(0), blendMode: 'normal', text: content({ text, font: 'Russo One', size: Math.round(H * 0.08), weight: 800, color: '#ffffff', outlineColor: '#000000', outlineWidth: 4, shadow: true, animationIn: 'pop', animationOut: 'fade' }) };
     case 'palavra':
-      return { transform: t(0), text: content({ text: text.toUpperCase(), font: 'Anton', size: Math.round(H * 0.12), color: '#ffffff', outlineColor: '#000000', outlineWidth: 4, extrudeDepth: 3, shadow: true, animationIn: 'pop', animationOut: null }) };
+      return { transform: t(0), blendMode: 'normal', text: content({ text: text.toUpperCase(), font: 'Anton', size: Math.round(H * 0.12), color: '#ffffff', outlineColor: '#000000', outlineWidth: 4, extrudeDepth: 3, shadow: true, animationIn: 'pop', animationOut: null }) };
     case 'karaoke':
-      return { transform: t(0.34), text: content({ text, font: 'Montserrat Variable', size: Math.round(H * 0.055), weight: 700, color: '#fff3b0', outlineColor: '#000000', outlineWidth: 4, shadow: true, animationIn: 'fade', animationOut: 'fade' }) };
+      return { transform: t(0.34), blendMode: 'normal', text: content({ text, font: 'Montserrat Variable', size: Math.round(H * 0.055), weight: 800, color: '#fff3b0', outlineColor: '#000000', outlineWidth: 4, shadow: true, animationIn: 'fade', animationOut: 'fade' }) };
     case 'lyrics-cinematic':
-      return { transform: t(0.22), text: content({ text, font: 'Montserrat Variable', size: Math.round(H * 0.085), weight: 800, color: '#ffffff', outlineColor: '#08090c', outlineWidth: 3, sheen: true, heroWord: true, heroFont: 'Cinzel Variable', heroScale: 1.22, heroColor: '#ffe066', shadow: true, animationIn: 'pop', animationOut: 'fade', highlightColor: '#ffd166', highlightScale: 1.18, alignment: 'center', maxWidthRatio: 0.9, marginX: Math.round(H * 0.06), background: 'none' }) };
+      return { transform: t(0.18), blendMode: 'normal', text: content({ text, font: 'Montserrat Variable', size: Math.round(H * 0.085), weight: 800, color: '#ffffff', outlineColor: '#08090c', outlineWidth: 3.5, sheen: true, heroWord: true, heroFont: 'Playfair Display Variable', heroItalic: true, heroScale: 1.28, heroColor: '#ffe066', shadow: true, animationIn: 'pop', animationOut: 'fade', highlightColor: '#ffd166', highlightScale: 1.18, alignment: 'center', maxWidthRatio: 0.9, marginX: Math.round(H * 0.06), background: 'none' }) };
     case 'dialogue-dramatic':
-      return { transform: t(0.28), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.062), weight: 700, color: '#ffffff', outlineColor: '#000000', outlineWidth: 2, shadow: true, animationIn: 'fade', animationOut: 'fade', background: 'box', backgroundOpacity: 0.78, alignment: 'center', maxWidthRatio: 0.82, marginX: Math.round(H * 0.08), padding: Math.round(H * 0.025), lineSpacing: 1.22 }) };
+      return { transform: t(0.34), blendMode: 'normal', text: content({ text, font: 'Playfair Display Variable', italic: true, size: Math.round(H * 0.056), weight: 700, color: '#fef3c7', outlineColor: '#05070c', outlineWidth: 4, shadow: true, animationIn: 'fade', animationOut: 'fade', background: 'none', alignment: 'center', maxWidthRatio: 0.84, marginX: Math.round(H * 0.08), padding: Math.round(H * 0.02), lineSpacing: 1.22 }) };
     case 'impact-typography':
-      return { transform: t(0), text: content({ text: text.toUpperCase(), font: 'Anton', size: Math.round(H * 0.135), weight: 900, color: '#ffffff', outlineColor: '#050505', outlineWidth: 5, extrudeDepth: 4, chromaticAberration: 3, shadow: true, animationIn: 'pop', animationOut: 'fade', background: 'none', alignment: 'center', maxWidthRatio: 0.88, marginX: Math.round(H * 0.06), padding: Math.round(H * 0.03), highlightColor: '#ffe066', highlightScale: 1.25 }) };
+      return { transform: t(0), blendMode: 'normal', text: content({ text: text.toUpperCase(), font: 'Russo One', size: Math.round(H * 0.13), weight: 900, color: '#ffffff', outlineColor: '#050505', outlineWidth: 5, extrudeDepth: 4, chromaticAberration: 3, shadow: true, animationIn: 'pop', animationOut: 'fade', background: 'none', alignment: 'center', maxWidthRatio: 0.88, marginX: Math.round(H * 0.06), padding: Math.round(H * 0.03), highlightColor: '#ffe066', highlightScale: 1.25 }) };
     case 'section-intro':
-      return { transform: t(-0.2), text: content({ text: text.toUpperCase(), font: 'Cinzel Variable', size: Math.round(H * 0.08), weight: 700, color: '#ffffff', outlineColor: '#11131a', outlineWidth: 2, sheen: true, shadow: true, animationIn: 'slide', animationOut: 'fade', fillStyle: 'linear-gradient', gradientStartColor: '#fff2bd', gradientEndColor: '#e5a84b', glowColor: '#ffd36e', glowIntensity: 6, letterSpacing: 4, alignment: 'center', section: 'intro' }) };
+      return { transform: t(-0.2), blendMode: 'normal', text: content({ text: text.toUpperCase(), font: 'Cinzel Variable', size: Math.round(H * 0.08), weight: 700, color: '#ffffff', outlineColor: '#11131a', outlineWidth: 2, sheen: true, shadow: true, animationIn: 'slide', animationOut: 'fade', fillStyle: 'linear-gradient', gradientStartColor: '#fff2bd', gradientEndColor: '#e5a84b', glowColor: '#ffd36e', glowIntensity: 6, letterSpacing: 4, alignment: 'center', section: 'intro' }) };
     case 'section-verse':
-      return { transform: t(0.34), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.05), color: '#ffffff', outlineColor: '#000000', outlineWidth: 3, shadow: true, animationIn: 'fade', animationOut: 'fade', background: 'box', backgroundOpacity: 0.58, alignment: 'center', section: 'verse' }) };
+      return { transform: t(0.34), blendMode: 'normal', text: content({ text, font: 'Montserrat Variable', size: Math.round(H * 0.052), weight: 700, color: '#ffffff', outlineColor: '#000000', outlineWidth: 3.5, shadow: true, animationIn: 'fade', animationOut: 'fade', background: 'none', alignment: 'center', section: 'verse' }) };
     case 'section-chorus':
-      return { transform: t(0.18), text: content({ text, font: 'Bebas Neue', size: Math.round(H * 0.095), weight: 800, color: '#ffffff', outlineColor: '#08090c', outlineWidth: 4, sheen: true, shadow: true, animationIn: 'pop', animationOut: 'fade', fillStyle: 'linear-gradient', gradientStartColor: '#fff2a6', gradientEndColor: '#ff78bc', glowColor: '#ff91d0', glowIntensity: 10, highlightColor: '#ffffff', highlightScale: 1.16, wordAnimation: 'highlight', letterSpacing: 2, alignment: 'center', section: 'chorus' }) };
+      return { transform: t(0.16), blendMode: 'normal', text: content({ text, font: 'Teko', size: Math.round(H * 0.115), weight: 700, color: '#ffffff', outlineColor: '#08090c', outlineWidth: 4, sheen: true, shadow: true, animationIn: 'pop', animationOut: 'fade', fillStyle: 'linear-gradient', gradientStartColor: '#fff2a6', gradientEndColor: '#ff78bc', glowColor: '#ff91d0', glowIntensity: 12, highlightColor: '#ffffff', highlightScale: 1.16, wordAnimation: 'highlight', letterSpacing: 2, alignment: 'center', section: 'chorus' }) };
     case 'section-climax':
-      return { transform: t(0), text: content({ text: text.toUpperCase(), font: 'Anton', size: Math.round(H * 0.13), weight: 900, color: '#ffffff', outlineColor: '#08090c', outlineWidth: 5, extrudeDepth: 4, chromaticAberration: 3.5, shadow: true, animationIn: 'pop', animationOut: 'blur', fillStyle: 'linear-gradient', gradientStartColor: '#fff4bd', gradientEndColor: '#ff4b57', glowColor: '#ff503c', glowIntensity: 18, highlightColor: '#ffffff', highlightScale: 1.2, wordAnimation: 'pop', background: 'none', alignment: 'center', section: 'climax' }) };
+      return { transform: t(0), blendMode: 'normal', text: content({ text: text.toUpperCase(), font: 'Russo One', size: Math.round(H * 0.125), weight: 900, color: '#ffffff', outlineColor: '#08090c', outlineWidth: 5, extrudeDepth: 4, chromaticAberration: 3.5, shadow: true, animationIn: 'pop', animationOut: 'blur', fillStyle: 'linear-gradient', gradientStartColor: '#fff4bd', gradientEndColor: '#ff4b57', glowColor: '#ff503c', glowIntensity: 18, highlightColor: '#ffffff', highlightScale: 1.2, wordAnimation: 'pop', background: 'none', alignment: 'center', section: 'climax' }) };
     default:
-      return { transform: t(0.38), text: content({ text, font: 'Manrope Variable', size: Math.round(H * 0.045), color: '#ffffff', outlineColor: '#000000', outlineWidth: 3, shadow: false, animationIn: null, animationOut: null }) };
+      return { transform: t(0.36), blendMode: 'normal', text: content({ text, font: 'Montserrat Variable', size: Math.round(H * 0.046), weight: 700, color: '#ffffff', outlineColor: '#000000', outlineWidth: 3.5, shadow: true, animationIn: null, animationOut: null, background: 'none' }) };
   }
 }
 
@@ -480,7 +647,7 @@ export function subtitleClip(
     speed: 1,
     reverse: false,
     transform: l.transform,
-    blendMode: 'normal',
+    blendMode: l.blendMode ?? 'normal',
     mask: 'none',
     groupId: null,
     audio: { gainDb: 0, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null },
@@ -663,7 +830,7 @@ export function restyleSubtitles(project: Project, clipIds: string[], look: Subt
     .map((c) => {
       const currentText = c.text;
       if (!currentText) return { type: 'batch' as const, commands: [] };
-      const uppercase = ['palavra', 'section-climax', 'impact-typography', 'anime-impact', 'anime-neon', 'anime-manga', 'anime-gold-epic'].includes(look);
+      const uppercase = ['palavra', 'section-climax', 'impact-typography', 'anime-blend', 'anime-katana', 'anime-impact', 'anime-neon', 'anime-manga', 'anime-gold-epic'].includes(look);
       const raw = uppercase ? currentText.text.toUpperCase() : currentText.text;
       const l = lookText(look, H, raw);
       return {
@@ -671,8 +838,10 @@ export function restyleSubtitles(project: Project, clipIds: string[], look: Subt
         clipId: c.id,
         patch: {
           transform: l.transform,
+          blendMode: l.blendMode ?? 'normal',
           text: {
             ...l.text,
+            behindCutout: c.text!.behindCutout,
             text: raw,
             original: c.text!.original,
             lang: c.text!.lang,

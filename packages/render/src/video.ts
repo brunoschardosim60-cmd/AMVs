@@ -455,7 +455,7 @@ export function windowArgs(o: WindowInput): WindowJob {
       }
     }
     const rotationFrames = c.text ? undefined : c.keyframes['transform.rotation'];
-    if (tr.rotation || rotationFrames?.length) {
+    if (!c.text && (tr.rotation || rotationFrames?.length)) {
       const maxRotation = Math.max(Math.abs(tr.rotation), ...(rotationFrames ?? []).map((keyframe) => Math.abs(keyframe.value)));
       const maxAngle = n((maxRotation * Math.PI) / 180, 6);
       const angle = rotationFrames?.length

@@ -106,6 +106,12 @@ describe('efeitos sonoros sintetizados', () => {
   });
 
   it('nomes de arquivo estáveis e versionados', () => {
-    expect(SFX_KINDS.map(sfxFileName)).toEqual(['amv-sfx-impact-v1.wav', 'amv-sfx-hit-v1.wav', 'amv-sfx-whoosh-v1.wav', 'amv-sfx-riser-v1.wav']);
+    expect(SFX_KINDS.map(sfxFileName)).toEqual([
+      'amv-sfx-impact-v2.wav',
+      'amv-sfx-hit-v2.wav',
+      'amv-sfx-clash-v2.wav',
+      'amv-sfx-whoosh-v2.wav',
+      'amv-sfx-riser-v2.wav',
+    ]);
   });
 });

@@ -27,7 +27,7 @@ import {
 } from '@amv/project';
 import type { ShotTag } from '@amv/analysis';
 import { editSubtitleTextManually, LOOKS, restyleSubtitles, subtitleClips } from '@amv/subtitles';
-import { ChevronDown, ChevronUp, Eye, EyeOff, Languages, Layers3, Lock, LockOpen, Magnet, Pencil, Plus, ScanSearch, Scissors, SlidersHorizontal, Sparkles, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronDown, ChevronUp, Eye, EyeOff, Headphones, Languages, Layers3, Lock, LockOpen, Magnet, Pencil, Plus, ScanSearch, Scissors, SlidersHorizontal, Sparkles, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
@@ -37,7 +37,7 @@ import { ignoreEditorKey, pxToUs, useEditor, usToPx, ZOOM_MAX, ZOOM_MIN } from '
 import { applyFramingPreset, clipSceneShotPatch, clipSourceRangePatch, FRAMING_PRESETS, LOCAL_FONT_FAMILIES, translateTextClipsToPt } from './Inspector';
 import { ClipRangePreview } from './MomentsPanel';
 import { useStrip, useWaveform } from './mediaCache';
-import { getPlayer } from './Preview';
+import { getPlayer, toggleAuditionClip } from './Preview';
 import { TEXT_ANIMATIONS_IN, TEXT_ANIMATIONS_OUT } from './textLayer';
 import { pickLevel } from '@amv/media';
 import { selectClipsInMarquee } from './timelineSelection';
@@ -176,7 +176,7 @@ const Thumbs = memo(function Thumbs({ clip, widthPx, zoom, session, height }: { 
 // --------------------------------------------------------------------------- timeline
 
 export function Timeline({ session, project }: { session: ProjectSession; project: Project }) {
-  const { zoom, setZoom, playheadUs, setPlayhead, selection, select, toggleSelect, snapping, setSnapping, assetDrag, setAssetDrag, requestInspector, editingClipId, setEditingClipId } = useEditor();
+  const { zoom, setZoom, playheadUs, setPlayhead, selection, select, toggleSelect, snapping, setSnapping, assetDrag, setAssetDrag, requestInspector, editingClipId, setEditingClipId, soloClipId } = useEditor();
   const { platform, toast } = useApp();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [gesture, setGesture] = useState<Gesture>(null);
@@ -586,10 +586,18 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
     const onKey = (e: KeyboardEvent) => {
       if (ignoreEditorKey(e)) return;
       if (e.key.toLowerCase() === 't' && !e.ctrlKey && !e.metaKey) addTextRef.current();
+      if (e.key.toLowerCase() === 's' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const selId = useEditor.getState().selection[0];
+        const selClip = selId ? session.project.clips.find((c) => c.id === selId) : undefined;
+        if (selClip && !selClip.text) {
+          e.preventDefault();
+          toggleAuditionClip(session, selClip);
+        }
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [session]);
   const addTextRef = useRef(addText);
   addTextRef.current = addText;
 
@@ -765,9 +773,21 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                     <Trash2 size={12} />
                   </IconButton>
                   {t.kind === 'audio' ? (
-                    <IconButton label={t.muted ? 'Ativar som' : 'Silenciar'} aria-pressed={t.muted} className={`size-6 ${t.muted ? 'text-warn' : ''}`} onClick={() => run(t.muted ? 'Ativar som da trilha' : 'Silenciar trilha', [{ type: 'track.update', trackId: t.id, patch: { muted: !t.muted } }])}>
-                      {t.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
-                    </IconButton>
+                    <>
+                      <button
+                        type="button"
+                        aria-label={t.solo ? 'Sair do solo da trilha' : 'Isolar trilha (Solo)'}
+                        aria-pressed={t.solo}
+                        title={t.solo ? 'Sair do solo da trilha' : 'Ouvir apenas esta trilha (Solo)'}
+                        onClick={() => run(t.solo ? 'Sair do solo da trilha' : 'Isolar trilha', [{ type: 'track.update', trackId: t.id, patch: { solo: !t.solo } }])}
+                        className={`grid size-6 place-items-center rounded text-[10px] font-bold ${t.solo ? 'bg-azure text-action-ink' : 'text-muted hover:bg-raised hover:text-ink'}`}
+                      >
+                        S
+                      </button>
+                      <IconButton label={t.muted ? 'Ativar som' : 'Silenciar'} aria-pressed={t.muted} className={`size-6 ${t.muted ? 'text-warn' : ''}`} onClick={() => run(t.muted ? 'Ativar som da trilha' : 'Silenciar trilha', [{ type: 'track.update', trackId: t.id, patch: { muted: !t.muted } }])}>
+                        {t.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
+                      </IconButton>
+                    </>
                   ) : (
                     <IconButton label={t.hidden ? 'Mostrar' : 'Ocultar'} aria-pressed={t.hidden} className={`size-6 ${t.hidden ? 'text-warn' : ''}`} onClick={() => run(t.hidden ? 'Mostrar trilha' : 'Ocultar trilha', [{ type: 'track.update', trackId: t.id, patch: { hidden: !t.hidden } }])}>
                       {t.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
@@ -859,7 +879,22 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                     {c.speed !== 1 && <span className="mr-1 text-warn">{c.speed}×</span>}
                     {c.text ? c.text.text : (c.label ?? asset?.name)}
                   </span>
-                  {sel && !t.locked && width >= 44 && (
+                  {sel && !t.locked && !c.text && width >= 22 && (
+                    <button
+                      type="button"
+                      aria-label={soloClipId === c.id ? 'Parar escuta isolada' : 'Isolar e escutar só este clipe'}
+                      title={soloClipId === c.id ? 'Parar escuta isolada (S)' : 'Isolar e escutar só este clipe (S)'}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleAuditionClip(session, c);
+                      }}
+                      className={`absolute top-1 z-[3] grid size-5 place-items-center rounded ${width >= 48 ? 'right-7' : 'right-0.5'} ${soloClipId === c.id ? 'bg-azure text-action-ink shadow' : 'bg-black/75 text-ink hover:bg-azure hover:text-action-ink'}`}
+                    >
+                      <Headphones size={10} />
+                    </button>
+                  )}
+                  {sel && !t.locked && width >= 48 && (
                     <button
                       type="button"
                       aria-label="Modificar clipe"
@@ -1017,6 +1052,7 @@ function TimelineQuickEditBar({
 }) {
   const track = project.tracks.find((t) => t.id === clip.trackId);
   const locked = !!track?.locked;
+  const soloClipId = useEditor((s) => s.soloClipId);
   const [inlineText, setInlineText] = useState(clip.text?.text ?? '');
   const [translating, setTranslating] = useState(false);
 
@@ -1136,9 +1172,19 @@ function TimelineQuickEditBar({
 
   if (track?.kind === 'video') {
     const quickFrames = ['normal', 'highlight', 'close', 'punch'] as const;
+    const isClipSolo = soloClipId === clip.id;
     return (
       <div className="flex min-h-9 flex-wrap items-center gap-1.5 border-t border-line-soft bg-raised/60 px-2 py-1 text-2xs">
         <span className="shrink-0 rounded bg-violet/20 px-1.5 py-0.5 font-semibold text-violet-strong">Vídeo · {track.name}</span>
+        <button
+          type="button"
+          onClick={() => toggleAuditionClip(session, clip)}
+          title="Isolar e escutar apenas o áudio original desta cena (atalho: S)"
+          className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-control border px-2 font-medium transition-colors ${isClipSolo ? 'border-azure bg-azure text-action-ink' : 'border-azure/45 bg-azure/10 text-ink hover:bg-azure/20'}`}
+        >
+          <Headphones size={12} />
+          {isClipSolo ? 'Parar escuta' : 'Ouvir só esta cena'}
+        </button>
         <div className="flex shrink-0 items-center overflow-hidden rounded-control border border-line bg-base" title="Deslizar trecho dentro do episódio">
           <span className="px-1.5 text-muted">Trecho</span>
           <button
@@ -1255,9 +1301,19 @@ function TimelineQuickEditBar({
     );
   }
 
+  const isAudioSolo = soloClipId === clip.id;
   return (
     <div className="flex min-h-9 flex-wrap items-center gap-1.5 border-t border-line-soft bg-raised/60 px-2 py-1 text-2xs">
       <span className="shrink-0 rounded bg-azure/20 px-1.5 py-0.5 font-semibold text-azure">Áudio · {track?.name ?? 'Música'}</span>
+      <button
+        type="button"
+        onClick={() => toggleAuditionClip(session, clip)}
+        title="Isolar e escutar apenas este clipe de áudio sem música nem outras faixas (atalho: S)"
+        className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-control border px-2.5 font-semibold transition-colors ${isAudioSolo ? 'border-azure bg-azure text-action-ink' : 'border-azure/50 bg-azure/15 text-ink hover:bg-azure/25'}`}
+      >
+        <Headphones size={12} />
+        {isAudioSolo ? 'Parar escuta isolada' : 'Ouvir só este clipe'}
+      </button>
       <div className="flex shrink-0 items-center overflow-hidden rounded-control border border-line bg-base">
         <span className="px-1.5 text-muted">Trecho</span>
         <button
