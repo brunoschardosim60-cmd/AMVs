@@ -1046,3 +1046,5 @@ export function autoSyncSubtitlesToBeats(
   if (Math.abs(shiftUs) < 15_000) return { shiftUs: 0, commands: [] };
   return { shiftUs, commands: shiftSubtitles(project, clipIds, shiftUs) };
 }
+
+export * from './post-edit.js';
