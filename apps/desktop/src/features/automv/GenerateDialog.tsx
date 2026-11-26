@@ -2012,10 +2012,10 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                     value={chosenStart === null ? 'auto' : String(chosenStart)}
                     onChange={(e) => setMusicStart(e.target.value === 'auto' ? null : Number(e.target.value))}
                   >
-                    <option value="auto">Automático (melhor drop + clímax)</option>
-                    {ranges.map((r) => (
+                    <option value="auto">Automático (melhor clímax / refrão)</option>
+                    {ranges.map((r, idx) => (
                       <option key={r.startS} value={String(r.startS)}>
-                        {mmss(r.startS)}–{mmss(r.endS)} ({Math.round(r.score * 100)}%)
+                        {idx + 1}º {mmss(r.startS)}–{mmss(r.endS)} ({Math.round(r.score * 100)}%){r.reasons[0] ? ` · ${r.reasons[0]}` : ''}
                       </option>
                     ))}
                   </select>

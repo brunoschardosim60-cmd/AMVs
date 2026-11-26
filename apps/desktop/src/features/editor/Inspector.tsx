@@ -12,6 +12,7 @@ import { IconButton } from '../../ui/controls';
 import { AssetDetail } from '../project/AssetDetail';
 import { useEditor } from './editorStore';
 import { ClipRangePreview } from './MomentsPanel';
+import { buildSlipMusicClipCommands, MusicSliceInspectorCard } from './MusicPostControls';
 import { toggleAuditionClip } from './Preview';
 import { buildSessionReadingInputs } from './readingInputs';
 import { TEXT_ANIMATIONS_IN, TEXT_ANIMATIONS_OUT } from './textLayer';
@@ -445,6 +446,28 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
       </label>
       <p className="mt-1 text-2xs text-faint">Seleção de idioma/isolamento e eco são processados na exportação.</p>
     </Section>
+  ) : track.kind === 'video' && (asset?.probe?.audio.length ?? 0) > 0 ? (
+    <Section title="Som desta cena">
+      <div className="flex items-center justify-between gap-2 py-1 text-xs">
+        <span className="text-muted">Som original na mixagem</span>
+        <button
+          type="button"
+          onClick={() => patch(clip.audio.gainDb <= -40 ? 'Ativar som da cena' : 'Silenciar som da cena', {
+            audio: { ...clip.audio, gainDb: clip.audio.gainDb <= -40 ? -3 : -60 },
+          })}
+          className={`h-7 rounded-control border px-2.5 text-2xs font-medium ${
+            clip.audio.gainDb <= -40
+              ? 'border-line bg-base text-muted hover:text-ink'
+              : 'border-azure bg-azure/15 text-ink'
+          }`}
+        >
+          {clip.audio.gainDb <= -40 ? 'Mudo (só música)' : `Ativo (${clip.audio.gainDb} dB)`}
+        </button>
+      </div>
+      {clip.audio.gainDb > -40 && (
+        <NumField label="Volume da cena" suffix="dB" value={clip.audio.gainDb} min={-39} max={12} step={1} digits={1} onCommit={(v) => patch('Volume da cena', { audio: { ...clip.audio, gainDb: v } })} />
+      )}
+    </Section>
   ) : null;
 
   return (
@@ -556,6 +579,22 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {track.kind === 'audio' && asset?.kind === 'audio' && (
+        <div className="border-b border-line-soft px-4 py-3">
+          <MusicSliceInspectorCard
+            session={session}
+            project={project}
+            clip={clip}
+            asset={asset}
+            disabled={track.locked}
+            onSlipToStartS={(nextStartS, label) => {
+              const cmds = buildSlipMusicClipCommands(session, project, clip, nextStartS);
+              if (cmds.length) run(label ?? 'Escolher trecho da música', cmds);
+            }}
+          />
         </div>
       )}
 

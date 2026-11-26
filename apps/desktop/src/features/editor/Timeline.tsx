@@ -26,9 +26,9 @@ import {
   type Track,
 } from '@amv/project';
 import type { ShotTag } from '@amv/analysis';
-import { alignClipPeakToNearestBeat, harmonizeTextClipsWithScenes } from '@amv/automv';
-import { editSubtitleTextManually, LOOKS, restyleSubtitles, subtitleClips } from '@amv/subtitles';
-import { ChevronDown, ChevronUp, Eye, EyeOff, Headphones, Languages, Layers3, Lock, LockOpen, Magnet, Pencil, Plus, ScanSearch, Scissors, SlidersHorizontal, Sparkles, Trash2, Type, Volume2, VolumeX, Wand2, Zap, ZoomIn, ZoomOut } from 'lucide-react';
+import { alignClipPeakToNearestBeat, harmonizeTextClipsWithScenes, suggestMusicRanges } from '@amv/automv';
+import { copyClipStyleToSubtitles, editSubtitleTextManually, explodeSubtitlesToWords, LOOKS, restyleSubtitles, splitSubtitleAt, subtitleClips, transformSubtitlesCase } from '@amv/subtitles';
+import { ChevronDown, ChevronUp, Copy, Eye, EyeOff, Headphones, Languages, Layers3, Lock, LockOpen, Magnet, Pencil, Plus, ScanSearch, Scissors, SlidersHorizontal, Sparkles, Trash2, Type, Volume2, VolumeX, Wand2, Zap, ZoomIn, ZoomOut } from 'lucide-react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
@@ -37,6 +37,7 @@ import { nextTextStart } from './textPlacement';
 import { ignoreEditorKey, pxToUs, useEditor, usToPx, ZOOM_MAX, ZOOM_MIN } from './editorStore';
 import { applyFramingPreset, clipSceneShotPatch, clipSourceRangePatch, FRAMING_PRESETS, LOCAL_FONT_FAMILIES, translateTextClipsToPt } from './Inspector';
 import { ClipRangePreview } from './MomentsPanel';
+import { buildSlipMusicClipCommands, MusicDuckingQuickPills, MusicSliceInspectorCard } from './MusicPostControls';
 import { useStrip, useWaveform } from './mediaCache';
 import { getPlayer, toggleAuditionClip } from './Preview';
 import { TEXT_ANIMATIONS_IN, TEXT_ANIMATIONS_OUT } from './textLayer';
@@ -1283,6 +1284,69 @@ function TimelineQuickEditBar({
           type="button"
           disabled={locked}
           onClick={() => {
+            const isUpper = t.text === t.text.toLocaleUpperCase('pt-BR') && t.text !== t.text.toLocaleLowerCase('pt-BR');
+            const cmds = transformSubtitlesCase(project, [clip.id], isUpper ? 'sentence' : 'upper');
+            if (cmds.length) run(isUpper ? 'Caixa normal' : 'Converter para MAIÚSCULAS', cmds);
+          }}
+          title="Alternar entre MAIÚSCULAS e frase normal"
+          className="h-7 shrink-0 rounded-control border border-line bg-base px-2 font-semibold text-ink-soft hover:bg-raised hover:text-ink disabled:opacity-50"
+        >
+          AA
+        </button>
+        {t.text.trim().split(/\s+/).filter(Boolean).length >= 2 && (
+          <button
+            type="button"
+            disabled={locked}
+            onClick={() => {
+              const res = explodeSubtitlesToWords(project, [clip.id]);
+              if (res.commands.length) {
+                run('Explodir frase em palavras', res.commands);
+                toast({ tone: 'ok', title: `${res.createdCount} palavras cinéticas criadas` });
+              }
+            }}
+            title="Explode esta frase em palavras individuais sincronizadas"
+            className="inline-flex h-7 shrink-0 items-center gap-1 rounded-control border border-violet/40 bg-violet/10 px-2 text-ink-soft hover:bg-violet/20 hover:text-ink disabled:opacity-50"
+          >
+            <Sparkles size={11} />
+            Em palavras
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={locked || clip.durationUs < 160_000}
+          onClick={() => {
+            const res = splitSubtitleAt(project, clip.id, useEditor.getState().playheadUs);
+            if (res.commands.length) run('Dividir legenda', res.commands);
+          }}
+          title="Dividir esta legenda no cursor (ou na metade)"
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-control border border-line bg-base px-2 text-ink-soft hover:bg-raised hover:text-ink disabled:opacity-50"
+        >
+          <Scissors size={11} />
+          Dividir
+        </button>
+        <button
+          type="button"
+          disabled={locked}
+          onClick={() => {
+            const others = subtitleClips(project, clip.trackId).filter((c) => c.id !== clip.id).map((c) => c.id);
+            const cmds = copyClipStyleToSubtitles(project, clip.id, others);
+            if (cmds.length) {
+              run('Copiar estilo para toda a trilha', cmds);
+              toast({ tone: 'ok', title: `Estilo copiado para ${cmds.length + 1} legendas` });
+            } else {
+              toast({ tone: 'info', title: 'Não há outras legendas nesta trilha' });
+            }
+          }}
+          title="Aplicar a fonte, cores, glow e posição desta legenda a todas as legendas da trilha"
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-control border border-line bg-base px-2 text-ink-soft hover:bg-raised hover:text-ink disabled:opacity-50"
+        >
+          <Copy size={11} />
+          Estilo → trilha
+        </button>
+        <button
+          type="button"
+          disabled={locked}
+          onClick={() => {
             const { episodes } = buildSessionReadingInputs(session);
             const res = harmonizeTextClipsWithScenes({ project, episodes, clipIds: [clip.id] });
             if (res.commands.length) {
@@ -1325,6 +1389,25 @@ function TimelineQuickEditBar({
         >
           <Headphones size={12} />
           {isClipSolo ? 'Parar escuta' : 'Ouvir só esta cena'}
+        </button>
+        <button
+          type="button"
+          disabled={locked}
+          onClick={() => {
+            const muted = clip.audio.gainDb <= -40;
+            patchClip(muted ? 'Ativar som original da cena' : 'Silenciar som da cena', {
+              audio: { ...clip.audio, gainDb: muted ? -3 : -60 },
+            });
+          }}
+          title={clip.audio.gainDb <= -40 ? 'Ativar o áudio original desta cena junto com a música' : 'Silenciar o áudio desta cena para deixar só a música'}
+          className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-control border px-2 transition-colors disabled:opacity-50 ${
+            clip.audio.gainDb <= -40
+              ? 'border-line bg-base text-muted hover:text-ink'
+              : 'border-azure bg-azure/15 font-medium text-ink'
+          }`}
+        >
+          {clip.audio.gainDb <= -40 ? <VolumeX size={12} /> : <Volume2 size={12} />}
+          {clip.audio.gainDb <= -40 ? 'Cena muda' : 'Som da cena'}
         </button>
         <button
           type="button"
@@ -1462,6 +1545,11 @@ function TimelineQuickEditBar({
   }
 
   const isAudioSolo = soloClipId === clip.id;
+  const isMusicRole = track?.role === 'music' || track?.role === 'music2';
+  const musicAnalysis = isMusicRole && clip.assetId ? session.assetRuntime(clip.assetId).music : null;
+  const quickMusicRanges = musicAnalysis
+    ? suggestMusicRanges(musicAnalysis, Math.max(1, (clipEndUs(clip) - clip.timelineStartUs) / 1_000_000), null, 3)
+    : [];
   return (
     <div className="flex min-h-9 flex-wrap items-center gap-1.5 border-t border-line-soft bg-raised/60 px-2 py-1 text-2xs">
       <span className="shrink-0 rounded bg-azure/20 px-1.5 py-0.5 font-semibold text-azure">Áudio · {track?.name ?? 'Música'}</span>
@@ -1474,6 +1562,39 @@ function TimelineQuickEditBar({
         <Headphones size={12} />
         {isAudioSolo ? 'Parar escuta isolada' : 'Ouvir só este clipe'}
       </button>
+      {quickMusicRanges.length > 0 && (
+        <select
+          aria-label="Escolher melhor parte da música"
+          disabled={locked}
+          value=""
+          onChange={(e) => {
+            const val = Number(e.target.value);
+            if (!Number.isFinite(val)) return;
+            const cmds = buildSlipMusicClipCommands(session, project, clip, val);
+            if (cmds.length) {
+              run('Ir para melhor parte da música', cmds);
+              toast({ tone: 'ok', title: 'Trecho da música atualizado!' });
+            }
+          }}
+          className="h-7 shrink-0 rounded-control border border-azure/45 bg-azure/10 px-1.5 text-2xs font-medium text-ink disabled:opacity-50"
+        >
+          <option value="">Melhor parte…</option>
+          {quickMusicRanges.map((r, idx) => {
+            const m0 = Math.floor(r.startS / 60);
+            const s0 = String(Math.floor(r.startS % 60)).padStart(2, '0');
+            const m1 = Math.floor(r.endS / 60);
+            const s1 = String(Math.floor(r.endS % 60)).padStart(2, '0');
+            return (
+              <option key={r.startS} value={String(r.startS)}>
+                {idx + 1}º {m0}:{s0}–{m1}:{s1} ({Math.round(r.score * 100)}%)
+              </option>
+            );
+          })}
+        </select>
+      )}
+      {isMusicRole && (
+        <MusicDuckingQuickPills session={session} project={project} clip={clip} disabled={locked} compact />
+      )}
       <div className="flex shrink-0 items-center overflow-hidden rounded-control border border-line bg-base">
         <span className="px-1.5 text-muted">Trecho</span>
         <button
@@ -1968,8 +2089,20 @@ function TimelineClipModifyModal({
   }
 
   return (
-    <Dialog title={`Modificar áudio · ${asset?.name ?? clip.label ?? 'Música'}`} width="w-[460px]" onClose={onClose}>
+    <Dialog title={`Modificar áudio · ${asset?.name ?? clip.label ?? 'Música'}`} width="w-[540px]" onClose={onClose}>
       <div className="space-y-3 text-xs">
+        {asset?.kind === 'audio' && (
+          <MusicSliceInspectorCard
+            session={session}
+            project={project}
+            clip={clip}
+            asset={asset}
+            onSlipToStartS={(nextStartS, label) => {
+              const cmds = buildSlipMusicClipCommands(session, project, clip, nextStartS);
+              if (cmds.length) run(label ?? 'Escolher trecho da música', cmds);
+            }}
+          />
+        )}
         <div className="grid grid-cols-2 gap-2.5">
           <label className="space-y-1">
             <span className="text-muted">Entrada na origem (s)</span>

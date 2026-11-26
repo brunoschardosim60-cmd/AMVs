@@ -10,6 +10,7 @@ import { useApp } from '../../store';
 import { Button } from '../../ui/controls';
 import { useEditor } from './editorStore';
 import { buildSessionReadingInputs } from './readingInputs';
+import { SubtitleBatchPowerBar, SubtitleTrackManagerBar } from './SubtitlePostControls';
 
 const fmt = (us: number) => {
   const s = us / 1e6;
@@ -64,6 +65,12 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   useEffect(() => {
     setSpeechAudioIndex(pickAudioStreamByLanguage(audioStreams, 'original') ?? audioStreams[0]?.index ?? null);
   }, [audioStreams, transcriptAssetId]);
+
+  useEffect(() => {
+    if (tracks.length > 0 && !tracks.some((t) => t.id === trackId)) {
+      setTrackId(tracks[0]!.id);
+    }
+  }, [tracks, trackId]);
 
   useEffect(
     () => () => {
@@ -642,18 +649,19 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     }
   };
 
+  const timelineBeatsS = (() => {
+    const musicAnalysis = lyricsClip?.assetId ? session.assetRuntime(lyricsClip.assetId).music : undefined;
+    if (!lyricsClip || !musicAnalysis?.beats.length) return [];
+    const clipStartS = lyricsClip.timelineStartUs / 1e6;
+    const sourceInS = lyricsClip.sourceInUs / 1e6;
+    const speed = lyricsClip.speed || 1;
+    return musicAnalysis.beats.map((b) => clipStartS + (b - sourceInS) / speed).filter((t) => t >= 0);
+  })();
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="shrink-0 space-y-2 border-b border-line px-3 pb-3">
-        {tracks.length > 1 && (
-          <select className="h-7 w-full rounded-control border border-line bg-base px-1 text-xs" value={trackId} onChange={(e) => setTrackId(e.target.value)}>
-            {tracks.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        )}
+        <SubtitleTrackManagerBar session={session} trackId={trackId} setTrackId={setTrackId} look={look} />
         <div className="grid grid-cols-3 gap-1">
           <Button size="sm" icon={<FileText size={13} />} onClick={() => void importFile()} title="SRT, ASS, VTT, LRC ou TXT sem tempos">
             Importar
@@ -888,6 +896,13 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
             </button>
           </div>
         )}
+        <SubtitleBatchPowerBar
+          session={session}
+          trackId={trackId}
+          clips={clips}
+          selectedSubs={selectedSubs}
+          timelineBeatsS={timelineBeatsS}
+        />
       </div>
 
       {clips.length === 0 ? (
