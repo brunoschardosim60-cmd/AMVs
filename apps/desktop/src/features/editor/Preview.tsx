@@ -932,7 +932,18 @@ export function Preview({ session, project }: { session: ProjectSession; project
 }
 
 function PreviewHudOverlay({ project, session }: { project: Project; session: ProjectSession }) {
-  const playheadUs = useEditor((s) => s.playheadUs);
+  const [playheadUs, setPlayheadUs] = useState(() => useEditor.getState().playheadUs);
+  // Raio-X é caro: pausado acompanha na hora; tocando, atualiza só ~3x por segundo.
+  useEffect(() => {
+    let last = 0;
+    return useEditor.subscribe((state, prev) => {
+      if (state.playheadUs === prev.playheadUs) return;
+      const now = performance.now();
+      if (state.playing && now - last < 350) return;
+      last = now;
+      setPlayheadUs(state.playheadUs);
+    });
+  }, []);
   const readingInputs = useMemo(
     () => buildSessionReadingInputs(session),
     [session, session.changes, project.assets],

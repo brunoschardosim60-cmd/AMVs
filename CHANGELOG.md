@@ -1,20 +1,25 @@
 # Novidades
 
+## 0.9.4
+
+- Desempenho do preview: o Raio-X (HUD) recalculava a leitura a cada 50 ms durante a reproduÃ§Ã£o e o Inspector de texto re-renderizava a cada quadro; agora o HUD atualiza ~3x/s tocando e o Inspector sÃ³ observa o playhead na prÃ©via de palavra.
+- Cortes rÃ¡pidos: prÃ©-carrega atÃ© 5 prÃ³ximos clipes por trilha (antes 2), 3 s de antecedÃªncia, e guarda o 1Âº quadro para nÃ£o aparecer buraco na entrada.
+
 ## 0.9.3
 
-- Preview: textos com legenda palavra a palavra agora são cacheados por palavra ativa, eliminando o travamento com textos seguidos.
+- Preview: textos com legenda palavra a palavra agora sï¿½o cacheados por palavra ativa, eliminando o travamento com textos seguidos.
 
 ## 0.9.2
 
-- Legendas: corrigido cache de texto estático que mantinha a legenda antiga/sumida após edições.
-- Legibilidade: sombra mínima automática no preview e contorno/sombra mínimos ao harmonizar textos pequenos.
-- Geração: máscaras V2 geradas agora viram recortes PNG reais automaticamente.
+- Legendas: corrigido cache de texto estï¿½tico que mantinha a legenda antiga/sumida apï¿½s ediï¿½ï¿½es.
+- Legibilidade: sombra mï¿½nima automï¿½tica no preview e contorno/sombra mï¿½nimos ao harmonizar textos pequenos.
+- Geraï¿½ï¿½o: mï¿½scaras V2 geradas agora viram recortes PNG reais automaticamente.
 
 ## 0.9.1
 
-- Preview: texto estático em cache e mescla correta (blend) de camadas de texto em buffer isolado.
+- Preview: texto estï¿½tico em cache e mescla correta (blend) de camadas de texto em buffer isolado.
 - Render: blend com RGBA para melhor fidelidade de cor.
-- Recortes: geração/upgrade de máscaras V2 reutilizável.
+- Recortes: geraï¿½ï¿½o/upgrade de mï¿½scaras V2 reutilizï¿½vel.
 
 ## 0.9.0
 

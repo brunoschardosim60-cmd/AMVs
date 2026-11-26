@@ -934,7 +934,6 @@ function TextSection({ clip, patch, session }: { clip: Clip; patch: (label: stri
   const [translating, setTranslating] = useState(false);
   const [wordIndex, setWordIndex] = useState(0);
   const wordPreview = useRef<WordPreviewRange | null>(null);
-  const playheadUs = useEditor((state) => state.playheadUs);
   const playing = useEditor((state) => state.playing);
   const setPlayhead = useEditor((state) => state.setPlayhead);
   const setPlaying = useEditor((state) => state.setPlaying);
@@ -962,13 +961,17 @@ function TextSection({ clip, patch, session }: { clip: Clip; patch: (label: stri
     wordPreview.current = null;
     setWordIndex(0);
   }, [clip.id]);
+  // Só observa o playhead durante a prévia de uma palavra (sem re-render a cada frame).
   useEffect(() => {
     if (!playing) { wordPreview.current = null; return; }
-    if (wordPreviewEnded(wordPreview.current, clip.id, playheadUs)) {
-      wordPreview.current = null;
-      setPlaying(false);
-    }
-  }, [clip.id, playheadUs, playing, setPlaying]);
+    return useEditor.subscribe((state, prev) => {
+      if (state.playheadUs === prev.playheadUs) return;
+      if (wordPreviewEnded(wordPreview.current, clip.id, state.playheadUs)) {
+        wordPreview.current = null;
+        setPlaying(false);
+      }
+    });
+  }, [clip.id, playing, setPlaying]);
   const updateWord = (label: string, values: Partial<TextWordTiming>) => {
     if (!word) return;
     const updated = words.map((item, index) =>

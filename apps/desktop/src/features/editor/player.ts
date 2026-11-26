@@ -33,7 +33,9 @@ interface Slot {
 }
 
 /** Margem para pré-carregar próximos clipes antes de começarem (evita engasgo em cortes rápidos). */
-const PRELOAD_US = 2_500_000;
+const PRELOAD_US = 3_000_000;
+/** Quantos próximos clipes por trilha ficam pré-carregados (cortes rápidos precisam de mais de 2). */
+const PRELOAD_MAX = 5;
 /** Corrige desvios visuais grandes sem seeks frequentes durante a reprodução. */
 const DRIFT_PLAYING_S = 0.6;
 /** Pausado: limite de desvio para re-seek. */
@@ -59,7 +61,7 @@ export function shouldHardSeekMedia(
 /**
  * Elementos de mídia vivos: mantém um pool aquecido de decodificadores sem derrubá-los em cortes rápidos.
  */
-const MAX_SLOTS = 20;
+const MAX_SLOTS = 28;
 /** Elemento fora do playhead há mais que isso é fechado (libera a conexão). */
 const IDLE_RELEASE_MS = 12_000;
 
@@ -708,7 +710,7 @@ export class Player {
       for (const c of trackClips) {
         if (!c.assetId) continue;
         const active = t >= c.timelineStartUs && t < clipEndUs(c);
-        const upcoming = !active && c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t && preloadedAudio < 2;
+        const upcoming = !active && c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t && preloadedAudio < PRELOAD_MAX;
         if (!active && !upcoming) continue;
         if (upcoming) preloadedAudio++;
         const slot = this.slotFor(c, 'audio');
@@ -785,7 +787,7 @@ export class Player {
           if (textFilter === 'front' && isBehind) continue;
         }
         const active = t >= c.timelineStartUs && t < clipEndUs(c);
-        const upcoming = !active && !c.text && c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t && preloadedVisual < 2;
+        const upcoming = !active && !c.text && c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t && preloadedVisual < PRELOAD_MAX;
         if (!active && !upcoming) continue;
         if (upcoming) preloadedVisual++;
         const localS = (t - c.timelineStartUs) / 1e6;
@@ -869,6 +871,14 @@ export class Player {
             slot.needsSeek = true;
           } else if (v.readyState >= 2) {
             slot.needsSeek = false;
+            // guarda o 1º quadro: se o decodificador engasgar na entrada, mostra isto em vez de um buraco
+            if (!v.seeking && v.videoWidth && slot.lastFrameTime !== v.currentTime) {
+              slot.lastFrame ??= document.createElement('canvas');
+              if (slot.lastFrame.width !== v.videoWidth) slot.lastFrame.width = v.videoWidth;
+              if (slot.lastFrame.height !== v.videoHeight) slot.lastFrame.height = v.videoHeight;
+              slot.lastFrame.getContext('2d')?.drawImage(v, 0, 0);
+              slot.lastFrameTime = v.currentTime;
+            }
           }
         }
         if (v.seeking || v.readyState < 2) this.dirty = true;
