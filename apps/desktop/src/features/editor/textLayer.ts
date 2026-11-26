@@ -38,8 +38,7 @@ export function textIsAnimated(c: Clip): boolean {
   );
 }
 
-/** Índice da palavra ativa (só timings confiáveis) no instante 
-owUs, ou -1. */
+/** Índice da palavra ativa (só timings confiáveis) no instante `nowUs`, ou -1. */
 export function activeWordIndex(wordTimings: NonNullable<Clip['text']>['wordTimings'], nowUs: number): number {
   return wordTimings.findIndex((word) => {
     const reliable = !word.uncertain && (
@@ -73,6 +72,175 @@ export function textSteadyKey(c: Clip, localS: number): string | null {
   ) return null;
   return String(t.wordTimings.length ? activeWordIndex(t.wordTimings, Math.round(localS * 1e6)) : -1);
 }
+
+/** Indica se o preview pode pré-renderizar os glifos num sprite recortado e animar só a transformação por quadro. */
+export function canUseTextSprite(c: Clip): boolean {
+  const t = c.text;
+  if (!t || !t.text.trim()) return false;
+  if (t.background === 'full' || t.animationIn === 'typewriter') return false;
+  if (t.syllableAnimation && t.wordTimings.some((w) => w.syllables.length > 0)) return false;
+  return true;
+}
+
+export interface TextSpriteEnvelope {
+  alpha: number;
+  relScale: number;
+  baseScale: number;
+  x: number;
+  centerY: number;
+  rotation: number;
+  activeWord: number;
+}
+
+/** Avalia opacidade, escala, deslocamento e rotação de entrada/saída/keyframes sem redesenhar os glifos. */
+export function evalTextEnvelope(
+  c: Clip,
+  projW: number,
+  projH: number,
+  localS: number,
+  look: ClipLook,
+): TextSpriteEnvelope | null {
+  const t = c.text;
+  if (!t || !t.text.trim()) return null;
+  const dur = Math.max(0.001, c.durationUs / 1e6);
+  const inDuration = Math.min((t.animationInUs ?? 300_000) / 1e6, dur * 0.4);
+  const outDuration = Math.min((t.animationOutUs ?? 250_000) / 1e6, dur * 0.25);
+  let alpha = c.transform.opacity > 0
+    ? look.alpha / c.transform.opacity
+    : evalClipLook({ ...c, transform: { ...c.transform, opacity: 1 } }, localS, dur).alpha;
+  const atUs = Math.round(localS * 1e6);
+  const baseScale = Math.max(0.1, c.transform.scale || 1);
+  let scale = evaluateKeyframes(c.keyframes['transform.scale'], atUs, baseScale);
+  alpha *= Math.max(0, Math.min(1, evaluateKeyframes(c.keyframes['transform.opacity'], atUs, c.transform.opacity)));
+  let dx = 0;
+  let dy = 0;
+
+  const a = t.animationIn;
+  if (a && inDuration > 0 && localS < inDuration) {
+    const u = Math.max(0, localS / inDuration);
+    if (a === 'fade') alpha *= u;
+    else if (a === 'pop') {
+      scale *= 0.6 + 0.4 * backOut(u);
+      alpha *= Math.min(1, u * 2);
+    } else if (a === 'slide') {
+      dy = 40 * (1 - u) * (1 - u);
+      alpha *= u;
+    } else if (a === 'slide-left') {
+      dx = -Math.min(160, projW * 0.2) * (1 - u) * (1 - u);
+      alpha *= u;
+    } else if (a === 'slide-right') {
+      dx = Math.min(160, projW * 0.2) * (1 - u) * (1 - u);
+      alpha *= u;
+    } else if (a === 'blur') {
+      alpha *= Math.min(1, u * 1.5);
+    }
+  }
+  const b = t.animationOut;
+  if (b && outDuration > 0 && dur - localS < outDuration) {
+    const u = Math.max(0, (dur - localS) / outDuration);
+    if (b === 'fade') alpha *= u;
+    else if (b === 'slide') {
+      dy += 30 * (1 - u);
+      alpha *= u;
+    } else if (b === 'pop') {
+      scale *= 0.75 + 0.25 * u;
+    } else if (b === 'blur') {
+      alpha *= u;
+    }
+  }
+  if (alpha <= 0) return null;
+
+  const est = estimateTextBounds(
+    { ...c, transform: { ...c.transform, x: 0, y: 0, scale, rotation: 0 }, keyframes: {} },
+    projW,
+    projH,
+    0,
+  );
+  const contentH = est?.height ?? Math.max(24, t.size * scale * 1.5);
+  const verticalLimit = Math.max(0, projH / 2 - (t.marginY ?? 0) - contentH / 2);
+  const x = evaluateKeyframes(c.keyframes['transform.x'], atUs, c.transform.x) + look.dx + dx;
+  const y = evaluateKeyframes(c.keyframes['transform.y'], atUs, c.transform.y);
+  const centerY = Math.max(-verticalLimit, Math.min(verticalLimit, y + look.dy + dy));
+  const rotation = evaluateKeyframes(c.keyframes['transform.rotation'], atUs, c.transform.rotation);
+  const wordTimings = t.wordTimings ?? [];
+  const activeWord = wordTimings.length ? activeWordIndex(wordTimings, atUs) : -1;
+  return {
+    alpha: Math.min(1, alpha),
+    relScale: scale / baseScale,
+    baseScale,
+    x,
+    centerY,
+    rotation,
+    activeWord,
+  };
+}
+
+/** Renderiza uma única vez os glifos (com extrusão, contorno duplo, sombra e glow) num canvas recortado. */
+export function renderTextSpriteCanvas(
+  createCanvas: (w: number, h: number) => HTMLCanvasElement,
+  c: Clip,
+  projW: number,
+  projH: number,
+  k: number,
+  activeWord: number,
+): HTMLCanvasElement | null {
+  const t = c.text;
+  if (!t || !t.text.trim()) return null;
+  const baseScale = Math.max(0.1, c.transform.scale || 1);
+  const est = estimateTextBounds(
+    { ...c, transform: { ...c.transform, x: 0, y: 0, scale: baseScale, rotation: 0 }, keyframes: {} },
+    projW,
+    projH,
+    0,
+  );
+  const fxMarginProj =
+    Math.max(36, t.size * baseScale * 0.55)
+    + (t.extrudeDepth ?? 0) * 2
+    + (t.glowIntensity ?? 0) * 2.5
+    + ((t.outlineWidth ?? 0) + (t.outerOutlineWidth ?? 0)) * 4
+    + (t.chromaticAberration ?? 0) * 3;
+  const spriteProjW = t.background === 'bar'
+    ? projW
+    : Math.min(projW * 1.15, (est?.width ?? projW * 0.9) * 1.18 + fxMarginProj * 2);
+  const spriteProjH = Math.min(projH * 1.15, (est?.height ?? t.size * baseScale * 2.4) * 1.25 + fxMarginProj * 2);
+  const spriteW = Math.max(8, Math.ceil(spriteProjW * k));
+  const spriteH = Math.max(8, Math.ceil(spriteProjH * k));
+  const canvas = createCanvas(spriteW, spriteH);
+  const sCtx = canvas.getContext('2d');
+  if (!sCtx) return null;
+
+  const dur = Math.max(0.5, c.durationUs / 1e6);
+  const sampleLocalS = Math.max(0.25, dur * 0.5);
+  const sampleUs = Math.round(sampleLocalS * 1e6);
+  const syntheticTimings = (t.wordTimings ?? []).map((w, idx) =>
+    idx === activeWord
+      ? { ...w, source: 'manual' as const, confidence: 1, uncertain: false, startUs: 0, endUs: sampleUs + 10_000 }
+      : { ...w, startUs: -20_000, endUs: -10_000 },
+  );
+  const canonicalClip: Clip = {
+    ...c,
+    blendMode: 'normal',
+    mask: 'none',
+    effects: [],
+    transitionIn: null,
+    keyframes: {},
+    durationUs: Math.max(1_000_000, c.durationUs),
+    transform: { ...c.transform, x: 0, y: 0, scale: baseScale, rotation: 0, opacity: 1 },
+    text: {
+      ...t,
+      animationIn: null,
+      animationOut: null,
+      wordTimings: syntheticTimings,
+    },
+  };
+  const neutralLook = evalClipLook(canonicalClip, sampleLocalS, canonicalClip.durationUs / 1e6);
+  sCtx.save();
+  sCtx.translate(spriteW / 2 - (projW / 2) * k, spriteH / 2 - (projH / 2) * k);
+  drawTextLayer(sCtx, canonicalClip, projW, projH, k, neutralLook, sampleLocalS);
+  sCtx.restore();
+  return canvas;
+}
+
 function backOut(x: number): number {
   const c1 = 1.70158;
   const c3 = c1 + 1;
@@ -142,10 +310,24 @@ export function splitOverlongText(
   return lines.length ? lines : [text];
 }
 
+const glyphWidthCache = new Map<string, number>();
+
+function charWidthCached(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, char: string): number {
+  if (!('letterSpacing' in (ctx as object))) return (ctx as CanvasRenderingContext2D).measureText(char).width;
+  const key = `${ctx.font}\0${char}`;
+  let w = glyphWidthCache.get(key);
+  if (w === undefined) {
+    w = ctx.measureText(char).width;
+    if (glyphWidthCache.size > 4096) glyphWidthCache.clear();
+    glyphWidthCache.set(key, w);
+  }
+  return w;
+}
+
 function measured(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, text: string, spacing: number): number {
   if (!spacing) return ctx.measureText(text).width;
   const chars = Array.from(text);
-  return chars.reduce((width, char) => width + ctx.measureText(char).width, 0) + Math.max(0, chars.length - 1) * spacing;
+  return chars.reduce((width, char) => width + charWidthCached(ctx, char), 0) + Math.max(0, chars.length - 1) * spacing;
 }
 
 function drawSpaced(
@@ -159,9 +341,16 @@ function drawSpaced(
     ctx.fillText(text, x, y);
     return;
   }
+  if ('letterSpacing' in ctx && (ctx.shadowBlur ?? 0) > 0) {
+    const prev = (ctx as CanvasRenderingContext2D).letterSpacing;
+    (ctx as CanvasRenderingContext2D).letterSpacing = `${spacing}px`;
+    ctx.fillText(text, x, y);
+    (ctx as CanvasRenderingContext2D).letterSpacing = prev;
+    return;
+  }
   for (const char of Array.from(text)) {
     ctx.fillText(char, x, y);
-    x += ctx.measureText(char).width + spacing;
+    x += charWidthCached(ctx, char) + spacing;
   }
 }
 
@@ -176,9 +365,16 @@ function strokeSpaced(
     ctx.strokeText(text, x, y);
     return;
   }
+  if ('letterSpacing' in ctx && (ctx.shadowBlur ?? 0) > 0) {
+    const prev = (ctx as CanvasRenderingContext2D).letterSpacing;
+    (ctx as CanvasRenderingContext2D).letterSpacing = `${spacing}px`;
+    ctx.strokeText(text, x, y);
+    (ctx as CanvasRenderingContext2D).letterSpacing = prev;
+    return;
+  }
   for (const char of Array.from(text)) {
     ctx.strokeText(char, x, y);
-    x += ctx.measureText(char).width + spacing;
+    x += charWidthCached(ctx, char) + spacing;
   }
 }
 

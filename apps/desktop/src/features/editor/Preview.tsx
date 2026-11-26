@@ -215,6 +215,7 @@ export function Preview({ session, project }: { session: ProjectSession; project
     wasCanvasClick?: boolean;
   } | null>(null);
   const previewRef = useRef<HTMLElement>(null);
+  const syncingFromPlayerRef = useRef(false);
 
   useEffect(() => {
     const cv = canvasRef.current!;
@@ -223,7 +224,14 @@ export function Preview({ session, project }: { session: ProjectSession; project
     });
     player.attach(cv);
     const offTime = player.onTime((us) => {
-      if (player.isPlaying) useEditor.getState().setPlayhead(us);
+      if (player.isPlaying) {
+        syncingFromPlayerRef.current = true;
+        try {
+          useEditor.getState().setPlayhead(us);
+        } finally {
+          syncingFromPlayerRef.current = false;
+        }
+      }
     });
     const offEnd = player.onEnded(() => {
       const st = useEditor.getState();
@@ -259,11 +267,8 @@ export function Preview({ session, project }: { session: ProjectSession; project
     setPausedPlayheadUs(useEditor.getState().playheadUs);
     return useEditor.subscribe((state, prev) => {
       if (state.playheadUs === prev.playheadUs) return;
-      if (!player.isPlaying) {
-        player.seek(state.playheadUs);
-      } else if (Math.abs(player.timeUs - state.playheadUs) > 250_000) {
-        player.seek(state.playheadUs);
-      }
+      if (syncingFromPlayerRef.current) return;
+      player.seek(state.playheadUs);
       if (!state.playing) setPausedPlayheadUs(state.playheadUs);
     });
   }, [player]);
@@ -293,7 +298,7 @@ export function Preview({ session, project }: { session: ProjectSession; project
         frameRef.current.style.width = `${width}px`;
         frameRef.current.style.height = `${height}px`;
       }
-      setFrameSize({ width, height });
+      setFrameSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
     };
     fit();
     const ro = new ResizeObserver(fit);
@@ -303,10 +308,17 @@ export function Preview({ session, project }: { session: ProjectSession; project
 
   useEffect(() => {
     const cv = canvasRef.current!;
-    cv.width = Math.round(P.width * previewScale);
-    cv.height = Math.round(P.height * previewScale);
-    if (!player.isPlaying) player.seek(useEditor.getState().playheadUs);
-  }, [P.width, P.height, previewScale, player]);
+    const dpr = typeof window !== 'undefined' ? Math.min(2, window.devicePixelRatio || 1) : 1;
+    const maxW = Math.round(P.width * previewScale);
+    const screenW = !fullscreen && frameSize.width > 0 ? Math.max(320, Math.round(frameSize.width * dpr)) : maxW;
+    const targetW = Math.max(2, Math.min(maxW, screenW));
+    const targetH = Math.max(2, Math.round((targetW * P.height) / P.width));
+    if (cv.width !== targetW || cv.height !== targetH) {
+      cv.width = targetW;
+      cv.height = targetH;
+      if (!player.isPlaying) player.seek(useEditor.getState().playheadUs);
+    }
+  }, [P.width, P.height, previewScale, fullscreen, frameSize.width, player]);
 
   useEffect(() => {
     if (inlineEditClipId) {

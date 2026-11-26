@@ -5,7 +5,7 @@
  * O preview usa os PROXIES (H.264 leve). É "melhor esforço": a exportação (Fase 3)
  * usa os originais e é exata. O tempo do projeto é sempre a fonte da verdade.
  */
-import { drawTextLayer, textIsAnimated, textSteadyKey } from './textLayer';
+import { activeWordIndex, canUseTextSprite, drawTextLayer, evalTextEnvelope, renderTextSpriteCanvas } from './textLayer';
 import { playbackIndex } from './playbackIndex';
 import { aggregateColorGrade, applyWhipPan, applyZoomThrough, automaticDuckingGain, clipEndUs, createColorGradeLut, evalClipLook, evaluateKeyframes, isColorGradeNeutral, projectDurationUs, sampleColorGradeLut, sourceTimeAt, speedAt, transitionUnderlay, type Clip, type ClipLook, type ColorGradeLut, type Project, type Track } from '@amv/project';
 
@@ -30,12 +30,15 @@ interface Slot {
   lastGain: number | null;
   lastFrame: HTMLCanvasElement | null;
   lastFrameTime: number;
+  waitingSinceMs: number;
 }
 
-/** Margem para pré-carregar próximos clipes antes de começarem (evita engasgo em cortes rápidos). */
-const PRELOAD_US = 3_000_000;
-/** Quantos próximos clipes por trilha ficam pré-carregados (cortes rápidos precisam de mais de 2). */
-const PRELOAD_MAX = 5;
+/** Margem para pré-carregar o próximo clipe de vídeo sem estourar o limite de 6 conexões HTTP/1.1 do WebView2. */
+const PRELOAD_US = 1_500_000;
+const PRELOAD_AUDIO_US = 900_000;
+const PRELOAD_TEXT_US = 2_000_000;
+const PRELOAD_VIDEO_MAX = 1;
+const PRELOAD_AUDIO_MAX = 1;
 /** Corrige desvios visuais grandes sem seeks frequentes durante a reprodução. */
 const DRIFT_PLAYING_S = 0.6;
 /** Pausado: limite de desvio para re-seek. */
@@ -59,11 +62,12 @@ export function shouldHardSeekMedia(
     && state.sinceLastSeekMs >= PLAYING_SEEK_COOLDOWN_MS;
 }
 /**
- * Elementos de mídia vivos: mantém um pool aquecido de decodificadores sem derrubá-los em cortes rápidos.
+ * Pool contido abaixo do teto de conexões simultâneas a `asset.localhost` no WebView2/Chromium.
  */
-const MAX_SLOTS = 28;
+const MAX_SLOTS = 10;
 /** Elemento fora do playhead há mais que isso é fechado (libera a conexão). */
-const IDLE_RELEASE_MS = 12_000;
+const IDLE_RELEASE_MS = 2_500;
+const MAX_TEXT_SPRITES = 96;
 
 function canvasBlendMode(mode: Clip['blendMode']): GlobalCompositeOperation {
   if (mode === 'addition') return 'lighter';
@@ -269,6 +273,9 @@ export class Player {
   private pausedAtUs = 0;
   private lastRenderAtMs = 0;
   private lastNotifyAtMs = 0;
+  private lastLoopAtMs = 0;
+  private warmedTextThisFrame = false;
+  private lastActiveVideoEl: HTMLVideoElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
   private colorBuffer: HTMLCanvasElement | null = null;
   private textBlendBuffer: HTMLCanvasElement | null = null;
@@ -316,8 +323,10 @@ export class Player {
     for (const s of this.slots.values()) this.release(s);
     this.slots.clear();
     this.ctx = null;
+    this.lastActiveVideoEl = null;
     this.lastRenderAtMs = 0;
     this.lastNotifyAtMs = 0;
+    this.lastLoopAtMs = 0;
     this.colorGradeGpu?.dispose();
     this.colorGradeGpu = undefined;
     this.colorLuts.clear();
@@ -345,6 +354,7 @@ export class Player {
 
   setProject(p: Project): void {
     if (this.project === p) return;
+    const prevSettings = this.project.settings;
     this.project = p;
     this.index = playbackIndex(p);
     if (this.audioLimiter) {
@@ -360,11 +370,13 @@ export class Player {
       }
     }
     this.colorLuts.clear();
-    for (const c of this.staticTextCache.values()) {
-      c.width = 0;
-      c.height = 0;
+    if (prevSettings.width !== p.settings.width || prevSettings.height !== p.settings.height) {
+      for (const c of this.staticTextCache.values()) {
+        c.width = 0;
+        c.height = 0;
+      }
+      this.staticTextCache.clear();
     }
-    this.staticTextCache.clear();
     if (!this.playing) {
       for (const slot of this.slots.values()) {
         if (slot.kind !== 'image') slot.needsSeek = true;
@@ -407,6 +419,7 @@ export class Player {
       if (this.pausedAtUs === t && !this.dirty) return;
       this.pausedAtUs = t;
     }
+    this.lastLoopAtMs = 0;
     this.dirty = true;
     this.lastRenderAtMs = 0;
     for (const slot of this.slots.values()) if (slot.kind !== 'image') slot.needsSeek = true;
@@ -418,6 +431,7 @@ export class Player {
     if (end > 0 && this.pausedAtUs >= end) this.pausedAtUs = 0;
     this.playing = true;
     this.dirty = true;
+    this.lastLoopAtMs = 0;
     this.clockStartUs = this.pausedAtUs;
     this.clockStartPerf = performance.now();
     for (const slot of this.slots.values()) if (slot.kind !== 'image') slot.needsSeek = true;
@@ -427,6 +441,7 @@ export class Player {
     if (!this.playing) return;
     this.pausedAtUs = this.timeUs;
     this.playing = false;
+    this.lastLoopAtMs = 0;
     this.dirty = true;
     for (const s of this.slots.values()) if (s.kind !== 'image') (s.el as HTMLMediaElement).pause();
     this.suspendAudioContext();
@@ -473,7 +488,7 @@ export class Player {
       el = img;
     } else {
       const m = document.createElement(kind === 'video' ? 'video' : 'audio');
-      m.preload = 'auto';
+      m.preload = kind === 'video' ? 'auto' : 'metadata';
       m.crossOrigin = 'anonymous';
       if (m instanceof HTMLVideoElement) {
         m.muted = true; // vídeo nas trilhas de vídeo é só imagem; o som vem das trilhas de áudio
@@ -493,12 +508,12 @@ export class Player {
       }
       m.src = url;
       el = m;
-      const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode, gainNode, needsSeek: true, lastSeekAtMs: 0, lastGain: null, lastFrame: null, lastFrameTime: -1 };
+      const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode, gainNode, needsSeek: true, lastSeekAtMs: 0, lastGain: null, lastFrame: null, lastFrameTime: -1, waitingSinceMs: 0 };
       this.slots.set(slotKey, slot);
       this.evict();
       return slot;
     }
-    const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode: null, gainNode: null, needsSeek: true, lastSeekAtMs: 0, lastGain: null, lastFrame: null, lastFrameTime: -1 };
+    const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode: null, gainNode: null, needsSeek: true, lastSeekAtMs: 0, lastGain: null, lastFrame: null, lastFrameTime: -1, waitingSinceMs: 0 };
     this.slots.set(slotKey, slot);
     this.evict();
     return slot;
@@ -566,6 +581,7 @@ export class Player {
   }
 
   private release(s: Slot): void {
+    if (this.lastActiveVideoEl === s.el) this.lastActiveVideoEl = null;
     s.sourceNode?.disconnect();
     s.gainNode?.disconnect();
     if (s.kind !== 'image') {
@@ -578,6 +594,27 @@ export class Player {
       s.lastFrame.width = 0;
       s.lastFrame.height = 0;
       s.lastFrame = null;
+    }
+  }
+
+  private captureVideoFrame(v: HTMLVideoElement, slot: Slot): void {
+    if (v.readyState < 2 || !v.videoWidth || !v.videoHeight) return;
+    slot.lastFrame ??= document.createElement('canvas');
+    if (slot.lastFrame.width !== v.videoWidth) slot.lastFrame.width = v.videoWidth;
+    if (slot.lastFrame.height !== v.videoHeight) slot.lastFrame.height = v.videoHeight;
+    slot.lastFrame.getContext('2d')?.drawImage(v, 0, 0);
+    slot.lastFrameTime = v.currentTime;
+  }
+
+  private prepareSlotForSeek(m: HTMLMediaElement, slot: Slot, targetS: number): void {
+    if (!(m instanceof HTMLVideoElement)) return;
+    if (!m.seeking && m.readyState >= 2 && Math.abs(m.currentTime - targetS) <= 0.85) {
+      this.captureVideoFrame(m, slot);
+    } else if (slot.lastFrame && Math.abs(slot.lastFrameTime - targetS) > 0.35) {
+      // descarta quadro antigo de outro ponto (ex.: quadro 0 do preload) para não "voltar o vídeo"
+      slot.lastFrame.width = 0;
+      slot.lastFrame.height = 0;
+      slot.lastFrameTime = -1;
     }
   }
 
@@ -594,6 +631,7 @@ export class Player {
   }
 
   private syncMedia(m: HTMLMediaElement, clip: Clip, atUs: number, volume: number | null, slot: Slot, kind: 'video' | 'audio'): void {
+    if (m.preload !== 'auto') m.preload = 'auto';
     const target = sourceTimeS(clip, atUs);
     if (volume !== null) {
       const context = this.audioContext;
@@ -615,6 +653,7 @@ export class Player {
     if (clip.reverse || playbackRate <= 0.001) {
       if (!m.paused) m.pause();
       if (!m.seeking && m.readyState >= 1 && (slot.needsSeek || Math.abs(drift) > 0.015)) {
+        this.prepareSlotForSeek(m, slot, target);
         m.currentTime = target;
         slot.needsSeek = false;
         slot.lastSeekAtMs = performance.now();
@@ -632,6 +671,7 @@ export class Player {
         needsSeek: slot.needsSeek,
         sinceLastSeekMs: now - slot.lastSeekAtMs,
       })) {
+        this.prepareSlotForSeek(m, slot, target);
         m.currentTime = target;
         slot.needsSeek = false;
         slot.lastSeekAtMs = now;
@@ -650,6 +690,7 @@ export class Player {
         needsSeek: slot.needsSeek,
         sinceLastSeekMs: performance.now() - slot.lastSeekAtMs,
       })) {
+        this.prepareSlotForSeek(m, slot, target);
         m.currentTime = target;
         slot.needsSeek = false;
         slot.lastSeekAtMs = performance.now();
@@ -662,6 +703,15 @@ export class Player {
   private loop = () => {
     this.raf = requestAnimationFrame(this.loop);
     const now = performance.now();
+    if (this.playing) {
+      if (this.lastLoopAtMs > 0 && now - this.lastLoopAtMs > 140) {
+        // Absorve engasgos de thread principal/GC para o relógio não pular à frente do vídeo e forçar re-seek.
+        this.clockStartPerf += (now - this.lastLoopAtMs) - 33;
+      }
+      this.lastLoopAtMs = now;
+    } else {
+      this.lastLoopAtMs = 0;
+    }
     const t = this.timeUs;
     const end = this.index.durationUs;
     if (this.playing && this.soloStopAtUs !== null && t >= this.soloStopAtUs) {
@@ -684,8 +734,9 @@ export class Player {
       this.dirty = false;
       this.renderAt(Math.min(t, end || t));
     }
-    if (this.playing && now - this.lastNotifyAtMs >= PLAYHEAD_UPDATE_MS) {
-      this.lastNotifyAtMs = now;
+    const afterNow = performance.now();
+    if (this.playing && afterNow - this.lastNotifyAtMs >= PLAYHEAD_UPDATE_MS) {
+      this.lastNotifyAtMs = afterNow;
       for (const l of this.listeners) l(this.timeUs);
     }
   };
@@ -698,11 +749,12 @@ export class Player {
     const p = this.project;
     const used = new Set<string>();
     this.frameUsed = used;
+    this.warmedTextThisFrame = false;
     const mixTracks = p.tracks.filter((track) => track.kind === 'audio' || (track.kind === 'video' && p.audioMix.includeVideoAudio));
     const anySolo = mixTracks.some((track) => track.solo);
     const soloClip = this.soloClipId ? p.clips.find((x) => x.id === this.soloClipId) : undefined;
 
-    // áudio: todas as trilhas de áudio (pré-carrega até 2 próximos clipes para entradas instantâneas)
+    // áudio: pré-carrega apenas 1 próximo clipe próximo para poupar sockets do WebView2
     for (const track of p.tracks) {
       if (track.kind !== 'audio') continue;
       const trackClips = this.index.tracks.get(track.id) ?? [];
@@ -710,7 +762,7 @@ export class Player {
       for (const c of trackClips) {
         if (!c.assetId) continue;
         const active = t >= c.timelineStartUs && t < clipEndUs(c);
-        const upcoming = !active && c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t && preloadedAudio < PRELOAD_MAX;
+        const upcoming = !active && c.timelineStartUs > t && c.timelineStartUs - PRELOAD_AUDIO_US <= t && preloadedAudio < PRELOAD_AUDIO_MAX;
         if (!active && !upcoming) continue;
         if (upcoming) preloadedAudio++;
         const slot = this.slotFor(c, 'audio');
@@ -723,7 +775,6 @@ export class Player {
             : clipVolume(c, track, t, anySolo, this.project);
           this.syncMedia(m, c, t, vol, slot, 'audio');
         } else {
-          // pré-carregado: parado no primeiro quadro e pronto sem re-seek na entrada
           if (!m.paused) m.pause();
           if (slot.gainNode && this.audioContext && slot.lastGain !== 0) {
             slot.gainNode.gain.setTargetAtTime(0, this.audioContext.currentTime, 0.005);
@@ -787,7 +838,13 @@ export class Player {
           if (textFilter === 'front' && isBehind) continue;
         }
         const active = t >= c.timelineStartUs && t < clipEndUs(c);
-        const upcoming = !active && !c.text && c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t && preloadedVisual < PRELOAD_MAX;
+        if (!active && c.text) {
+          if (!this.warmedTextThisFrame && c.timelineStartUs > t && c.timelineStartUs - PRELOAD_TEXT_US <= t) {
+            this.prewarmText(c, k);
+          }
+          continue;
+        }
+        const upcoming = !active && !c.text && c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t && preloadedVisual < PRELOAD_VIDEO_MAX;
         if (!active && !upcoming) continue;
         if (upcoming) preloadedVisual++;
         const localS = (t - c.timelineStartUs) / 1e6;
@@ -854,7 +911,7 @@ export class Player {
     const kind = asset.kind === 'image' ? 'image' : 'video';
     const slot = this.slotFor(c, kind);
     if (!slot) {
-      if (active) this.drawPlaceholder(ctx, 'Preparando proxy…');
+      if (active && !this.playing) this.drawPlaceholder(ctx, 'Preparando proxy…');
       return;
     }
     used.add(slot.slotKey);
@@ -871,34 +928,39 @@ export class Player {
             slot.needsSeek = true;
           } else if (v.readyState >= 2) {
             slot.needsSeek = false;
-            // guarda o 1º quadro: se o decodificador engasgar na entrada, mostra isto em vez de um buraco
             if (!v.seeking && v.videoWidth && slot.lastFrameTime !== v.currentTime) {
-              slot.lastFrame ??= document.createElement('canvas');
-              if (slot.lastFrame.width !== v.videoWidth) slot.lastFrame.width = v.videoWidth;
-              if (slot.lastFrame.height !== v.videoHeight) slot.lastFrame.height = v.videoHeight;
-              slot.lastFrame.getContext('2d')?.drawImage(v, 0, 0);
-              slot.lastFrameTime = v.currentTime;
+              this.captureVideoFrame(v, slot);
             }
           }
         }
         if (v.seeking || v.readyState < 2) this.dirty = true;
       }
       if (active && v.seeking && v.readyState < 2) this.dirty = true;
+      const targetS = active ? sourceTimeS(c, t) : 0;
+      const hasValidSavedFrame =
+        Boolean(slot.lastFrame?.width && slot.lastFrame.height)
+        && (!this.playing || Math.abs(slot.lastFrameTime - targetS) <= 0.45);
       if (active && v.readyState >= 2 && v.videoWidth && v.videoHeight) {
+        slot.waitingSinceMs = 0;
+        this.lastActiveVideoEl = v;
         if (!this.playing && !v.seeking && (slot.lastFrameTime !== v.currentTime || !slot.lastFrame)) {
-          slot.lastFrame ??= document.createElement('canvas');
-          if (slot.lastFrame.width !== v.videoWidth) slot.lastFrame.width = v.videoWidth;
-          if (slot.lastFrame.height !== v.videoHeight) slot.lastFrame.height = v.videoHeight;
-          slot.lastFrame.getContext('2d')?.drawImage(v, 0, 0);
-          slot.lastFrameTime = v.currentTime;
+          this.captureVideoFrame(v, slot);
         }
         this.drawMedia(ctx, v, v.videoWidth, v.videoHeight, c, k, look, localS);
-      } else if (active && slot.lastFrame?.width && slot.lastFrame.height) {
+      } else if (active && hasValidSavedFrame && slot.lastFrame) {
+        slot.waitingSinceMs = 0;
         this.dirty = true;
         this.drawMedia(ctx, slot.lastFrame, slot.lastFrame.width, slot.lastFrame.height, c, k, look, localS);
       } else if (active) {
+        if (!slot.waitingSinceMs) slot.waitingSinceMs = performance.now();
+        const waitMs = performance.now() - slot.waitingSinceMs;
         this.dirty = true;
-        this.drawPlaceholder(ctx, 'Carregando quadro…');
+        const hold = this.lastActiveVideoEl;
+        if (this.playing && waitMs < 650 && hold && hold.readyState >= 2 && hold.videoWidth && hold.videoHeight) {
+          this.drawMedia(ctx, hold, hold.videoWidth, hold.videoHeight, c, k, look, localS);
+        } else if (!this.playing || waitMs >= 650) {
+          this.drawPlaceholder(ctx, 'Carregando quadro…');
+        }
       }
     } else if (active) {
       const img = slot.el as HTMLImageElement;
@@ -1031,56 +1093,95 @@ export class Player {
     }
   }
 
-  /** Assinatura do conte�do/estilo do texto: invalida o cache est�tico quando o clip � editado. */
+  /** Assinatura do conteúdo/estilo do texto: invalida o cache de sprites quando o clipe é editado. */
   private textSignature(c: Clip): string {
     let sig = this.textSigCache.get(c);
     if (!sig) {
-      sig = JSON.stringify([c.text, c.transform, c.mask, c.blendMode, c.effects, c.durationUs]);
+      sig = JSON.stringify([c.text, c.transform.scale, c.transform.crop]);
       this.textSigCache.set(c, sig);
     }
     return sig;
   }
 
+  private getOrBuildTextSprite(c: Clip, k: number, activeWord: number): HTMLCanvasElement | null {
+    const cacheKey = `${c.id}:${Math.round(k * 10000)}:${this.textSignature(c)}:w${activeWord}`;
+    let cached = this.staticTextCache.get(cacheKey);
+    if (cached) {
+      this.staticTextCache.delete(cacheKey);
+      this.staticTextCache.set(cacheKey, cached);
+      return cached;
+    }
+    if (typeof document === 'undefined') return null;
+    cached = renderTextSpriteCanvas(
+      (w, h) => {
+        const el = document.createElement('canvas');
+        el.width = w;
+        el.height = h;
+        return el;
+      },
+      c,
+      this.project.settings.width,
+      this.project.settings.height,
+      k,
+      activeWord,
+    ) ?? undefined;
+    if (!cached) return null;
+    this.warmedTextThisFrame = true;
+    this.staticTextCache.set(cacheKey, cached);
+    if (this.staticTextCache.size > MAX_TEXT_SPRITES) {
+      const oldest = this.staticTextCache.keys().next().value!;
+      const oldCanvas = this.staticTextCache.get(oldest);
+      if (oldCanvas) {
+        oldCanvas.width = 0;
+        oldCanvas.height = 0;
+      }
+      this.staticTextCache.delete(oldest);
+    }
+    return cached;
+  }
+
+  private prewarmText(c: Clip, k: number): void {
+    if (!canUseTextSprite(c)) return;
+    if (typeof document !== 'undefined' && document.fonts && document.fonts.status !== 'loaded') return;
+    const firstWord = activeWordIndex(c.text?.wordTimings ?? [], 0);
+    const cacheKey = `${c.id}:${Math.round(k * 10000)}:${this.textSignature(c)}:w${firstWord}`;
+    if (this.staticTextCache.has(cacheKey)) return;
+    this.getOrBuildTextSprite(c, k, firstWord);
+  }
+
   private drawText(ctx: CanvasRenderingContext2D, c: Clip, k: number, look: ClipLook, localS: number): void {
     const W = ctx.canvas.width;
     const H = ctx.canvas.height;
-    const steadyKey = textIsAnimated(c) ? textSteadyKey(c, localS) : null;
-    const canCacheStatic =
+    const fontsReady = typeof document === 'undefined' || !document.fonts || document.fonts.status === 'loaded';
+    if (
       W > 0 && H > 0
-      && (!textIsAnimated(c) || steadyKey !== null)
-      && c.mask === 'none'
-      && look.dx === 0 && look.dy === 0 && look.blur === 0 && look.zoom === 1 && look.rgbSplit === 0
-      && (typeof document === 'undefined' || !document.fonts || document.fonts.status === 'loaded');
-
-    if (canCacheStatic) {
-      const cacheKey = `${c.id}:${W}x${H}:${this.textSignature(c)}:${steadyKey ?? 's'}`;
-      let cached = this.staticTextCache.get(cacheKey);
-      if (!cached) {
-        cached = document.createElement('canvas');
-        cached.width = W;
-        cached.height = H;
-        const cCtx = cached.getContext('2d');
-        if (cCtx) {
-          const opaqueClip = c.transform.opacity === 1 ? c : { ...c, transform: { ...c.transform, opacity: 1 } };
-          drawTextLayer(cCtx, opaqueClip, this.project.settings.width, this.project.settings.height, k, { ...look, alpha: 1 }, localS);
+      && fontsReady
+      && canUseTextSprite(c)
+      && look.blur === 0 && look.zoom === 1 && look.rgbSplit === 0
+    ) {
+      const projW = this.project.settings.width;
+      const projH = this.project.settings.height;
+      const env = evalTextEnvelope(c, projW, projH, localS, look);
+      if (!env) return;
+      const sprite = this.getOrBuildTextSprite(c, k, env.activeWord);
+      if (sprite) {
+        ctx.save();
+        ctx.globalAlpha = env.alpha;
+        ctx.globalCompositeOperation = canvasBlendMode(c.blendMode);
+        clipMask(ctx, c.mask, 0, 0, W, H);
+        ctx.translate((projW / 2 + env.x) * k, (projH / 2 + env.centerY) * k);
+        if (env.rotation) ctx.rotate((env.rotation * Math.PI) / 180);
+        if (env.relScale !== 1) ctx.scale(env.relScale, env.relScale);
+        ctx.drawImage(sprite, -sprite.width / 2, -sprite.height / 2);
+        ctx.restore();
+        const nextWord = env.activeWord + 1;
+        const wordCount = c.text?.wordTimings.length ?? 0;
+        if (!this.warmedTextThisFrame && nextWord >= 0 && nextWord < wordCount) {
+          const nextKey = `${c.id}:${Math.round(k * 10000)}:${this.textSignature(c)}:w${nextWord}`;
+          if (!this.staticTextCache.has(nextKey)) this.getOrBuildTextSprite(c, k, nextWord);
         }
-        this.staticTextCache.set(cacheKey, cached);
-        if (this.staticTextCache.size > 32) {
-          const oldest = this.staticTextCache.keys().next().value!;
-          const oldCanvas = this.staticTextCache.get(oldest);
-          if (oldCanvas) {
-            oldCanvas.width = 0;
-            oldCanvas.height = 0;
-          }
-          this.staticTextCache.delete(oldest);
-        }
+        return;
       }
-      ctx.save();
-      ctx.globalAlpha = look.alpha;
-      ctx.globalCompositeOperation = canvasBlendMode(c.blendMode);
-      ctx.drawImage(cached, 0, 0);
-      ctx.restore();
-      return;
     }
 
     if (c.blendMode !== 'normal' && W > 0 && H > 0) {

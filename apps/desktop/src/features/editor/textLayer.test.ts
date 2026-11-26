@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { createProject, evalClipLook, type TextWordTiming } from '@amv/project';
 import { subtitleClip, cuesForClip, editSubtitleTextManually } from '@amv/subtitles';
-import { drawTextLayer, splitOverlongText, splitTimedText, textIsAnimated } from './textLayer.js';
+import {
+  canUseTextSprite,
+  drawTextLayer,
+  evalTextEnvelope,
+  renderTextSpriteCanvas,
+  splitOverlongText,
+  splitTimedText,
+  textIsAnimated,
+} from './textLayer.js';
 import { clampTimelineHeight } from './editorLayout.js';
 
 const timing = (text: string, startUs: number): TextWordTiming => ({
@@ -135,5 +143,67 @@ describe('subtitle preview/export parity', () => {
     expect(blendClip.text?.heroItalic).toBe(true);
     drawTextLayer(ctx as unknown as CanvasRenderingContext2D, blendClip, 1920, 1080, 1, evalClipLook(blendClip, 0.2, 2), 0.2);
     expect(fontsUsed.some((f) => f.includes('italic') && f.includes('Playfair Display Variable'))).toBe(true);
+  });
+
+  it('uses tight sprite cache across animated entry, sheen, RGB split and word highlights', () => {
+    const project = createProject({ name: 'SpritePerf' });
+    const clip = subtitleClip(project, 'text', 0, 2e6, 'Força total agora', 'anime-impact');
+    if (!clip.text) throw new Error('Missing text');
+    clip.text.wordTimings = [
+      timing('Força', 0),
+      timing('total', 300_000),
+      timing('agora', 600_000),
+    ];
+    clip.keyframes['transform.scale'] = [
+      { atUs: 0, value: 1.25, easing: 'ease-out' },
+      { atUs: 180_000, value: 1, easing: 'linear' },
+    ];
+    expect(canUseTextSprite(clip)).toBe(true);
+
+    const envEntry = evalTextEnvelope(clip, 1920, 1080, 0.05, evalClipLook(clip, 0.05, 2));
+    const envMid = evalTextEnvelope(clip, 1920, 1080, 0.45, evalClipLook(clip, 0.45, 2));
+    expect(envEntry).not.toBeNull();
+    expect(envMid).not.toBeNull();
+    expect(envEntry!.activeWord).toBe(0);
+    expect(envMid!.activeWord).toBe(1);
+    expect(envEntry!.alpha).toBeGreaterThan(0);
+    expect(envEntry!.alpha).toBeLessThan(1);
+    expect(envMid!.alpha).toBe(1);
+
+    let rasterCalls = 0;
+    const sprite = renderTextSpriteCanvas(
+      (w, h) => ({
+        width: w,
+        height: h,
+        getContext: () => ({
+          canvas: { width: w, height: h },
+          font: '',
+          fillStyle: '',
+          strokeStyle: '',
+          lineWidth: 1,
+          globalAlpha: 1,
+          save() {},
+          restore() {},
+          translate() {},
+          rotate() {},
+          measureText: (t: string) => ({ width: t.length * 12 }),
+          fillText() { rasterCalls++; },
+          strokeText() {},
+        }),
+      } as unknown as HTMLCanvasElement),
+      clip,
+      1920,
+      1080,
+      0.5,
+      0,
+    );
+    expect(sprite).not.toBeNull();
+    expect(sprite!.width).toBeLessThan(960);
+    expect(sprite!.height).toBeLessThan(540);
+    expect(rasterCalls).toBeGreaterThan(0);
+
+    // Typewriter mantém fallback quadro a quadro por mudar os caracteres visíveis
+    clip.text.animationIn = 'typewriter';
+    expect(canUseTextSprite(clip)).toBe(false);
   });
 });
