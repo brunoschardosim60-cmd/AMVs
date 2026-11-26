@@ -20,6 +20,7 @@ import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from '
 import { IconButton } from '../../ui/controls';
 import { CompareDialog } from './CompareDialog';
 import { Columns2 } from 'lucide-react';
+import { collectTimelineNavStops } from './readingInputs';
 
 const TIMELINE_MIN = 160;
 
@@ -50,11 +51,38 @@ function useEditorShortcuts(session: ProjectSession) {
           ed.setPlaying(!ed.playing);
           break;
         }
-        case !mod && e.key.toLowerCase() === 's': {
+        case !mod && !e.altKey && e.key.toLowerCase() === 's': {
           e.preventDefault();
           // divide os selecionados no playhead; sem seleção, divide tudo que passa por ali
           const only = ed.selection.length ? ed.selection : undefined;
           run('Dividir', splitAllAt(p, ed.playheadUs, only));
+          break;
+        }
+        case !mod && (e.key === '[' || e.key === ']'): {
+          e.preventDefault();
+          ed.setPlaying(false);
+          const { cutStopsUs } = collectTimelineNavStops(session);
+          if (e.key === '[') {
+            const prev = [...cutStopsUs].reverse().find((u) => u < ed.playheadUs - 5_000);
+            if (prev !== undefined) seek(prev);
+          } else {
+            const next = cutStopsUs.find((u) => u > ed.playheadUs + 5_000);
+            if (next !== undefined) seek(next);
+          }
+          break;
+        }
+        case !mod && (e.key === ',' || e.key === '.'): {
+          e.preventDefault();
+          ed.setPlaying(false);
+          const { beatStopsUs } = collectTimelineNavStops(session);
+          if (!beatStopsUs.length) break;
+          if (e.key === ',') {
+            const prev = [...beatStopsUs].reverse().find((u) => u < ed.playheadUs - 5_000);
+            if (prev !== undefined) seek(prev);
+          } else {
+            const next = beatStopsUs.find((u) => u > ed.playheadUs + 5_000);
+            if (next !== undefined) seek(next);
+          }
           break;
         }
         case e.key === 'Delete' || e.key === 'Backspace': {

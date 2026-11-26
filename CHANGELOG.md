@@ -1,5 +1,14 @@
 # Novidades
 
+## 0.9.0
+
+**Modo Livre com Diretor Mestre unificado, análise visual 10× mais rápida e rigorosa, correção profunda de fluidez/travamentos no preview e na timeline, HUD Raio-X de leitura ao vivo e Central de Leitura com auto-reparo e harmonização em 1 clique.**
+
+- **Correção de Fluidez & Zero Travamentos no Preview e na Timeline:** prévia configurada em `Proxy leve` por padrão; eliminação de re-seeks redundantes na entrada dos cortes pré-carregados (pré-carregamento de até 2 clipes com pool aquecido de 20 decodificadores); pausa automática do loop de renderização quando ocioso; e isolamento completo da leitura do playhead para zerar re-renderizações de `Timeline`, `Preview` e `Inspector` durante a reprodução.
+- **Modo Livre · Diretor Mestre Unificado + Torneio Multi-Candidato:** um clique para avaliar 5 montagens candidatas com nota auditável (`0..100` em Técnica, Sincronia, Variedade, Arco em 3 Atos e Fusão) unificando cortes na batida, tipografia dinâmica por seção, mesclagem com o vídeo, recortes de personagem `V2`, falas em frestas sem vocal denso e áudio sincronizado dos golpes.
+- **Análise Visual Local Mais Rápida e Rigorosa:** extração paralela com 6 workers e salvamento em disco por lotes; penalização anti-clone entre planos parecidos (`fingerprint` / similaridade visual); bloqueio de quadros mortos/sem nitidez (`deadFrameScore`) e faixas de créditos (`textClutterScore`) já na seleção e no auto-reparo.
+- **Leitura Audiovisual & Melhorias em 1 Clique:** novo botão **Raio-X** no Preview (lendo seção, energia, distância da batida em ms, paleta/nitidez da cena e CPS/contraste da legenda), **Central de Leitura** no diagnóstico com **Auto-reparar tudo** e **Harmonizar legendas c/ vídeo**, **Golpe na batida**, **Sugestões inteligentes para este corte** no Inspector, **Ler vocais da música** e transcrição ultrarrápida por trechos selecionados em Legendas, marcadores de seção na régua e novos atalhos (`O` / `Alt+S` ouvir isolado, `[`/`]` entre cortes, `,`/`.` entre batidas).
+
 ## 0.8.0
 
 **Tipografia mesclada com o vídeo e com as cores do fundo, novas fontes reais de AMV, edição direta clicável/arrastável na tela de Preview, escuta isolada de qualquer clipe clicado, legenda de falas garantida, sincronia vocal cravada, arco Início–Meio–Fim e sons focados em golpes.**

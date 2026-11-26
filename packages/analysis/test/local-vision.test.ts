@@ -194,4 +194,48 @@ describe('análise visual local', () => {
     expect(selectLocalVisionTargets(episode, cached, 'all').map((target) => target.startS)).toEqual([2]);
     expect(selectLocalVisionTargets(episode, cached, 'all', 0)).toEqual([]);
   });
+
+  it('mede rigor visual contra quadros mortos e créditos densos e prioriza lutas no orçamento rápido', () => {
+    const dead = analyzeLocalVisualFrames([blank([8, 8, 8])], shot({ brightness: 0.03 })).local;
+    const vivid = analyzeLocalVisualFrames([
+      frame((x, y) => {
+        const inChar = x >= 20 && x < 44 && y >= 6 && y < 30;
+        if (inChar) return [215, 155, 130];
+        return [(x * 3) % 90 + 20, (y * 4) % 80 + 30, 110];
+      }),
+    ], shot({ brightness: 0.48 })).local;
+    const credits = analyzeLocalVisualFrames([
+      frame((x, y) => {
+        const inBand1 = y >= 7 && y <= 10 && x >= 12 && x <= 52 && x % 3 === 0;
+        const inBand2 = y >= 15 && y <= 18 && x >= 14 && x <= 50 && x % 3 === 1;
+        const inBand3 = y >= 22 && y <= 25 && x >= 16 && x <= 48 && x % 3 === 2;
+        return inBand1 || inBand2 || inBand3 ? [250, 250, 250] : [14, 16, 22];
+      }),
+    ], shot()).local;
+
+    expect(dead.deadFrameScore ?? 0).toBeGreaterThan(0.75);
+    expect(vivid.deadFrameScore ?? 1).toBeLessThan(0.35);
+    expect(credits.textClutterScore ?? 0).toBeGreaterThan(0.4);
+    expect(vivid.textClutterScore ?? 1).toBe(0);
+
+    const longEpisodeShots = [
+      shot({ startS: 15, endS: 19, intensity: 0.7, motion: 0.6 }), // abertura (OP)
+      shot({ startS: 320, endS: 325, intensity: 0.35, motion: 0.2, tags: ['escura'] }),
+      shot({ startS: 600, endS: 604, intensity: 0.75, motion: 0.7, tags: ['impacto'] }),
+    ];
+    const longEp = {
+      version: 'e3',
+      durationS: 1440,
+      shots: longEpisodeShots,
+      sequences: [{ id: 's1', kind: 'luta' as const, startS: 595, endS: 620, shotCount: 1, intensity: 0.8, peak: 0.9 }],
+      speech: [],
+      subtitles: [],
+      intensityCurve: [],
+      curveStepS: 1,
+    };
+    const picked = selectLocalVisionTargets(longEp, {}, 'all', 1);
+    expect(picked).toHaveLength(1);
+    expect(picked[0]!.startS).toBe(600);
+    expect(picked[0]!.samples.length).toBeLessThanOrEqual(3);
+  });
 });

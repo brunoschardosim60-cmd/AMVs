@@ -17,3 +17,5 @@ export * from './smart-preset.js';
 export * from './beat-confidence.js';
 export * from './impact-effects.js';
 export * from './lyrics-layout.js';
+export * from './tournament.js';
+export * from './reading.js';

@@ -266,18 +266,45 @@ export function evaluateAudiovisualQuality(input: QualityInputs): QualityReport 
     }
 
     const sourceOccurrences = new Map<string, Clip[]>();
+    const fingerprintOccurrences = new Map<string, Clip[]>();
     for (const clip of ordered) {
       const analysis = input.episodes.get(clip.assetId!);
       const shot = shotFor(analysis, clip);
       if (!shot) continue;
       const sourceKey = `${clip.assetId}:${Math.round(shot.startS * 10)}`;
       sourceOccurrences.set(sourceKey, [...(sourceOccurrences.get(sourceKey) ?? []), clip]);
+      const local = input.visions?.get(clip.assetId!)?.shots[`t${Math.round(shot.startS * 100)}`]?.local;
+      if (local?.fingerprint && local.entropy >= 0.16) {
+        fingerprintOccurrences.set(local.fingerprint, [...(fingerprintOccurrences.get(local.fingerprint) ?? []), clip]);
+      }
+      if (local?.deadFrameScore !== undefined && local.deadFrameScore >= 0.78) {
+        issues.push(issue(
+          'visual',
+          clip.timelineStartUs,
+          clipEndUs(clip),
+          'medium',
+          'quadro sem definição visual',
+          [`Índice de quadro vazio/lavado: ${(local.deadFrameScore * 100).toFixed(0)}%`, `Entropia: ${local.entropy.toFixed(2)}, bordas: ${local.edgeDensity.toFixed(3)}`],
+          'O plano selecionado contém predominantemente fumaça uniforme, tela lavada ou transição sem detalhe legível.',
+          'Substitua por um plano com sujeito/ação definida.',
+          [clip.id],
+        ));
+      }
     }
+    const reportedRepeatIds = new Set<string>();
     for (const occurrences of sourceOccurrences.values()) {
       if (occurrences.length < 2) continue;
       const first = occurrences[0]!;
       const repeated = occurrences.at(-1)!;
+      occurrences.forEach((c) => reportedRepeatIds.add(c.id));
       issues.push(issue('repetition', first.timelineStartUs, clipEndUs(repeated), occurrences.length >= 3 ? 'medium' : 'low', 'mesma cena reutilizada', [`A mesma cena de origem aparece ${occurrences.length} vezes`, `Asset ${first.assetId}, origem ${((first.sourceInUs) / 1e6).toFixed(2)} s`], 'Os clipes mapeiam para o mesmo plano detectado na análise do episódio.', 'Considere substituir uma ocorrência por outro plano ou mantenha-a se a repetição for um recurso rítmico deliberado.', occurrences.map((clip) => clip.id)));
+    }
+    for (const [fp, occurrences] of fingerprintOccurrences) {
+      if (occurrences.length < 2) continue;
+      if (occurrences.every((c) => reportedRepeatIds.has(c.id))) continue;
+      const first = occurrences[0]!;
+      const repeated = occurrences.at(-1)!;
+      issues.push(issue('repetition', first.timelineStartUs, clipEndUs(repeated), occurrences.length >= 3 ? 'medium' : 'low', 'composição visual repetida', [`${occurrences.length} planos distintos têm assinatura visual idêntica (${fp})`], 'Planos em instantes diferentes do episódio exibem enquadramento/fundo quase idêntico.', 'Substitua uma das ocorrências por um plano visualmente distinto para evitar sensação de loop.', occurrences.map((clip) => clip.id)));
     }
 
     const framed = ordered.map((clip) => {

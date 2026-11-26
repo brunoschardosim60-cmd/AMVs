@@ -88,6 +88,8 @@ describe('sessão do projeto', () => {
     s.redo();
     await waitProcessed(s);
     expect(s.project.assets[0]!.status).toBe('ok');
+    s.dispose();
+    await new Promise((r) => setTimeout(r, 150));
   });
 
   it('adiciona efeitos sobrepostos com direitos e desfaz cada inserção sem apagar o original', async () => {
@@ -276,6 +278,7 @@ describe('sessão do projeto', () => {
     await waitProcessed(s);
     await s.save();
     s.dispose();
+    await new Promise((r) => setTimeout(r, 150));
 
     const moved = join(root, 'HD externo', 'Animes', 'temporada 1');
     mkdirSync(moved, { recursive: true });

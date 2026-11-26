@@ -29,10 +29,11 @@ interface Slot {
   lastSeekAtMs: number;
   lastGain: number | null;
   lastFrame: HTMLCanvasElement | null;
+  lastFrameTime: number;
 }
 
-/** Margem para pré-carregar o próximo clipe antes de ele começar. */
-const PRELOAD_US = 2_000_000;
+/** Margem para pré-carregar próximos clipes antes de começarem (evita engasgo em cortes rápidos). */
+const PRELOAD_US = 2_500_000;
 /** Corrige desvios visuais grandes sem seeks frequentes durante a reprodução. */
 const DRIFT_PLAYING_S = 0.6;
 /** Pausado: limite de desvio para re-seek. */
@@ -56,11 +57,11 @@ export function shouldHardSeekMedia(
     && state.sinceLastSeekMs >= PLAYING_SEEK_COOLDOWN_MS;
 }
 /**
- * Elementos de mídia vivos: mantém uma conexão por clipe ativo/próximo.
+ * Elementos de mídia vivos: mantém um pool aquecido de decodificadores sem derrubá-los em cortes rápidos.
  */
-const MAX_SLOTS = 8;
+const MAX_SLOTS = 20;
 /** Elemento fora do playhead há mais que isso é fechado (libera a conexão). */
-const IDLE_RELEASE_MS = 1500;
+const IDLE_RELEASE_MS = 12_000;
 
 function canvasBlendMode(mode: Clip['blendMode']): GlobalCompositeOperation {
   if (mode === 'addition') return 'lighter';
@@ -279,10 +280,12 @@ export class Player {
   private reportedAudioErrors = new Set<string>();
   private soloClipId: string | null = null;
   private soloStopAtUs: number | null = null;
+  private dirty = true;
 
   setSoloClip(clipId: string | null, stopAtUs: number | null = null): void {
     this.soloClipId = clipId;
     this.soloStopAtUs = clipId ? stopAtUs : null;
+    this.dirty = true;
     this.lastRenderAtMs = 0;
   }
 
@@ -296,6 +299,8 @@ export class Player {
 
   attach(canvas: HTMLCanvasElement): void {
     this.ctx = canvas.getContext('2d', { alpha: false });
+    this.dirty = true;
+    this.lastRenderAtMs = 0;
     this.loop();
   }
 
@@ -345,6 +350,7 @@ export class Player {
         if (slot.kind !== 'image') slot.needsSeek = true;
       }
     }
+    this.dirty = true;
     this.lastRenderAtMs = 0;
   }
 
@@ -378,8 +384,11 @@ export class Player {
       this.clockStartUs = t;
       this.clockStartPerf = performance.now();
     } else {
+      if (this.pausedAtUs === t && !this.dirty) return;
       this.pausedAtUs = t;
     }
+    this.dirty = true;
+    this.lastRenderAtMs = 0;
     for (const slot of this.slots.values()) if (slot.kind !== 'image') slot.needsSeek = true;
   }
 
@@ -388,6 +397,7 @@ export class Player {
     const end = this.index.durationUs;
     if (end > 0 && this.pausedAtUs >= end) this.pausedAtUs = 0;
     this.playing = true;
+    this.dirty = true;
     this.clockStartUs = this.pausedAtUs;
     this.clockStartPerf = performance.now();
     for (const slot of this.slots.values()) if (slot.kind !== 'image') slot.needsSeek = true;
@@ -397,6 +407,7 @@ export class Player {
     if (!this.playing) return;
     this.pausedAtUs = this.timeUs;
     this.playing = false;
+    this.dirty = true;
     for (const s of this.slots.values()) if (s.kind !== 'image') (s.el as HTMLMediaElement).pause();
     this.suspendAudioContext();
   }
@@ -462,12 +473,12 @@ export class Player {
       }
       m.src = url;
       el = m;
-      const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode, gainNode, needsSeek: true, lastSeekAtMs: 0, lastGain: null, lastFrame: null };
+      const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode, gainNode, needsSeek: true, lastSeekAtMs: 0, lastGain: null, lastFrame: null, lastFrameTime: -1 };
       this.slots.set(slotKey, slot);
       this.evict();
       return slot;
     }
-    const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode: null, gainNode: null, needsSeek: true, lastSeekAtMs: 0, lastGain: null, lastFrame: null };
+    const slot: Slot = { slotKey, clipId: clip.id, el, kind, url, lastUsed: performance.now(), sourceNode: null, gainNode: null, needsSeek: true, lastSeekAtMs: 0, lastGain: null, lastFrame: null, lastFrameTime: -1 };
     this.slots.set(slotKey, slot);
     this.evict();
     return slot;
@@ -646,10 +657,11 @@ export class Player {
       this.pausedAtUs = end;
       for (const l of this.endListeners) l();
     }
-    const fps = this.project.settings.fps.num / this.project.settings.fps.den;
-    const frameIntervalMs = 1000 / Math.min(30, Math.max(12, fps));
-    if (now - this.lastRenderAtMs >= frameIntervalMs) {
+    const fps = this.project.settings.fps.num / Math.max(1, this.project.settings.fps.den);
+    const frameIntervalMs = 1000 / Math.min(60, Math.max(24, fps));
+    if ((this.playing || this.dirty) && now - this.lastRenderAtMs >= frameIntervalMs - 2.5) {
       this.lastRenderAtMs = now;
+      this.dirty = false;
       this.renderAt(Math.min(t, end || t));
     }
     if (this.playing && now - this.lastNotifyAtMs >= PLAYHEAD_UPDATE_MS) {
@@ -670,29 +682,43 @@ export class Player {
     const anySolo = mixTracks.some((track) => track.solo);
     const soloClip = this.soloClipId ? p.clips.find((x) => x.id === this.soloClipId) : undefined;
 
-    // áudio: todas as trilhas de áudio
+    // áudio: todas as trilhas de áudio (pré-carrega até 2 próximos clipes para entradas instantâneas)
     for (const track of p.tracks) {
       if (track.kind !== 'audio') continue;
       const trackClips = this.index.tracks.get(track.id) ?? [];
-      const nextAudio = trackClips.find((c) => c.assetId && c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t);
+      let preloadedAudio = 0;
       for (const c of trackClips) {
         if (!c.assetId) continue;
-        const near = (t >= c.timelineStartUs && t < clipEndUs(c)) || c === nextAudio;
-        if (!near) continue;
+        const active = t >= c.timelineStartUs && t < clipEndUs(c);
+        const upcoming = !active && c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t && preloadedAudio < 2;
+        if (!active && !upcoming) continue;
+        if (upcoming) preloadedAudio++;
         const slot = this.slotFor(c, 'audio');
         if (!slot) continue;
         used.add(slot.slotKey);
         const m = slot.el as HTMLMediaElement;
-        if (t >= c.timelineStartUs) {
+        if (active) {
           const vol = soloClip
             ? (c.id === soloClip.id ? Math.min(2, Math.max(0.35, Math.pow(10, c.audio.gainDb / 20))) : 0)
             : clipVolume(c, track, t, anySolo, this.project);
           this.syncMedia(m, c, t, vol, slot, 'audio');
         } else {
-          // pré-carregado: parado no primeiro quadro
+          // pré-carregado: parado no primeiro quadro e pronto sem re-seek na entrada
           if (!m.paused) m.pause();
+          if (slot.gainNode && this.audioContext && slot.lastGain !== 0) {
+            slot.gainNode.gain.setTargetAtTime(0, this.audioContext.currentTime, 0.005);
+            slot.lastGain = 0;
+          }
           const first = sourceTimeS(c, c.timelineStartUs);
-          if (Math.abs(m.currentTime - first) > 0.05 && m.readyState >= 1 && !m.seeking) m.currentTime = first;
+          if (m.readyState >= 1 && !m.seeking) {
+            if (Math.abs(m.currentTime - first) > 0.08) {
+              m.currentTime = first;
+              slot.lastSeekAtMs = performance.now();
+              slot.needsSeek = true;
+            } else if (m.readyState >= 2) {
+              slot.needsSeek = false;
+            }
+          }
         }
       }
     }
@@ -733,16 +759,17 @@ export class Player {
     const bottomVideoId = [...visual].reverse().find((x) => x.kind === 'video')?.id;
     const drawTrackPass = (track: Track, textFilter?: 'behind' | 'front') => {
       const trackClips = this.index.tracks.get(track.id) ?? [];
-      const next = trackClips.find((c) => c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t);
+      let preloadedVisual = 0;
       for (const c of trackClips) {
         if (c.text && textFilter) {
           const isBehind = Boolean(c.text.behindCutout);
           if (textFilter === 'behind' && !isBehind) continue;
           if (textFilter === 'front' && isBehind) continue;
         }
-        const near = (t >= c.timelineStartUs && t < clipEndUs(c)) || c === next;
-        if (!near) continue;
-        const active = t >= c.timelineStartUs;
+        const active = t >= c.timelineStartUs && t < clipEndUs(c);
+        const upcoming = !active && !c.text && c.timelineStartUs > t && c.timelineStartUs - PRELOAD_US <= t && preloadedVisual < 2;
+        if (!active && !upcoming) continue;
+        if (upcoming) preloadedVisual++;
         const localS = (t - c.timelineStartUs) / 1e6;
         let look = evalClipLook(c, localS, c.durationUs / 1e6);
         if (active && c.transitionIn && localS < c.transitionIn.durationUs / 1e6) {
@@ -817,24 +844,38 @@ export class Player {
       else {
         if (!v.paused) v.pause();
         const first = sourceTimeS(c, c.timelineStartUs);
-        if (Math.abs(v.currentTime - first) > 0.05 && v.readyState >= 1 && !v.seeking) v.currentTime = first;
+        if (v.readyState >= 1 && !v.seeking) {
+          if (Math.abs(v.currentTime - first) > 0.08) {
+            v.currentTime = first;
+            slot.lastSeekAtMs = performance.now();
+            slot.needsSeek = true;
+          } else if (v.readyState >= 2) {
+            slot.needsSeek = false;
+          }
+        }
+        if (v.seeking || v.readyState < 2) this.dirty = true;
       }
+      if (active && v.seeking && v.readyState < 2) this.dirty = true;
       if (active && v.readyState >= 2 && v.videoWidth && v.videoHeight) {
-        if (!v.seeking && (!slot.lastFrame || !this.playing)) {
+        if (!this.playing && !v.seeking && (slot.lastFrameTime !== v.currentTime || !slot.lastFrame)) {
           slot.lastFrame ??= document.createElement('canvas');
           if (slot.lastFrame.width !== v.videoWidth) slot.lastFrame.width = v.videoWidth;
           if (slot.lastFrame.height !== v.videoHeight) slot.lastFrame.height = v.videoHeight;
           slot.lastFrame.getContext('2d')?.drawImage(v, 0, 0);
+          slot.lastFrameTime = v.currentTime;
         }
         this.drawMedia(ctx, v, v.videoWidth, v.videoHeight, c, k, look, localS);
       } else if (active && slot.lastFrame?.width && slot.lastFrame.height) {
+        this.dirty = true;
         this.drawMedia(ctx, slot.lastFrame, slot.lastFrame.width, slot.lastFrame.height, c, k, look, localS);
       } else if (active) {
+        this.dirty = true;
         this.drawPlaceholder(ctx, 'Carregando quadro…');
       }
     } else if (active) {
       const img = slot.el as HTMLImageElement;
       if (img.complete && img.naturalWidth) this.drawMedia(ctx, img, img.naturalWidth, img.naturalHeight, c, k, look, localS);
+      else this.dirty = true;
     }
   }
 
@@ -868,50 +909,52 @@ export class Player {
       ch = nh;
     }
     let drawable: CanvasImageSource = src;
-    const grade = aggregateColorGrade(c.effects);
     const filters: string[] = [];
-    if (!isColorGradeNeutral(grade)) {
-      const isSimple = grade.temperature === 0 && grade.tint === 0 && grade.shadows === 0 && grade.midtones === 0 && grade.highlights === 0;
-      if (isSimple) {
-        if (grade.brightness || grade.exposure) filters.push(`brightness(${Math.max(0, 1 + grade.brightness + grade.exposure)})`);
-        if (grade.contrast !== 1) filters.push(`contrast(${Math.max(0, grade.contrast)})`);
-        if (grade.saturation !== 1) filters.push(`saturate(${Math.max(0, grade.saturation)})`);
-        if (grade.hue) filters.push(`hue-rotate(${grade.hue}deg)`);
-        drawable = src;
-      } else {
-        const gradeKey = JSON.stringify(grade);
-        let lut = this.colorLuts.get(gradeKey);
-        if (!lut) {
-          lut = createColorGradeLut(grade);
-          this.colorLuts.set(gradeKey, lut);
-          if (this.colorLuts.size > 64) this.colorLuts.delete(this.colorLuts.keys().next().value!);
-        }
-        this.colorBuffer ??= document.createElement('canvas');
-        const buffer = this.colorBuffer;
-        const bufferWidth = Math.max(1, Math.round(w * k));
-        const bufferHeight = Math.max(1, Math.round(h * k));
-        if (buffer.width !== bufferWidth) buffer.width = bufferWidth;
-        if (buffer.height !== bufferHeight) buffer.height = bufferHeight;
-        const bufferContext = buffer.getContext('2d');
-        if (bufferContext) {
-          bufferContext.drawImage(src, sx, sy, cw, ch, 0, 0, bufferWidth, bufferHeight);
-          if (this.colorGradeGpu === undefined) {
-            this.colorGradeGpu = ColorGradeGpu.create();
-            if (!this.colorGradeGpu) console.warn('WebGL2 indisponível para o color grade; usando processamento GPU 2D.');
+    if (c.effects.length > 0) {
+      const grade = aggregateColorGrade(c.effects);
+      if (!isColorGradeNeutral(grade)) {
+        const isSimple = grade.temperature === 0 && grade.tint === 0 && grade.shadows === 0 && grade.midtones === 0 && grade.highlights === 0;
+        if (isSimple) {
+          if (grade.brightness || grade.exposure) filters.push(`brightness(${Math.max(0, 1 + grade.brightness + grade.exposure)})`);
+          if (grade.contrast !== 1) filters.push(`contrast(${Math.max(0, grade.contrast)})`);
+          if (grade.saturation !== 1) filters.push(`saturate(${Math.max(0, grade.saturation)})`);
+          if (grade.hue) filters.push(`hue-rotate(${grade.hue}deg)`);
+          drawable = src;
+        } else {
+          const gradeKey = JSON.stringify(grade);
+          let lut = this.colorLuts.get(gradeKey);
+          if (!lut) {
+            lut = createColorGradeLut(grade);
+            this.colorLuts.set(gradeKey, lut);
+            if (this.colorLuts.size > 64) this.colorLuts.delete(this.colorLuts.keys().next().value!);
           }
-          const gpuOutput = this.colorGradeGpu?.apply(buffer, gradeKey, lut);
-          if (gpuOutput) {
-            drawable = gpuOutput;
-            sx = 0;
-            sy = 0;
-            cw = bufferWidth;
-            ch = bufferHeight;
-          } else {
-            if (grade.brightness || grade.exposure) filters.push(`brightness(${Math.max(0, 1 + grade.brightness + grade.exposure)})`);
-            if (grade.contrast !== 1) filters.push(`contrast(${Math.max(0, grade.contrast)})`);
-            if (grade.saturation !== 1) filters.push(`saturate(${Math.max(0, grade.saturation)})`);
-            if (grade.hue) filters.push(`hue-rotate(${grade.hue}deg)`);
-            drawable = src;
+          this.colorBuffer ??= document.createElement('canvas');
+          const buffer = this.colorBuffer;
+          const bufferWidth = Math.max(1, Math.round(w * k));
+          const bufferHeight = Math.max(1, Math.round(h * k));
+          if (buffer.width !== bufferWidth) buffer.width = bufferWidth;
+          if (buffer.height !== bufferHeight) buffer.height = bufferHeight;
+          const bufferContext = buffer.getContext('2d');
+          if (bufferContext) {
+            bufferContext.drawImage(src, sx, sy, cw, ch, 0, 0, bufferWidth, bufferHeight);
+            if (this.colorGradeGpu === undefined) {
+              this.colorGradeGpu = ColorGradeGpu.create();
+              if (!this.colorGradeGpu) console.warn('WebGL2 indisponível para o color grade; usando processamento GPU 2D.');
+            }
+            const gpuOutput = this.colorGradeGpu?.apply(buffer, gradeKey, lut);
+            if (gpuOutput) {
+              drawable = gpuOutput;
+              sx = 0;
+              sy = 0;
+              cw = bufferWidth;
+              ch = bufferHeight;
+            } else {
+              if (grade.brightness || grade.exposure) filters.push(`brightness(${Math.max(0, 1 + grade.brightness + grade.exposure)})`);
+              if (grade.contrast !== 1) filters.push(`contrast(${Math.max(0, grade.contrast)})`);
+              if (grade.saturation !== 1) filters.push(`saturate(${Math.max(0, grade.saturation)})`);
+              if (grade.hue) filters.push(`hue-rotate(${grade.hue}deg)`);
+              drawable = src;
+            }
           }
         }
       }

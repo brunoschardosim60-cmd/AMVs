@@ -1,5 +1,5 @@
 import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type Cue, type SceneEmotion, type SpeechSegment } from '@amv/analysis';
-import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, planNarrative, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, scoreSpeechCandidate, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type LyricTypographyStyle, type OrganizationMode, type StyleId } from '@amv/automv';
+import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, generateBestAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, planNarrative, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, scoreSpeechCandidate, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type AssemblyScoreBreakdown, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type LyricTypographyStyle, type OrganizationMode, type StyleId } from '@amv/automv';
 import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { alignUntimedLyrics, alignUntimedLyricsWithFallback, promoteAlignedCuesForTypography } from '@amv/subtitles';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
@@ -75,6 +75,8 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
     : undefined;
   const [musicId, setMusicId] = useState(initialMusicClip?.assetId ?? musics[0]?.id ?? '');
   const [epIds, setEpIds] = useState<string[]>(episodes.map((e) => e.id));
+  const [directorMode, setDirectorMode] = useState<'autonomous' | 'manual'>('autonomous');
+  const [autonomousSpeech, setAutonomousSpeech] = useState(true);
   const [style, setStyle] = useState<StyleId>('hype');
   const [styleMode, setStyleMode] = useState<'auto' | 'manual'>('auto');
   const [musicDriveMode, setMusicDriveMode] = useState<'lyric-kinetic' | 'pure-rhythm' | 'lyric-verse' | 'narrative-climax'>('lyric-kinetic');
@@ -133,6 +135,12 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       unavailable: number;
       repairsApplied: string[];
       issues: Array<{ startUs: number; severity: string; type: string; suggestion: string }>;
+    };
+    tournament?: {
+      score: AssemblyScoreBreakdown;
+      candidatesEvaluated: number;
+      winnerLabel: string;
+      unifiedHighlights: string[];
     };
   } | null>(null);
   const [localizedCandidates, setLocalizedCandidates] = useState<LocalizedCandidate[]>([]);
@@ -968,6 +976,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       let sfxError: string | null = null;
       setBusy(true);
       const automaticSpeechWarnings: string[] = [];
+      const isAutonomous = directorMode === 'autonomous';
 
       // Passo 1 (Música Primeiro): analisa/sincroniza/extrai e traduz a letra da música ANTES de escolher as cenas.
       let resolvedLyrics: Cue[] | undefined = lyrics?.cues;
@@ -985,8 +994,9 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       } else if (
         !resolvedLyrics?.length
         && autoExtractMusicLyrics
+        && showText
         && selectedMusic
-        && (musicDriveMode === 'lyric-kinetic' || musicDriveMode === 'lyric-verse' || selectedStyle === 'letra')
+        && (isAutonomous || musicDriveMode === 'lyric-kinetic' || musicDriveMode === 'lyric-verse' || selectedStyle === 'letra')
       ) {
         setGenerationStep('Analisando música e extraindo a letra...');
         setGenerationProgress(6);
@@ -1023,10 +1033,13 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         }
       }
 
-      setGenerationStep('Analisando cenas pela energia e letra da música...');
+      setGenerationStep('Analisando cenas com rigor visual (foco, paleta, movimento e nitidez)...');
       setGenerationProgress(16);
       await new Promise((resolve) => setTimeout(resolve, 0));
-      const localVisionPending = ready.reduce((total, episode) => total + session.localVisionTargets(episode.id, 'all').length, 0);
+      // Orçamento inteligente priorizado: analisa lutas + impactos + melhores cenas narrativas em paralelo (~110 cenas/ep)
+      // sem travar vários minutos em créditos de abertura/encerramento ou cenas mortas.
+      const smartLocalVisionMax = 110;
+      const localVisionPending = ready.reduce((total, episode) => total + session.localVisionTargets(episode.id, 'all', smartLocalVisionMax).length, 0);
       let localVisionAnalyzed = 0;
       let localVisionFailed = 0;
       let localFrameFailures = 0;
@@ -1035,11 +1048,12 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         visionAbort.current = controller;
         let completedBeforeEpisode = 0;
         for (const episode of ready) {
-          const targets = session.localVisionTargets(episode.id, 'all');
+          const targets = session.localVisionTargets(episode.id, 'all', smartLocalVisionMax);
           if (!targets.length) continue;
           setGenerationStep('Analisando cenas localmente · ' + episode.name);
           const outcome = await session.runLocalVision(episode.id, {
             scope: 'all',
+            max: smartLocalVisionMax,
             signal: controller.signal,
             onProgress: (done, total) => {
               const fraction = (completedBeforeEpisode + done) / Math.max(1, localVisionPending);
@@ -1091,16 +1105,17 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         style: selectedStyle,
         intensity,
         durationS: duration,
-        focus,
+        focus: isAutonomous ? 'fight' : focus,
         sequenceIds: seqIds,
         exclude: [...excluded, ...annotationExclusions],
         seed: nextSeed,
         characters,
-        editorialDirection,
+        editorialDirection: isAutonomous ? 'hype' : editorialDirection,
       }, music);
 
       const speechTranslations: Record<string, string> = {};
-      const wantsSpeech = voiceMoments > 0 || selectedStyle === 'discurso';
+      const effectiveVoiceMoments = isAutonomous ? (autonomousSpeech ? Math.min(3, Math.max(1, Math.floor(duration / 14))) : 0) : voiceMoments;
+      const wantsSpeech = effectiveVoiceMoments > 0 || (!isAutonomous && selectedStyle === 'discurso');
       const speechController = wantsSpeech ? new AbortController() : null;
       const transcribedAssetIds = new Set<string>();
       if (speechController) {
@@ -1116,7 +1131,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             editorialFootagePlan.mode !== 'fight'
             || editorialFootagePlan.pool.some((entry) => entry.ep.assetId === episodeInput.assetId && s.startS >= entry.seq.startS - 15 && s.endS <= entry.seq.endS + 5);
           const relevantWithText = episodeInput.analysis.speech.filter((s) => nearFightSpeech(s) && s.text && s.text.trim().length >= 3);
-          const hasUsableSubtitles = relevantWithText.length >= Math.max(2, voiceMoments)
+          const hasUsableSubtitles = relevantWithText.length >= Math.max(2, effectiveVoiceMoments)
             && (voiceLang !== 'pt' || relevantWithText.some((s) => s.language?.toLowerCase().startsWith('pt') || s.language?.toLowerCase().startsWith('por')));
           if (hasUsableSubtitles) {
             completed++;
@@ -1135,7 +1150,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             const untitledRelevant = episodeInput.analysis.speech
               .filter((s) => !s.text?.trim() && s.endS - s.startS >= 0.6 && s.endS - s.startS <= 6 && nearFightSpeech(s))
               .sort((a, b) => scoreSpeechCandidate(b) - scoreSpeechCandidate(a))
-              .slice(0, selectedStyle === 'discurso' ? 10 : Math.max(4, voiceMoments * 2));
+              .slice(0, !isAutonomous && selectedStyle === 'discurso' ? 10 : Math.max(4, effectiveVoiceMoments * 2));
             if (epDuration >= 180 && untitledRelevant.length > 0) {
               const fallbackLang = streams.find((stream) => stream.index === audioIndex)?.language
                 ?? streams.find((stream) => stream.index === audioIndex)?.title
@@ -1219,9 +1234,9 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
               || scoreSpeechCandidate(right.speech) - scoreSpeechCandidate(left.speech)
               || left.speech.startS - right.speech.startS;
           })
-          .slice(0, selectedStyle === 'discurso'
+          .slice(0, !isAutonomous && selectedStyle === 'discurso'
             ? Math.max(60, Math.ceil(duration / 1.0) + 10)
-            : Math.max(80, voiceMoments * 15));
+            : Math.max(80, effectiveVoiceMoments * 15));
         if (speechCandidates.length) {
           try {
             setGenerationStep(`Traduzindo as falas para ${targetLanguage[speechCaptionLanguage] ?? speechCaptionLanguage}...`);
@@ -1277,55 +1292,65 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
         effectiveLyricSceneMatches = { ...effectiveLyricSceneMatches };
         for (const [scene, cues] of Object.entries(suggestedMatches)) effectiveLyricSceneMatches[scene] = { ...(effectiveLyricSceneMatches[scene] ?? {}), ...cues };
       }
-      const opts: GenerateOptions = { useSfx: effectiveUseSfx, sfxMode, animeHitAudio: true, sfxAssets, style: selectedStyle, intensity, durationS: duration, musicStartS: chosenStart, lyrics: resolvedLyrics, lyricSceneMatches: effectiveLyricSceneMatches, lyricStyle, lyricDisplayMode: musicDriveMode === 'lyric-kinetic' ? 'kinetic-words' : 'rhythmic-phrases', speechTranslations, speechTranslationLanguage: speechCaptionLanguage, useSpeech: voiceMoments > 0, voiceMoments, voiceLang, speechVisualMode, useEffects, showText, showSpeechCaptions, depthCutoutOnDrop, seed: nextSeed, exclude: excluded, focus, sequenceIds: seqIds, hitSync, adaptiveSpeed, beatOffsetMs, characters, organizationMode, editorialDirection, creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }) };
+      const opts: GenerateOptions = {
+        autonomous: isAutonomous,
+        useSfx: effectiveUseSfx,
+        sfxMode,
+        animeHitAudio: true,
+        sfxAssets,
+        style: selectedStyle,
+        intensity,
+        durationS: duration,
+        musicStartS: chosenStart,
+        lyrics: resolvedLyrics,
+        lyricSceneMatches: effectiveLyricSceneMatches,
+        lyricStyle,
+        lyricDisplayMode: musicDriveMode === 'lyric-kinetic' ? 'kinetic-words' : 'rhythmic-phrases',
+        speechTranslations,
+        speechTranslationLanguage: speechCaptionLanguage,
+        useSpeech: effectiveVoiceMoments > 0,
+        voiceMoments: effectiveVoiceMoments,
+        voiceLang,
+        speechVisualMode: isAutonomous ? 'hybrid' : speechVisualMode,
+        useEffects: isAutonomous ? true : useEffects,
+        showText,
+        showSpeechCaptions,
+        depthCutoutOnDrop: isAutonomous ? true : depthCutoutOnDrop,
+        seed: nextSeed,
+        exclude: excluded,
+        focus: isAutonomous ? 'fight' : focus,
+        sequenceIds: seqIds,
+        hitSync: isAutonomous ? true : hitSync,
+        adaptiveSpeed: isAutonomous ? true : adaptiveSpeed,
+        beatOffsetMs,
+        characters,
+        organizationMode: isAutonomous ? 'narrative' : organizationMode,
+        editorialDirection: isAutonomous ? 'hype' : editorialDirection,
+        creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }),
+      };
       const m = musics.find((a) => a.id === musicId)!;
-      const suggestedEditorialRange = chosenStart !== null
-        ? null
-        : editorialFootagePlan.mode === 'fight'
-          ? suggestMusicRanges(music, duration, editorialFootagePlan.fit, 1)[0] ?? null
-          : null;
-      const editorialMusicRange: [number, number] = chosenStart !== null
-        ? chooseMusicRange(music, duration, chosenStart)
-        : suggestedEditorialRange
-          ? [suggestedEditorialRange.startS, suggestedEditorialRange.endS]
-          : chooseMusicRange(music, duration, null);
-      const preflightDirection = planNarrative(music, editorialMusicRange, beatOffsetMs / 1000);
-      const preflightBrief = buildCreativeBrief({
-        style: selectedStyle,
-        episodes: directorInputs,
-        music: { assetId: m.id, name: m.name, analysis: music },
-        options: { durationS: duration, intensity, editorialDirection, organizationMode, focus, voiceMoments },
-        direction: preflightDirection,
-        hasTimedLyrics: !!resolvedLyrics?.length,
-      });
-
-      setGenerationStep('Aplicando objetivo editorial · ' + preflightBrief.title);
-      setGenerationProgress(38);
+      setGenerationStep(
+        isAutonomous
+          ? 'Modo Livre · Avaliando 5 montagens completas e auto-reparando a melhor...'
+          : 'Avaliando variações candidatas e auto-reparando a melhor...',
+      );
+      setGenerationProgress(56);
       await new Promise((resolve) => setTimeout(resolve, 0));
-      const r = generateAmv(session.project, { assetId: m.id, name: m.name, analysis: music }, directorInputs, opts);
-      r.warnings.push(...automaticSpeechWarnings);
 
-      setGenerationStep('Construindo storyboard e revisando a montagem...');
-      setGenerationProgress(72);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      const brief = buildCreativeBrief({
-        style: selectedStyle,
-        episodes: directorInputs,
-        music: { assetId: m.id, name: m.name, analysis: music },
-        options: { durationS: duration, intensity, editorialDirection, organizationMode, focus, voiceMoments },
-        direction: r.summary.direction,
-        hasTimedLyrics: !!resolvedLyrics?.length,
-      });
-      const editorialReview = reviewGeneratedAssembly({
+      const tournament = generateBestAmv({
         project: session.project,
-        commands: r.commands,
-        brief,
-        direction: r.summary.direction,
-        summary: r.summary,
-        episodes: directorInputs,
         music: { assetId: m.id, name: m.name, analysis: music },
+        episodes: directorInputs,
+        options: opts,
+        candidateCount: isAutonomous ? 5 : 3,
       });
-      r.commands = editorialReview.commands;
+      const r = tournament.winner.generated;
+      const brief = tournament.winner.brief;
+      const editorialReview = tournament.winner.review;
+      r.warnings.push(...automaticSpeechWarnings);
+      r.warnings = [...new Set(r.warnings)];
+      setGenerationProgress(76);
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       // Passe de segurança pós-geração: garante que NENHUMA fala ou letra apareça no idioma errado na timeline.
       const pendingSpeechClips = showText && speechCaptionLanguage !== 'original'
@@ -1429,8 +1454,12 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       setGenerationProgress(90);
       // guarda o que estava antes: nada se perde
       await session.saveVersion(`Antes de gerar (${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })})`);
-      const directionLabel = editorialDirection === 'cinematic' ? 'Cinematográfico' : editorialDirection === 'hype' ? 'Hype' : 'Balanceado';
-      const label = `${directionLabel} · ${styleMode === 'auto' ? 'Aberto · ' : ''}${STYLES.find((s) => s.id === selectedStyle)!.label}`;
+      const effectiveStyleId = tournament.winner.options.style;
+      const effectiveDir = tournament.winner.options.editorialDirection ?? editorialDirection;
+      const directionLabel = effectiveDir === 'cinematic' ? 'Cinematográfico' : effectiveDir === 'hype' ? 'Hype' : 'Balanceado';
+      const label = isAutonomous
+        ? `Modo Livre · ${STYLES.find((s) => s.id === effectiveStyleId)!.label} (${tournament.winner.score.total.toFixed(0)}/100)`
+        : `${directionLabel} · ${styleMode === 'auto' ? 'Aberto · ' : ''}${STYLES.find((s) => s.id === selectedStyle)!.label}`;
       session.history.transaction(`Gerar meu AMV — ${label}`, r.commands);
       useEditor.getState().setPlayhead(0);
       useEditor.getState().setPlaying(false);
@@ -1475,6 +1504,12 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             type: issue.type,
             suggestion: issue.suggestion,
           })),
+        },
+        tournament: {
+          score: tournament.winner.score,
+          candidatesEvaluated: tournament.candidatesEvaluated,
+          winnerLabel: tournament.winner.label,
+          unifiedHighlights: tournament.unifiedHighlights,
         },
       });
     } catch (e) {
@@ -1657,7 +1692,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             <Button variant="ghost" onClick={() => setResult(null)}>
               Mudar opções
             </Button>
-            <Button icon={<Wand2 size={15} />} disabled={busy} onClick={() => generate(seed + 1)}>
+            <Button icon={<Wand2 size={15} />} disabled={busy} onClick={() => generate(seed + 7)}>
               Gerar outra versão
             </Button>
             <Button variant="primary" onClick={() => {
@@ -1677,6 +1712,49 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             <p className="text-sm text-ink">{result.text}</p>
             <p className="mt-1 text-2xs text-muted">Ctrl+Z desfaz; versão anterior salva em Versões.</p>
           </div>
+
+          {result.tournament && (
+            <section className="rounded-md border border-violet/40 bg-violet/10 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={14} className="text-violet-strong" />
+                  <h3 className="text-xs font-semibold text-ink">{result.tournament.winnerLabel}</h3>
+                </div>
+                <span className="tnum rounded-full border border-violet/50 bg-base/80 px-2.5 py-0.5 text-xs font-bold text-violet-strong">
+                  {result.tournament.score.total.toFixed(0)}/100
+                </span>
+              </div>
+              <div className="mt-2 grid grid-cols-5 gap-1.5 text-center text-[10px]">
+                <div className="rounded bg-base/70 px-1.5 py-1">
+                  <span className="block text-muted">Técnica</span>
+                  <strong className="tnum text-ink">{result.tournament.score.technical}/28</strong>
+                </div>
+                <div className="rounded bg-base/70 px-1.5 py-1">
+                  <span className="block text-muted">Sincronia</span>
+                  <strong className="tnum text-ink">{result.tournament.score.sync}/24</strong>
+                </div>
+                <div className="rounded bg-base/70 px-1.5 py-1">
+                  <span className="block text-muted">Diversidade</span>
+                  <strong className="tnum text-ink">{result.tournament.score.diversity}/20</strong>
+                </div>
+                <div className="rounded bg-base/70 px-1.5 py-1">
+                  <span className="block text-muted">Arco 3 atos</span>
+                  <strong className="tnum text-ink">{result.tournament.score.narrative}/16</strong>
+                </div>
+                <div className="rounded bg-base/70 px-1.5 py-1">
+                  <span className="block text-muted">Fusão</span>
+                  <strong className="tnum text-ink">{result.tournament.score.multimodal}/12</strong>
+                </div>
+              </div>
+              {result.tournament.unifiedHighlights.length > 0 && (
+                <ul className="mt-2 space-y-1 text-2xs text-ink-soft">
+                  {result.tournament.unifiedHighlights.map((item) => (
+                    <li key={item}>• {item}</li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
 
           <section className="rounded-md border border-line-soft p-3">
             <div className="flex items-center justify-between gap-2">
@@ -1768,7 +1846,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             Cancelar
           </Button>
           <Button variant="primary" icon={<Wand2 size={15} />} disabled={!music || ready.length === 0 || !analysisReadiness.canGenerate || busy || lyricsSyncing || (localizedRange !== undefined && localizedRange.clipIds.length === 0)} onClick={() => void generate(seed)}>
-            {localizedRange ? 'Gerar alternativa' : 'Gerar e revisar'}
+            {localizedRange ? 'Gerar alternativa' : directorMode === 'autonomous' ? 'Gerar melhor AMV' : 'Gerar e revisar'}
           </Button>
         </>
       }
@@ -1790,10 +1868,11 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           {(generationStep.startsWith('Sincronizando a letra')
             || generationStep.startsWith('Analisando música')
             || generationStep.startsWith('Traduzindo a letra')
-            || generationStep.startsWith('Analisando cenas localmente')
+            || generationStep.startsWith('Analisando cenas')
             || generationStep.startsWith('Análise semântica profunda')
             || generationStep.startsWith('Preparando análise semântica')
             || generationStep.startsWith('Entendendo as falas do anime')
+            || generationStep.startsWith('Transcrevendo fala')
             || generationStep.startsWith('Extraindo áudio')
             || generationStep.startsWith('Reconhecendo falas')
             || generationStep.startsWith('Traduzindo as falas')
@@ -1850,10 +1929,236 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
           )}
         </div>
       )}
+      {!localizedRange && episodes.length > 0 && (musics.length > 0 || recs.length > 0) && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-violet/30 bg-violet/5 p-2">
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              aria-pressed={directorMode === 'autonomous'}
+              onClick={() => setDirectorMode('autonomous')}
+              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${directorMode === 'autonomous' ? 'bg-violet text-white shadow-sm' : 'text-ink-soft hover:bg-raised'}`}
+            >
+              <Sparkles size={13} />
+              Modo Livre · Diretor Mestre
+            </button>
+            <button
+              type="button"
+              aria-pressed={directorMode === 'manual'}
+              onClick={() => setDirectorMode('manual')}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${directorMode === 'manual' ? 'bg-raised font-semibold text-ink border border-line' : 'text-muted hover:text-ink'}`}
+            >
+              Personalizar Manualmente
+            </button>
+          </div>
+          <span className="text-2xs text-ink-soft">
+            {directorMode === 'autonomous'
+              ? 'Unifica batida, tipografia mesclada ao vídeo, falas, recortes e golpes, testa 5 variações e entrega a melhor.'
+              : 'Ajuste manual completo de estilo, tipografia fixa, cadência e ênfases.'}
+          </span>
+        </div>
+      )}
       {episodes.length === 0 || (musics.length === 0 && !recs.length) ? (
         <p className="text-sm text-ink-soft">Importe pelo menos <b>uma música</b> e <b>um episódio</b>.</p>
+      ) : !localizedRange && directorMode === 'autonomous' ? (
+        <div className="grid max-h-[calc(100vh-255px)] grid-cols-1 gap-5 overflow-y-auto pr-1 md:grid-cols-2">
+          {/* Modo Livre — Coluna 1: Música, Duração e Letra */}
+          <div className="space-y-4">
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-ink-soft">1. Música</p>
+              <select className="h-9 w-full rounded-control border border-line bg-base px-2 text-sm" value={musicId} onChange={(e) => setMusicId(e.target.value)} disabled={!musics.length}>
+                {!musics.length && <option value="">Escolha uma abaixo</option>}
+                {musics.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+              {music ? (
+                <p className="mt-1 flex items-center gap-1 text-2xs text-muted">
+                  <Music2 size={11} /> {music.bpm} BPM · {music.drops.length ? `drop em ${Math.floor(music.drops[0]! / 60)}:${String(Math.floor(music.drops[0]! % 60)).padStart(2, '0')}` : 'sem drop claro'}
+                </p>
+              ) : (
+                <p className="mt-1 text-2xs text-muted">Analisando a música…</p>
+              )}
+              {music && musicMapRange && <MusicalMap analysis={music} range={musicMapRange} />}
+            </div>
+
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-ink-soft">Duração do AMV</p>
+                <div className="flex flex-wrap gap-1">
+                  {DURATIONS.map((d) => (
+                    <button key={d} type="button" onClick={() => setDuration(d)} className={`tnum rounded-control border px-2.5 py-1 text-xs ${duration === d ? 'border-violet bg-violet/15 font-semibold text-ink' : 'border-line text-muted hover:text-ink'}`}>
+                      {d} s
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {ranges.length > 0 && (
+                <label className="text-xs text-ink-soft">
+                  Trecho da música
+                  <select
+                    className="mt-1 block h-8 rounded-control border border-line bg-base px-2 text-xs text-ink"
+                    value={chosenStart === null ? 'auto' : String(chosenStart)}
+                    onChange={(e) => setMusicStart(e.target.value === 'auto' ? null : Number(e.target.value))}
+                  >
+                    <option value="auto">Automático (melhor drop + clímax)</option>
+                    {ranges.map((r) => (
+                      <option key={r.startS} value={String(r.startS)}>
+                        {mmss(r.startS)}–{mmss(r.endS)} ({Math.round(r.score * 100)}%)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+
+            <div className="space-y-2 rounded-control border border-line-soft p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-ink-soft">Letra da música (opcional)</p>
+                <span className="rounded bg-violet/15 px-2 py-0.5 text-[10px] font-medium text-violet-strong">
+                  {lyrics ? `${lyrics.cues.length} linhas prontas` : 'Tipografia dinâmica por seção'}
+                </span>
+              </div>
+              <textarea
+                disabled={lyricsSyncing}
+                className="min-h-16 w-full resize-y rounded-control border border-line bg-base p-2 text-xs text-ink placeholder:text-faint"
+                value={lyricDraft}
+                onChange={(event) => {
+                  setLyricDraft(event.target.value);
+                  setLyrics(null);
+                  setLyricSceneMatches({});
+                }}
+                placeholder="Deixe vazio para extrair automaticamente da música, ou cole a letra / .LRC aqui..."
+                rows={3}
+              />
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Button size="sm" variant="secondary" disabled={lyricsSyncing || !selectedMusic} onClick={() => void extractLyricsFromMusic()}>
+                  {lyricsSyncing ? `${Math.round((lyricsSyncProgress?.progress ?? 0) * 100)}%` : 'Extrair da música'}
+                </Button>
+                <Button size="sm" disabled={!lyricDraft.trim() || lyricsSyncing || !selectedMusic} onClick={() => void syncWrittenLyrics()}>
+                  Sincronizar
+                </Button>
+                <Button size="sm" variant="ghost" disabled={lyricsSyncing} onClick={pickLyrics}>.LRC / .SRT</Button>
+                {lyricsSyncing && <Button size="sm" variant="ghost" onClick={() => transcriptionAbort.current?.abort()}>Cancelar</Button>}
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 pt-0.5">
+                <label className="flex items-center gap-1.5 text-2xs text-ink-soft">
+                  <input type="checkbox" className="accent-violet" checked={autoExtractMusicLyrics} disabled={lyricsSyncing} onChange={(e) => setAutoExtractMusicLyrics(e.target.checked)} />
+                  Extrair da música automaticamente
+                </label>
+                <label className="flex items-center gap-1.5 text-2xs text-ink-soft">
+                  <input type="checkbox" className="accent-violet" checked={translateLyricsToPt} disabled={lyricsSyncing} onChange={(e) => setTranslateLyricsToPt(e.target.checked)} />
+                  Traduzir para PT-BR
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Modo Livre — Coluna 2: Episódios & Diretor Autônomo Unificado */}
+          <div className="space-y-4">
+            <div>
+              <div className="mb-1.5 flex items-center justify-between">
+                <p className="text-xs font-medium text-ink-soft">2. Episódios</p>
+                <span className="flex gap-2">
+                  <button type="button" className="text-2xs text-muted underline hover:text-ink" onClick={() => setEpIds(episodes.map((episode) => episode.id))}>Todos</button>
+                  <button type="button" className="text-2xs text-muted underline hover:text-ink" onClick={() => setEpIds([])}>Nenhum</button>
+                </span>
+              </div>
+              <ul className="max-h-32 space-y-1 overflow-y-auto rounded-control border border-line-soft p-2">
+                {episodes.map((e) => {
+                  const a = session.assetRuntime(e.id);
+                  const fightsInEpisode = a.episode?.sequences.filter((sequence) => sequence.kind === 'luta').length ?? 0;
+                  return (
+                    <li key={e.id}>
+                      <label className="flex items-center gap-2 text-xs">
+                        <input type="checkbox" className="accent-violet" checked={epIds.includes(e.id)} onChange={() => toggleEp(e.id)} />
+                        <span className="min-w-0 flex-1 truncate">{e.name}</span>
+                        <span className="shrink-0 text-2xs text-faint">{a.episode ? `${a.episode.shots.length} cenas · ${fightsInEpisode} lutas` : a.analysis === 'error' ? 'erro' : 'analisando'}</span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+
+            <div className="space-y-2.5 rounded-control border border-violet/35 bg-violet/10 p-3 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 font-semibold text-ink">
+                  <Sparkles size={14} className="text-violet-strong" />
+                  O que o Diretor Mestre vai unificar
+                </span>
+                <span className="rounded bg-base/80 px-2 py-0.5 text-[10px] font-semibold text-violet-strong">
+                  Torneio de 5 candidatos
+                </span>
+              </div>
+              <ul className="space-y-1 text-2xs text-ink-soft">
+                <li>• <strong>Rigor visual rápido:</strong> filtra créditos, fumaça vazia e clones visuais por assinatura espacial em paralelo.</li>
+                <li>• <strong>Tipografia viva em 3 atos:</strong> versos editoriais na intro → katana/neon na subida → <em>blend</em> vazado + recorte V2 de personagem no drop.</li>
+                <li>• <strong>Áudio &amp; Fala integrados:</strong> {fights.length > 0 ? `${fights.length} luta(s) detectada(s) · ` : ''}isolamento vocal nas falas sem atropelar o refrão + sons reais dos golpes cravados na batida.</li>
+              </ul>
+              <div className="grid grid-cols-1 gap-1.5 border-t border-violet/20 pt-2.5 sm:grid-cols-2">
+                <label className="flex items-center gap-2 text-xs text-ink">
+                  <input type="checkbox" className="accent-violet" checked={showText} onChange={(e) => setShowText(e.target.checked)} />
+                  Letras &amp; legendas mescladas
+                </label>
+                <label className="flex items-center gap-2 text-xs text-ink">
+                  <input type="checkbox" className="accent-violet" checked={autonomousSpeech} onChange={(e) => setAutonomousSpeech(e.target.checked)} />
+                  Falas dramáticas dos personagens
+                </label>
+                <label className="flex items-center gap-2 text-xs text-ink">
+                  <input
+                    type="checkbox"
+                    className="accent-violet"
+                    checked={useSfx && sfxMode !== 'off'}
+                    onChange={(e) => {
+                      setUseSfx(e.target.checked);
+                      if (e.target.checked && sfxMode === 'off') setSfxMode('hits-only');
+                    }}
+                  />
+                  Sons reais dos golpes &amp; impactos
+                </label>
+                {hasTwoAudio && autonomousSpeech && (
+                  <label className="flex items-center gap-1.5 text-xs text-ink-soft">
+                    <span>Voz:</span>
+                    <select className="h-7 flex-1 rounded-control border border-line bg-base px-1.5 text-xs text-ink" value={voiceLang} onChange={(e) => setVoiceLang(e.target.value as 'original' | 'pt')}>
+                      <option value="original">Original (JP)</option>
+                      <option value="pt">Dublagem (PT)</option>
+                    </select>
+                  </label>
+                )}
+              </div>
+            </div>
+
+            {charList.length > 0 && (
+              <div className="rounded-control border border-line-soft p-2.5">
+                <p className="mb-1.5 text-xs font-medium text-ink-soft">Filtrar personagens identificados (opcional)</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {charList.map((c) => {
+                    const profile = project.characterLibrary.find((item) =>
+                      [item.name, ...item.aliases].some((alias) => normLabel(alias) === normLabel(c.name)),
+                    );
+                    const canonical = profile?.name ?? c.displayName;
+                    const on = characters.some((x) => normLabel(x) === normLabel(canonical));
+                    return (
+                      <button
+                        key={c.name}
+                        type="button"
+                        aria-pressed={on}
+                        className={`rounded-full border px-2.5 py-0.5 text-2xs ${on ? 'border-violet bg-violet/20 font-medium text-ink' : 'border-line text-ink-soft hover:border-violet'}`}
+                        onClick={() => setCharacters((xs) => (on ? xs.filter((x) => normLabel(x) !== normLabel(canonical)) : [...xs, canonical]))}
+                      >
+                        {canonical} <span className="text-faint">{c.shots}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       ) : (
-        <div className="generate-options grid max-h-[calc(100vh-210px)] gap-5 overflow-y-auto pr-1">
+        <div className="generate-options grid max-h-[calc(100vh-255px)] gap-5 overflow-y-auto pr-1">
           {/* Coluna 1 — Música primeiro: ritmo, modo musical e letra */}
           <div className="space-y-4">
             <div>
@@ -1999,7 +2304,9 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
                       onChange={(e) => setLyricStyle(e.target.value as LyricTypographyStyle)}
                       className="h-7 w-full min-w-0 rounded-control border border-line bg-base px-2 text-xs text-ink"
                     >
+                      <option value="anime-blend">Anime · mesclado c/ vídeo (vazado/difference)</option>
                       <option value="anime-impact">Anime · impacto (pop + glow)</option>
+                      <option value="anime-katana">Anime · katana brush</option>
                       <option value="anime-neon">Anime · neon (ciano elétrico)</option>
                       <option value="anime-gold-epic">Anime · ouro épico (Cinzel dourado)</option>
                       <option value="anime-manga">Anime · mangá (contrastado)</option>

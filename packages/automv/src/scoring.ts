@@ -35,6 +35,8 @@ export interface SceneScoringInput {
   slotDurationS?: number;
   /** Intensidades (0..1) dos últimos cortes, para respiro narrativo e anti-monotonia. */
   recentIntensities?: number[];
+  /** Descritores visuais locais dos últimos cortes (excluindo o imediatamente anterior), para bloquear clones visuais. */
+  recentLocals?: LocalVisualFeatures[];
 }
 
 export interface SceneScoreBreakdown {
@@ -322,13 +324,24 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
       reasons.push('personagem reaparece após um corte intermediário');
     }
   }
-  // anti-repetição reforçada: penalizar cenas usadas recentemente
+  // anti-repetição reforçada: penalizar cenas usadas recentemente e clones visuais por fingerprint/similaridade
   if (input.recentSceneIds?.length) {
     const recentIndex = input.recentSceneIds.indexOf(current.assetId + '@' + current.sourceStartS);
     if (recentIndex >= 0) {
       const recency = 1 - recentIndex / input.recentSceneIds.length;
-      diversity -= 0.35 * recency;
+      diversity -= 0.42 * recency;
       reasons.push('cena usada recentemente na mesma geração');
+    }
+  }
+  if (input.local && input.recentLocals?.length) {
+    let maxCloneSim = 0;
+    for (const priorLocal of input.recentLocals) {
+      const sim = priorLocal.fingerprint === input.local.fingerprint ? 1 : visualSimilarity(priorLocal, input.local);
+      if (sim > maxCloneSim) maxCloneSim = sim;
+    }
+    if (maxCloneSim >= 0.89) {
+      diversity -= 0.42 * Math.min(1, (maxCloneSim - 0.86) / 0.14);
+      reasons.push('composição visual quase idêntica já usada recentemente');
     }
   }
   if (previous) {
@@ -439,7 +452,7 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
     if (diversity < 0) reasons.push('penalidade leve por permanecer no mesmo episódio');
   }
 
-  // Qualidade técnica básica: penaliza visibilidade ruim e planos quase imóveis em trechos agitados.
+  // Qualidade técnica rigorosa: penaliza visibilidade ruim, quadros mortos/fumaça, créditos de OP/ED e planos imóveis em picos.
   if (Number.isFinite(shot.brightness) && shot.brightness < 0.2) {
     visual -= 0.2 * Math.max(0, (0.2 - shot.brightness) / 0.2);
     reasons.push('cena escura penalizada por baixa visibilidade');
@@ -447,9 +460,28 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
     visual -= 0.14;
     reasons.push('cena superexposta penalizada');
   }
+  if (input.local?.deadFrameScore !== undefined && input.local.deadFrameScore >= 0.52) {
+    visual -= 0.38 * input.local.deadFrameScore;
+    reasons.push('quadro sem detalhe visual útil (fumaça/lavado/transição vazia) penalizado');
+  }
+  if (input.local?.textClutterScore !== undefined && input.local.textClutterScore >= 0.52) {
+    visual -= 0.3 * input.local.textClutterScore;
+    reasons.push('quadro com créditos/texto sobreposto penalizado');
+  }
   if (Number.isFinite(shot.motion) && shot.motion < 0.05 && input.musicEnergy >= 0.65 && !shot.tags.includes('fala')) {
-    visual -= 0.12;
+    visual -= 0.14;
     reasons.push('cena quase parada penalizada em trecho musical agitado');
+  }
+  if (
+    (input.isDrop || input.musicEnergy >= 0.68)
+    && input.local
+    && input.local.samples >= 2
+    && input.local.temporalMotion < 0.022
+    && style.id !== 'discurso'
+    && style.id !== 'emocional'
+  ) {
+    visual -= 0.22;
+    reasons.push('plano visualmente estático evitado em pico rítmico');
   }
 
   // Encaixe natural de duração cena × slot: evita esticar planos curtos demais.

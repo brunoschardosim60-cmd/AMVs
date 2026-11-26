@@ -1,6 +1,7 @@
+import { findBestReplacementShots } from '@amv/automv';
 import { clipEndUs, colorGradingPreset, COLOR_GRADING_PRESETS, defaultParams, isSfxAsset, EFFECTS, evaluateKeyframes, fillScale, formatTimecode, newId, param, removeKeyframeAt, sourceDurationUs, SPEED_PRESETS, speedAt, speedFactorAt, speedKeyframesForPreset, TRANSITIONS, trimClip, upsertKeyframe, type Clip, type Command, type EffectId, type Keyframe, type Project, type TextWordTiming } from '@amv/project';
-import { Eye, EyeOff, Headphones, Languages, Pause, Pencil, Play, Plus, RotateCcw, SkipForward, Trash2 } from 'lucide-react';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Eye, EyeOff, Headphones, Languages, Pause, Pencil, Play, Plus, RotateCcw, SkipForward, Sparkles, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { applyTranslation, editSubtitleTextManually, langLabel, LOOKS, originalText, restyleSubtitles, selectSubtitleTextVariant } from '@amv/subtitles';
 import type { ProjectSession } from '../../core/session';
 import { createCharacterCutoutOnV2 } from '../../core/cutout';
@@ -12,6 +13,7 @@ import { AssetDetail } from '../project/AssetDetail';
 import { useEditor } from './editorStore';
 import { ClipRangePreview } from './MomentsPanel';
 import { toggleAuditionClip } from './Preview';
+import { buildSessionReadingInputs } from './readingInputs';
 import { TEXT_ANIMATIONS_IN, TEXT_ANIMATIONS_OUT } from './textLayer';
 import { wordPreviewEnded, type WordPreviewRange } from './wordPreview';
 
@@ -275,7 +277,24 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
   const track = project.tracks.find((t) => t.id === clip.trackId)!;
   const asset = clip.assetId ? project.assets.find((a) => a.id === clip.assetId) : null;
   const fps = project.settings.fps;
-  const playheadUs = useEditor((state) => state.playheadUs);
+  const [playheadUs, setPlayheadUs] = useState(() => useEditor.getState().playheadUs);
+  useEffect(() => {
+    setPlayheadUs(useEditor.getState().playheadUs);
+    return useEditor.subscribe((state, prev) => {
+      if (state.playheadUs === prev.playheadUs && state.playing === prev.playing) return;
+      if (!state.playing) setPlayheadUs(state.playheadUs);
+    });
+  }, [clip.id]);
+  const readingInputs = useMemo(
+    () => (track.kind === 'video' ? buildSessionReadingInputs(session) : { episodes: [], musics: [] }),
+    [track.kind, session, session.changes, project.assets],
+  );
+  const suggestedShots = useMemo(
+    () => (track.kind === 'video' && !track.locked
+      ? findBestReplacementShots({ project, clipId: clip.id, ...readingInputs, limit: 3 })
+      : []),
+    [track.kind, track.locked, project, clip.id, readingInputs],
+  );
   const run = (label: string, cmds: Command[]) => {
     if (!cmds.length) return;
     try {
@@ -443,7 +462,7 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
               <button
                 type="button"
                 onClick={() => toggleAuditionClip(session, clip)}
-                title="Isolar e escutar apenas este clipe (atalho: S)"
+                title="Isolar e escutar apenas este clipe (atalho: O)"
                 className={`inline-flex h-7 items-center gap-1 rounded-control border px-2 text-2xs font-medium ${useEditor.getState().soloClipId === clip.id ? 'border-azure bg-azure text-action-ink' : 'border-azure/45 bg-azure/10 text-ink hover:bg-azure/20'}`}
               >
                 <Headphones size={11} />
@@ -505,6 +524,36 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
               >
                 Recortar personagem (V2 + letra atrás)
               </button>
+              {suggestedShots.length > 0 && (
+                <div className="mt-1 space-y-1 rounded-control border border-line-soft bg-base/60 p-2">
+                  <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-violet-strong">
+                    <Sparkles size={10} /> Sugestões para este corte
+                  </div>
+                  <div className="space-y-1">
+                    {suggestedShots.map((s) => (
+                      <div key={`${s.assetId}-${s.startS}`} className="flex items-center justify-between gap-2 rounded bg-panel/80 px-2 py-1 text-2xs">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-medium text-ink">
+                            {s.episodeName} · {s.recommendedInS.toFixed(1)}s
+                          </div>
+                          <div className="truncate text-[10px] text-muted">{s.reason}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextPatch = clipSceneShotPatch(project, clip, { startS: s.recommendedInS, endS: s.endS });
+                            patch('Trocar por cena sugerida', s.assetId !== clip.assetId ? { ...nextPatch, assetId: s.assetId } : nextPatch);
+                            toast({ tone: 'ok', title: 'Corte trocado para cena sugerida' });
+                          }}
+                          className="shrink-0 rounded border border-violet/45 bg-violet/15 px-1.5 py-0.5 text-[10px] font-medium text-ink hover:bg-violet/25"
+                        >
+                          Aplicar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

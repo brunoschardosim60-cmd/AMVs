@@ -138,21 +138,30 @@ export function autoRepairAssembly(
     repairsApplied.push(`${microCutFixCount} micro-corte(s) abaixo de 180 ms mesclado(s) para manter a ação legível.`);
   }
 
-  // 3. Troca automática de cenas repetidas por planos inéditos do mesmo episódio
+  // 3. Troca automática de cenas repetidas (ou quadros sem definição visual) por planos inéditos e nítidos
   const usedShotRanges = new Map<string, Array<[number, number]>>();
+  const usedFingerprints = new Set<string>();
   for (const clip of project.clips) {
     if (!clip.assetId || removedIds.has(clip.id)) continue;
     const list = usedShotRanges.get(clip.assetId) ?? [];
     list.push([clip.sourceInUs / SECOND, clip.sourceOutUs / SECOND]);
     usedShotRanges.set(clip.assetId, list);
+    const ep = episodeById.get(clip.assetId);
+    const shot = findSourceShot(ep, clip);
+    const fp = shot ? ep?.vision?.shots[`t${Math.round(shot.startS * 100)}`]?.local?.fingerprint : undefined;
+    if (fp) usedFingerprints.add(fp);
   }
   const overlapsUsed = (assetId: string, startS: number, endS: number) =>
     (usedShotRanges.get(assetId) ?? []).some(([a, b]) => startS < b - 0.1 && endS > a + 0.1);
   const replacedRepeatIds = new Set<string>();
   let repeatFixCount = 0;
+  let deadFrameFixCount = 0;
   for (const issue of report.issues) {
-    if (issue.dimension !== 'repetition' || issue.clipIds.length < 2) continue;
-    for (const dupId of issue.clipIds.slice(1)) {
+    const isRepeat = issue.dimension === 'repetition' && issue.clipIds.length >= 2;
+    const isDeadFrame = issue.dimension === 'visual' && issue.type === 'quadro sem definição visual' && issue.clipIds.length >= 1;
+    if (!isRepeat && !isDeadFrame) continue;
+    const targetClipIds = isRepeat ? issue.clipIds.slice(1) : issue.clipIds;
+    for (const dupId of targetClipIds) {
       if (!generatedIds.has(dupId) || removedIds.has(dupId) || replacedRepeatIds.has(dupId)) continue;
       const clip = clipById.get(dupId);
       if (!clip?.assetId) continue;
@@ -160,11 +169,14 @@ export function autoRepairAssembly(
       if (!ep) continue;
       const neededS = (clip.durationUs * (clip.speed || 1)) / SECOND;
       const altShot = ep.analysis.shots
-        .filter((s) =>
-          s.endS - s.startS >= neededS + 0.02
-          && !s.tags.includes('escura')
-          && !overlapsUsed(clip.assetId!, s.startS, s.startS + neededS),
-        )
+        .filter((s) => {
+          if (s.endS - s.startS < neededS + 0.02 || s.tags.includes('escura') || overlapsUsed(clip.assetId!, s.startS, s.startS + neededS)) return false;
+          const local = ep.vision?.shots[`t${Math.round(s.startS * 100)}`]?.local;
+          if ((local?.deadFrameScore ?? 0) >= 0.65) return false;
+          if ((local?.textClutterScore ?? 0) >= 0.65) return false;
+          if (local?.fingerprint && usedFingerprints.has(local.fingerprint)) return false;
+          return true;
+        })
         .sort((a, b) => b.intensity - a.intensity)[0];
       if (!altShot) continue;
       const newSourceInUs = Math.round(altShot.startS * SECOND);
@@ -177,12 +189,18 @@ export function autoRepairAssembly(
       const list = usedShotRanges.get(clip.assetId) ?? [];
       list.push([altShot.startS, altShot.startS + neededS]);
       usedShotRanges.set(clip.assetId, list);
+      const newFp = ep.vision?.shots[`t${Math.round(altShot.startS * 100)}`]?.local?.fingerprint;
+      if (newFp) usedFingerprints.add(newFp);
       replacedRepeatIds.add(clip.id);
-      repeatFixCount++;
+      if (isDeadFrame) deadFrameFixCount++;
+      else repeatFixCount++;
     }
   }
   if (repeatFixCount > 0) {
     repairsApplied.push(`${repeatFixCount} cena(s) repetida(s) substituída(s) automaticamente por planos inéditos.`);
+  }
+  if (deadFrameFixCount > 0) {
+    repairsApplied.push(`${deadFrameFixCount} quadro(s) sem nitidez substituído(s) por cenas limpas.`);
   }
 
   // 4. Correções seguras de duração em legendas sobrepostas

@@ -744,33 +744,61 @@ export class ProjectSession {
       shots: { ...(prior?.shots ?? {}) },
     };
     const analysis = this.assetRuntime(assetId).episode!;
+    const shotIndexByKey = new Map(analysis.shots.map((item, idx) => [shotKey(item.startS), idx]));
+    const targetVisionPath = await this.visionFile(asset);
     let analyzed = 0;
     let failed = 0;
     let frameFailures = 0;
+    let completed = 0;
+    let unsaved = 0;
+    let flushChain = Promise.resolve();
+    const persistCheckpoint = () => {
+      const snapshot = new TextEncoder().encode(JSON.stringify(vision));
+      this.runtime.set(assetId, { ...this.assetRuntime(assetId), vision: { ...vision, shots: { ...vision.shots } } });
+      this.emit();
+      flushChain = flushChain.then(() => this.platform.fs.writeFile(targetVisionPath, snapshot));
+      return flushChain;
+    };
 
-    for (let index = 0; index < targets.length; index++) {
+    const concurrency = Math.min(6, targets.length);
+    let nextIndex = 0;
+    const processTarget = async (target: (typeof targets)[number]) => {
       if (o.signal?.aborted) throw Object.assign(new Error('análise cancelada'), { name: 'AbortError' });
-      const target = targets[index]!;
       const key = shotKey(target.startS);
-      const shot = analysis.shots.find((item) => shotKey(item.startS) === key);
-      if (!shot) continue;
-      const frames = [];
-      const frameTimes: number[] = [];
-      for (const timeS of target.samples) {
+      const position = shotIndexByKey.get(key);
+      const shot = position !== undefined ? analysis.shots[position] : undefined;
+      if (!shot || position === undefined) {
+        completed++;
+        o.onProgress?.(completed, targets.length);
+        return;
+      }
+      const sampleResults = await Promise.all(target.samples.map(async (timeS) => {
         try {
-          frames.push(await grabFrameRgb(env.runner, source, timeS, 160, o.signal));
-          frameTimes.push(timeS);
+          const rgb = await grabFrameRgb(env.runner, source, timeS, 160, o.signal);
+          return { ok: true as const, rgb, timeS };
         } catch (error) {
-          if (o.signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+          if (o.signal?.aborted || (error instanceof Error && (error.name === 'AbortError' || error.name === 'CancelledError'))) {
+            throw Object.assign(new Error('análise cancelada'), { name: 'AbortError' });
+          }
+          return { ok: false as const, timeS };
+        }
+      }));
+      const frames: Awaited<ReturnType<typeof grabFrameRgb>>[] = [];
+      const frameTimes: number[] = [];
+      for (const res of sampleResults) {
+        if (res.ok) {
+          frames.push(res.rgb);
+          frameTimes.push(res.timeS);
+        } else {
           frameFailures++;
         }
       }
       if (!frames.length) {
         failed++;
-        o.onProgress?.(index + 1, targets.length);
-        continue;
+        completed++;
+        o.onProgress?.(completed, targets.length);
+        return;
       }
-      const position = analysis.shots.indexOf(shot);
       const hasDialogue = analysis.speech.some((speech) => speech.endS > shot.startS && speech.startS < shot.endS)
         || analysis.subtitles.some((cue) => cue.endS > shot.startS && cue.startS < shot.endS);
       const local = analyzeLocalVisualFrames(frames, shot, {
@@ -780,18 +808,35 @@ export class ProjectSession {
       }, frameTimes);
       vision.shots[key] = { ...(vision.shots[key] ?? { characters: [], fight: false, note: '' }), ...local };
       analyzed++;
+      unsaved++;
+      completed++;
+      o.onProgress?.(completed, targets.length);
+      if (unsaved >= 12) {
+        unsaved = 0;
+        await persistCheckpoint();
+      }
+    };
 
-      await this.platform.fs.writeFile(await this.visionFile(asset), new TextEncoder().encode(JSON.stringify(vision)));
-      this.runtime.set(assetId, { ...this.assetRuntime(assetId), vision: { ...vision, shots: { ...vision.shots } } });
-      this.emit();
-      o.onProgress?.(index + 1, targets.length);
+    try {
+      await Promise.all(Array.from({ length: concurrency }, async () => {
+        while (nextIndex < targets.length) {
+          const current = targets[nextIndex++]!;
+          await processTarget(current);
+        }
+      }));
+    } finally {
+      if (unsaved > 0) await persistCheckpoint();
+      await flushChain;
     }
+
     if (analyzed) {
       const ranked = Object.entries(vision.shots)
         .filter(([, scene]) => !!scene.local)
         .sort(([a], [b]) => {
-          const aShot = analysis.shots.find((item) => shotKey(item.startS) === a);
-          const bShot = analysis.shots.find((item) => shotKey(item.startS) === b);
+          const aIdx = shotIndexByKey.get(a);
+          const bIdx = shotIndexByKey.get(b);
+          const aShot = aIdx !== undefined ? analysis.shots[aIdx] : undefined;
+          const bShot = bIdx !== undefined ? analysis.shots[bIdx] : undefined;
           return (bShot?.intensity ?? 0) - (aShot?.intensity ?? 0) || a.localeCompare(b);
         })
         .slice(0, 300);
@@ -799,7 +844,7 @@ export class ProjectSession {
       for (const [key, scene] of ranked) {
         scene.local!.similarScenes = matches[key]!.slice(0, 5);
       }
-      await this.platform.fs.writeFile(await this.visionFile(asset), new TextEncoder().encode(JSON.stringify(vision)));
+      await this.platform.fs.writeFile(targetVisionPath, new TextEncoder().encode(JSON.stringify(vision)));
       this.runtime.set(assetId, { ...this.assetRuntime(assetId), vision: { ...vision, shots: { ...vision.shots } } });
       this.emit();
     }

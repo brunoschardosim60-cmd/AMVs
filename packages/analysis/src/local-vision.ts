@@ -53,6 +53,10 @@ export interface LocalVisualFeatures {
   saturation: number;
   entropy: number;
   edgeDensity: number;
+  /** Grau (0..1) de quadro morto/lavado/fumaça/preto sem informação visual útil. */
+  deadFrameScore?: number;
+  /** Grau (0..1) de poluição por créditos/texto denso (ex.: abertura/encerramento com créditos). */
+  textClutterScore?: number;
   centerOfVisualMass: [number, number];
   /** Foco estimado do personagem/rosto de anime (suprimindo hardsubs na base e clarões nas bordas). */
   subjectFocus?: [number, number];
@@ -105,6 +109,8 @@ function describeFrame(frame: RgbFrame): {
   saturation: number;
   entropy: number;
   edgeDensity: number;
+  deadFrameScore: number;
+  textClutterScore: number;
   center: [number, number];
   subjectFocus: [number, number];
   subjectFocusConfidence: number;
@@ -191,12 +197,15 @@ function describeFrame(frame: RgbFrame): {
   let subjY = 0;
   let subjWeight = 0;
   let subjPeak = 0;
+  const glyphBandHits = [0, 0, 0, 0];
+  let glyphBandSamples = 0;
   for (let y = 0; y < frame.height; y += step * 2) {
     const ny = y / Math.max(1, frame.height - 1);
     for (let x = 0; x < frame.width; x += step * 2) {
       const nx = x / Math.max(1, frame.width - 1);
-      const edgeMag = Math.abs(luminance(frame, Math.min(frame.width - 1, x + 1), y) - luminance(frame, Math.max(0, x - 1), y))
-        + Math.abs(luminance(frame, x, Math.min(frame.height - 1, y + 1)) - luminance(frame, x, Math.max(0, y - 1)));
+      const horizStep = Math.abs(luminance(frame, Math.min(frame.width - 1, x + 1), y) - luminance(frame, Math.max(0, x - 1), y));
+      const vertStep = Math.abs(luminance(frame, x, Math.min(frame.height - 1, y + 1)) - luminance(frame, x, Math.max(0, y - 1)));
+      const edgeMag = horizStep + vertStep;
       const weight = edgeMag + 0.001;
       massX += nx * weight;
       massY += ny * weight;
@@ -211,6 +220,18 @@ function describeFrame(frame: RgbFrame): {
         const b = frame.data[offset + 2]! / 255;
         const gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
         const sat = Math.max(r, g, b) - Math.min(r, g, b);
+        // Detecta traços brancos/dessaturados repetidos em múltiplas faixas (créditos de OP/ED ou letreiros densos)
+        if (ny >= 0.12 && ny <= 0.76 && nx >= 0.12 && nx <= 0.88) {
+          glyphBandSamples++;
+          const strokeContrast = Math.max(
+            Math.abs(gray - luminance(frame, Math.max(0, x - 1), y)),
+            Math.abs(gray - luminance(frame, Math.min(frame.width - 1, x + 1), y)),
+          );
+          if (gray >= 0.91 && sat <= 0.14 && strokeContrast >= 0.32) {
+            const band = Math.min(3, Math.floor(((ny - 0.12) / 0.64) * 4));
+            glyphBandHits[band]!++;
+          }
+        }
         // Penaliza clarões brancos estourados (explosões/flashes) que puxariam o corte para a borda
         const notBlownFlash = gray > 0.93 && sat < 0.1 ? 0.15 : 1;
         // Bônus para tons de pele de anime e contornos de olhos/cabelo no terço superior-central
@@ -228,15 +249,33 @@ function describeFrame(frame: RgbFrame): {
     ? [subjX / subjWeight, subjY / subjWeight]
     : [massWeight ? massX / massWeight : 0.5, massWeight ? massY / massWeight : 0.5];
   const focusConfidence = clamp01(subjPeak * 0.85);
+  const meanBrightness = pixels ? brightness / pixels : 0;
+  const meanSaturation = pixels ? saturation / pixels : 0;
+  const normalizedEntropy = clamp01(entropy);
+  const meanEdgeDensity = edgeSum / Math.max(1, edgeSamples);
+  const lowEntropy = clamp01((0.18 - normalizedEntropy) / 0.18);
+  const lowEdges = clamp01((0.022 - meanEdgeDensity) / 0.022);
+  const extremeLuma = meanBrightness < 0.06
+    ? clamp01((0.06 - meanBrightness) / 0.06)
+    : meanBrightness > 0.93 && meanSaturation < 0.08
+      ? clamp01((meanBrightness - 0.93) / 0.07)
+      : 0;
+  const deadFrameScore = clamp01(Math.max(extremeLuma, lowEntropy * 0.65 + lowEdges * 0.35));
+  const totalGlyphHits = glyphBandHits.reduce((sum, count) => sum + count, 0);
+  const activeGlyphBands = glyphBandHits.filter((count) => count >= Math.max(2, glyphBandSamples * 0.012)).length;
+  const glyphRatio = totalGlyphHits / Math.max(1, glyphBandSamples);
+  const textClutterScore = activeGlyphBands >= 2 ? clamp01((glyphRatio - 0.04) / 0.12) : 0;
   return {
     luma,
     edges,
     histogram,
     rgbBins,
-    brightness: pixels ? brightness / pixels : 0,
-    saturation: pixels ? saturation / pixels : 0,
-    entropy: clamp01(entropy),
-    edgeDensity: edgeSum / Math.max(1, edgeSamples),
+    brightness: meanBrightness,
+    saturation: meanSaturation,
+    entropy: normalizedEntropy,
+    edgeDensity: meanEdgeDensity,
+    deadFrameScore,
+    textClutterScore,
     center: [massWeight ? massX / massWeight : 0.5, massWeight ? massY / massWeight : 0.5],
     subjectFocus: focusCenter,
     subjectFocusConfidence: focusConfidence,
@@ -537,6 +576,8 @@ export function analyzeLocalVisualFrames(
       saturation: average(descriptions.map((item) => item.saturation)),
       entropy: average(descriptions.map((item) => item.entropy)),
       edgeDensity: average(descriptions.map((item) => item.edgeDensity)),
+      deadFrameScore: average(descriptions.map((item) => item.deadFrameScore)),
+      textClutterScore: average(descriptions.map((item) => item.textClutterScore)),
       centerOfVisualMass: [
         average(descriptions.map((item) => item.center[0])),
         average(descriptions.map((item) => item.center[1])),
@@ -602,14 +643,16 @@ export function selectLocalVisionTargets(
   max = scope === 'all' ? Infinity : 120,
 ): LocalVisionTarget[] {
   if (max <= 0) return [];
+  const fightRanges = (episode.sequences ?? []).filter((sequence) => sequence.kind === 'luta');
+  const inFightSequence = (shot: Shot) =>
+    fightRanges.some((sequence) => shot.startS >= sequence.startS - 1e-3 && shot.endS <= sequence.endS + 1e-3);
   const eligible = scope === 'all'
     ? episode.shots
-    : (episode.sequences ?? [])
-      .filter((sequence) => sequence.kind === 'luta')
-      .flatMap((sequence) => episode.shots.filter((shot) =>
+    : fightRanges.flatMap((sequence) => episode.shots.filter((shot) =>
         shot.startS >= sequence.startS - 1e-3 && shot.endS <= sequence.endS + 1e-3,
       ));
   const seen = new Set<string>();
+  const isFullEpisode = episode.durationS >= 1080;
   const candidates = eligible
     .filter((shot) => {
       const key = `t${Math.round(shot.startS * 100)}`;
@@ -618,16 +661,22 @@ export function selectLocalVisionTargets(
       return labeled[key]?.local?.version !== LOCAL_VISION_VERSION;
     })
     .sort((a, b) => {
-      const score = (shot: Shot) => shot.intensity * 0.5 + shot.motion * 0.35 + (shot.tags.includes('impacto') ? 0.15 : 0);
+      const score = (shot: Shot) => {
+        const fightBonus = inFightSequence(shot) ? 0.34 : 0;
+        const impactBonus = shot.tags.includes('impacto') ? 0.16 : shot.tags.includes('ação') ? 0.08 : 0;
+        const darkPenalty = shot.tags.includes('escura') ? 0.42 : 0;
+        const opEdPenalty = isFullEpisode && (shot.startS < 92 || shot.endS > episode.durationS - 92) ? 0.3 : 0;
+        return shot.intensity * 0.45 + shot.motion * 0.35 + fightBonus + impactBonus - darkPenalty - opEdPenalty;
+      };
       return score(b) - score(a) || a.startS - b.startS;
     })
     .slice(0, max)
     .sort((a, b) => a.startS - b.startS);
   return candidates.map((shot) => {
     const duration = shot.endS - shot.startS;
-    const fractions = duration >= 2.5
-      ? [0.1, 0.3, 0.5, 0.7, 0.9]
-      : duration >= 1.2 ? [0.15, 0.5, 0.85] : [0.5];
+    const fractions = duration >= 1.2
+      ? [0.16, 0.5, 0.84]
+      : duration >= 0.65 ? [0.25, 0.75] : [0.5];
     return {
       startS: shot.startS,
       endS: shot.endS,

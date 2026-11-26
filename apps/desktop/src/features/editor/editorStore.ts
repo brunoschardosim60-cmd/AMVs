@@ -69,7 +69,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   clipboard: null,
   snapping: true,
   previewScale: 1,
-  previewOriginal: true,
+  previewOriginal: false,
   assetDrag: null,
   assistantOpen: false,
   assistantDraft: null,

@@ -1,13 +1,19 @@
-import type { EpisodeAnalysis, EpisodeVision, MusicAnalysis } from '@amv/analysis';
-import { evaluateAudiovisualQuality, type QualityDimension, type QualityIssue } from '@amv/automv';
+import {
+  buildFullTimelineAutoRepair,
+  buildProjectReadingSummary,
+  harmonizeTextClipsWithScenes,
+  type QualityDimension,
+  type QualityIssue,
+} from '@amv/automv';
 import { formatTimecode } from '@amv/project';
-import { Bot, Check, ChevronRight, ScanSearch } from 'lucide-react';
+import { Activity, Bot, Check, ChevronRight, ScanSearch, Sparkles, Wand2 } from 'lucide-react';
 import { useMemo } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
 import { Button, Dialog } from '../../ui/controls';
 import { getPlayer } from './Preview';
 import { useEditor } from './editorStore';
+import { buildSessionReadingInputs } from './readingInputs';
 
 const DIMENSION_LABELS: Record<QualityDimension, string> = {
   narrative: 'Narrativa',
@@ -35,19 +41,20 @@ const SEVERITY_STYLES = {
 export function QualityDialog({ session, onClose }: { session: ProjectSession; onClose: () => void }) {
   const project = session.project;
   const toast = useApp((state) => state.toast);
-  const report = useMemo(() => {
-    const episodes = new Map<string, EpisodeAnalysis>();
-    const visions = new Map<string, EpisodeVision>();
-    const music = new Map<string, MusicAnalysis>();
-    for (const clip of project.clips) {
-      if (!clip.assetId) continue;
-      const runtime = session.assetRuntime(clip.assetId);
-      if (runtime.episode) episodes.set(clip.assetId, runtime.episode);
-      if (runtime.vision) visions.set(clip.assetId, runtime.vision);
-      if (runtime.music) music.set(clip.assetId, runtime.music);
-    }
-    return evaluateAudiovisualQuality({ project, episodes, visions, music });
-  }, [project, session]);
+  const readingInputs = useMemo(() => buildSessionReadingInputs(session), [session, session.changes, project.assets]);
+  const summary = useMemo(
+    () => buildProjectReadingSummary({ project, ...readingInputs }),
+    [project, readingInputs],
+  );
+  const report = summary.quality;
+  const autoRepairPreview = useMemo(
+    () => buildFullTimelineAutoRepair({ project, ...readingInputs }),
+    [project, readingInputs],
+  );
+  const textHarmonizePreview = useMemo(
+    () => harmonizeTextClipsWithScenes({ project, episodes: readingInputs.episodes }),
+    [project, readingInputs.episodes],
+  );
 
   const navigateTo = (item: QualityIssue) => {
     useEditor.getState().select(item.clipIds);
@@ -77,14 +84,118 @@ export function QualityDialog({ session, onClose }: { session: ProjectSession; o
     }
   };
 
+  const applyFullAutoRepair = () => {
+    if (!autoRepairPreview.commands.length) return;
+    try {
+      session.history.transaction('Auto-reparar leitura audiovisual', autoRepairPreview.commands);
+      toast({
+        tone: 'ok',
+        title: `${autoRepairPreview.repairsApplied.length || autoRepairPreview.commands.length} reparo(s) aplicado(s)`,
+        body: autoRepairPreview.repairsApplied.slice(0, 3).join(' · ') || 'Pode desfazer com Ctrl+Z.',
+      });
+    } catch (error) {
+      toast({ tone: 'warn', title: 'Falha no auto-reparo', body: error instanceof Error ? error.message : String(error) });
+    }
+  };
+
+  const applyTextHarmonize = () => {
+    if (!textHarmonizePreview.commands.length) return;
+    try {
+      session.history.transaction('Harmonizar legendas com o vídeo', textHarmonizePreview.commands);
+      toast({
+        tone: 'ok',
+        title: `${textHarmonizePreview.updatedCount} legenda(s) harmonizada(s)`,
+        body: textHarmonizePreview.extendedForReading
+          ? `${textHarmonizePreview.extendedForReading} tiveram o tempo alongado para leitura confortável.`
+          : 'Cores, desvio do rosto e contraste ajustados.',
+      });
+    } catch (error) {
+      toast({ tone: 'warn', title: 'Não foi possível harmonizar', body: error instanceof Error ? error.message : String(error) });
+    }
+  };
+
   const counts = {
     high: report.issues.filter((item) => item.severity === 'high').length,
     medium: report.issues.filter((item) => item.severity === 'medium').length,
     low: report.issues.filter((item) => item.severity === 'low').length,
   };
 
+  const scoreTone = summary.score.total >= 82 ? 'text-ok' : summary.score.total >= 65 ? 'text-warn' : 'text-danger';
+
   return (
-    <Dialog title="Avaliação audiovisual" onClose={onClose} width="w-[760px]">
+    <Dialog title="Central de leitura & qualidade audiovisual" onClose={onClose} width="w-[800px]">
+      <section aria-label="Leitura geral do AMV" className="mb-4 rounded-control border border-violet/35 bg-base/80 p-3">
+        <div className="flex flex-wrap items-center gap-4">
+          <div>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted">Nota de Direção</span>
+            <div className="flex items-baseline gap-1">
+              <span className={`tnum text-2xl font-extrabold ${scoreTone}`}>{Math.round(summary.score.total)}</span>
+              <span className="text-xs text-muted">/ 100</span>
+            </div>
+          </div>
+          <div className="grid min-w-[260px] flex-1 grid-cols-5 gap-2 text-2xs">
+            {[
+              { label: 'Técnica', val: summary.score.technical, max: 30 },
+              { label: 'Sincronia', val: summary.score.sync, max: 25 },
+              { label: 'Variedade', val: summary.score.diversity, max: 20 },
+              { label: 'Arco 3 atos', val: summary.score.narrative, max: 15 },
+              { label: 'Fusão', val: summary.score.multimodal, max: 10 },
+            ].map((d) => (
+              <div key={d.label} className="space-y-1">
+                <div className="flex justify-between text-muted">
+                  <span>{d.label}</span>
+                  <span className="tnum font-semibold text-ink">{Math.round(d.val)}/{d.max}</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-raised">
+                  <div className="h-full rounded-full bg-violet-strong" style={{ width: `${Math.min(100, Math.round((d.val / d.max) * 100))}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-2 border-t border-line-soft pt-3 text-2xs sm:grid-cols-4">
+          <div className="rounded bg-raised/60 px-2.5 py-1.5">
+            <span className="block text-muted">Cortes na batida</span>
+            <span className="tnum text-xs font-semibold text-ink">{summary.beatLockedRate}% ({summary.beatLockedCuts}/{Math.max(0, summary.totalVideoClips - 1)})</span>
+          </div>
+          <div className="rounded bg-raised/60 px-2.5 py-1.5">
+            <span className="block text-muted">Golpes sincronizados</span>
+            <span className="tnum text-xs font-semibold text-ink">{summary.syncedHitPeaks} impacto(s)</span>
+          </div>
+          <div className="rounded bg-raised/60 px-2.5 py-1.5">
+            <span className="block text-muted">Cenas únicas</span>
+            <span className="tnum text-xs font-semibold text-ink">{summary.uniqueScenes} / {summary.totalVideoClips} clipes</span>
+          </div>
+          <div className="rounded bg-raised/60 px-2.5 py-1.5">
+            <span className="block text-muted">Leitura das legendas</span>
+            <span className="tnum text-xs font-semibold text-ink">
+              {summary.textClipsCount ? `${summary.averageCps} chars/s` : 'Sem legendas'}
+              {(summary.fastTextCount > 0 || summary.lowContrastOrFaceTextCount > 0) && (
+                <span className="ml-1 text-warn">({summary.fastTextCount + summary.lowContrastOrFaceTextCount} alerta)</span>
+              )}
+            </span>
+          </div>
+        </div>
+
+        {(autoRepairPreview.commands.length > 0 || textHarmonizePreview.commands.length > 0) && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line-soft pt-2.5">
+            <Activity size={13} className="text-violet-strong" />
+            <span className="text-2xs font-medium text-ink-soft">Melhorias automáticas disponíveis:</span>
+            {autoRepairPreview.commands.length > 0 && (
+              <Button size="sm" variant="primary" icon={<Sparkles size={13} />} onClick={applyFullAutoRepair}>
+                Auto-reparar tudo ({autoRepairPreview.repairsApplied.length || autoRepairPreview.commands.length})
+              </Button>
+            )}
+            {textHarmonizePreview.commands.length > 0 && (
+              <Button size="sm" variant="secondary" icon={<Wand2 size={13} />} onClick={applyTextHarmonize}>
+                Harmonizar legendas c/ vídeo ({textHarmonizePreview.updatedCount})
+              </Button>
+            )}
+          </div>
+        )}
+      </section>
+
       <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
         <span className="text-muted">Duração analisada: {formatTimecode(report.durationUs, project.settings.fps)}</span>
         <span className="ml-auto flex gap-2">

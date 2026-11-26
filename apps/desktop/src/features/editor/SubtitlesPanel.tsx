@@ -1,13 +1,15 @@
 import { decodeSubtitleBytes, parseSubtitles, pickAudioStreamByLanguage, toSrt } from '@amv/analysis';
+import { harmonizeTextClipsWithScenes } from '@amv/automv';
 import { clipEndUs, type Clip } from '@amv/project';
 import { alignUntimedLyrics, alignUntimedLyricsWithFallback, applyTranslation, autoSyncSubtitlesToBeats, cuesForClip, editSubtitleTextManually, langLabel, LOOKS, lookText, originalText, placeCues, promoteAlignedCuesForTypography, restoreOriginals, SUBTITLE_LANGS, pullClipSubtitles, readability, restyleSubtitles, shiftSubtitles, subtitleClips, textTracks, toLrc, toVtt, trackCues, type SubtitleLook } from '@amv/subtitles';
-import { AlertTriangle, Download, FileText, Film, Languages, Mic, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Download, FileText, Film, Languages, Mic, Music, Trash2, Wand2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ProjectSession } from '../../core/session';
-import { extractTranscriptWords, mergeSpeechSegments, transcribeMediaAsset, translateTextsAuto } from '../../core/transcription';
+import { extractTranscriptWords, mergeSpeechSegments, transcribeAudioSlice, transcribeMediaAsset, translateTextsAuto } from '../../core/transcription';
 import { useApp } from '../../store';
 import { Button } from '../../ui/controls';
 import { useEditor } from './editorStore';
+import { buildSessionReadingInputs } from './readingInputs';
 
 const fmt = (us: number) => {
   const s = us / 1e6;
@@ -48,7 +50,6 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
   const abort = useRef<AbortController | null>(null);
   const speechAbort = useRef<AbortController | null>(null);
   const selection = useEditor((s) => s.selection);
-  const playheadUs = useEditor((s) => s.playheadUs);
   const setPlayhead = useEditor((s) => s.setPlayhead);
   const select = useEditor((s) => s.select);
   const clips = trackId ? subtitleClips(project, trackId) : [];
@@ -115,7 +116,7 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
           setTranslating(null);
         }
       }
-      const offsetUs = isLyrics && musicClip ? 0 : playheadUs;
+      const offsetUs = isLyrics && musicClip ? 0 : useEditor.getState().playheadUs;
       const cmds = placeCues(project, mappedCues, { trackId, offsetUs, look: isLyrics && look === 'legenda' ? 'karaoke' : look, windowUs: isLyrics && musicClip ? [musicClip.timelineStartUs, clipEndUs(musicClip)] : undefined, label: path.split(/[\\/]/).pop() });
       if (!cmds.length) {
         toast({ tone: 'warn', title: 'Nenhuma linha caiu dentro do vídeo', body: isLyrics ? 'O trecho da música usado na timeline não tem letra nesse arquivo.' : undefined });
@@ -221,6 +222,47 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
     setCancellingSpeech(false);
     setSpeechProgress({ stage: 'extracting', progress: 0, duration });
     try {
+      // Caminho ultrarrápido: se houver 1–6 clipes selecionados num episódio longo (≥ 3 min), transcreve apenas os trechos dos clipes
+      if (selectedClips.length > 0 && selectedClips.length <= 6 && duration >= 180) {
+        const sliceCues: { startS: number; endS: number; text: string }[] = [];
+        for (const [idx, vClip] of selectedClips.entries()) {
+          if (controller.signal.aborted) break;
+          setSpeechProgress({ stage: 'transcribing', progress: idx, duration: selectedClips.length });
+          const startS = Math.max(0, vClip.sourceInUs / 1e6);
+          const endS = Math.max(startS + 0.5, vClip.sourceOutUs / 1e6);
+          const hit = await transcribeAudioSlice(platform, asset, audioIndex, startS, endS, {
+            model: speechModel,
+            ...(speechLanguage ? { language: speechLanguage } : {}),
+            signal: controller.signal,
+          });
+          if (hit?.text) {
+            let line = hit.text;
+            const targetPrefix = lang.toLowerCase().split('-')[0]!;
+            const det = (hit.language ?? speechLanguage ?? '').toLowerCase();
+            if (autoTranslateSpeech && (!det || !det.startsWith(targetPrefix))) {
+              const tr = await translateTextsAuto(platform, [line], langLabel(lang), {
+                sourceLanguage: hit.language ?? undefined,
+                signal: controller.signal,
+              });
+              if (tr.translations[0]?.trim()) line = tr.translations[0].trim();
+            }
+            sliceCues.push({ startS, endS, text: line });
+          }
+        }
+        if (!sliceCues.length) {
+          toast({ tone: 'warn', title: 'Nenhuma fala reconhecida nos clipes selecionados', body: 'Tente selecionar mais trechos ou desmarcar a seleção para transcrever o episódio completo.' });
+          return;
+        }
+        const r = pullClipSubtitles(project, selectedClips, new Map([[transcriptAssetId, sliceCues]]), trackId, look);
+        if (!r.commands.length) {
+          toast({ tone: 'warn', title: 'Não foi possível posicionar as falas nos clipes selecionados' });
+          return;
+        }
+        session.history.transaction(`Transcrever trechos (${r.count} linhas)`, r.commands);
+        toast({ tone: 'ok', title: `${r.count} fala(s) transcrita(s) rapidamente`, body: 'Transcrição focada apenas nos trechos selecionados.' });
+        return;
+      }
+
       const transcript = await transcribeMediaAsset(platform, asset, audioIndex, {
         model: speechModel,
         ...(speechLanguage ? { language: speechLanguage } : {}),
@@ -333,6 +375,104 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
       setCancellingSpeech(false);
       setSpeechProgress(null);
     }
+  };
+
+  const extractMusicVocals = async () => {
+    if (!platform || !lyricsClip || !lyricsAsset || !musicTrack || transcribing) return;
+    if (lyricsAsset.kind !== 'audio' || lyricsAsset.status === 'missing') {
+      toast({ tone: 'error', title: 'Arquivo de música indisponível' });
+      return;
+    }
+    const audioIndex = lyricsAudioIndex ?? lyricsAudioStreams[0]?.index ?? 0;
+    const controller = new AbortController();
+    speechAbort.current = controller;
+    setCancellingSpeech(false);
+    setSpeechProgress({ stage: 'extracting', progress: 0, duration: (lyricsAsset.probe?.durationUs ?? 0) / 1e6 });
+    try {
+      const transcript = await transcribeMediaAsset(platform, lyricsAsset, audioIndex, {
+        model: speechModel,
+        ...(speechLanguage ? { language: speechLanguage } : {}),
+        vadFilter: false,
+        signal: controller.signal,
+        onProgress: setSpeechProgress,
+      });
+      let cues = transcript.segments
+        .map((s) => ({
+          startS: s.start,
+          endS: s.end,
+          text: s.text.replace(/\s+/g, ' ').trim(),
+          ...(s.words.length
+            ? {
+                words: s.words.map((w) => ({
+                  startS: w.start,
+                  endS: w.end,
+                  text: w.text,
+                  source: 'whisper' as const,
+                  confidence: null,
+                })),
+              }
+            : {}),
+        }))
+        .filter((s) => s.text.length >= 2 && s.endS > s.startS);
+      if (!cues.length) {
+        toast({ tone: 'warn', title: 'Nenhum vocal detectado na música', body: 'Se for instrumental ou muito pesado, use Importar para colar/carregar um .txt/.lrc.' });
+        return;
+      }
+      const det = (transcript.language ?? speechLanguage ?? '').toLowerCase();
+      if (translateLyricsToPt && (!det || !det.startsWith('pt'))) {
+        const ptTrans = await translateTextsAuto(platform, cues.map((c) => c.text), 'português brasileiro', {
+          sourceLanguage: transcript.language,
+          signal: controller.signal,
+        });
+        cues = promoteAlignedCuesForTypography(
+          cues.map((c, idx) => ({ ...c, text: ptTrans.translations[idx]?.trim() || c.text, ...(ptTrans.translations[idx]?.trim() ? { words: undefined } : {}) })),
+        ) as typeof cues;
+      } else {
+        cues = promoteAlignedCuesForTypography(cues) as typeof cues;
+      }
+      const timelineCues = cuesForClip(lyricsClip, cues);
+      const windowUs: [number, number] = [lyricsClip.timelineStartUs, clipEndUs(lyricsClip)];
+      const commands = placeCues(project, timelineCues, {
+        trackId,
+        offsetUs: 0,
+        look: look === 'legenda' ? 'anime-blend' : look,
+        windowUs,
+        label: `Vocais · ${lyricsAsset.name}`,
+      });
+      if (!commands.length) {
+        toast({ tone: 'warn', title: 'Nenhum verso caiu no trecho da música na timeline' });
+        return;
+      }
+      session.history.transaction(`Ler vocais da música (${commands.length} itens)`, commands);
+      toast({ tone: 'ok', title: 'Vocais da música adicionados', body: 'Use Harmonizar c/ vídeo para adaptar cor e leitura às cenas.' });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        toast({ tone: 'info', title: 'Leitura vocal cancelada' });
+      } else {
+        toast({ tone: 'error', title: 'Falha ao ler vocais da música', body: error instanceof Error ? error.message : String(error) });
+      }
+    } finally {
+      speechAbort.current = null;
+      setCancellingSpeech(false);
+      setSpeechProgress(null);
+    }
+  };
+
+  const harmonizeTargetSubtitles = () => {
+    const ids = target.map((c) => c.id);
+    if (!ids.length) return;
+    const { episodes } = buildSessionReadingInputs(session);
+    const res = harmonizeTextClipsWithScenes({ project, episodes, clipIds: ids });
+    if (!res.commands.length) {
+      toast({ tone: 'info', title: 'Legendas já harmonizadas', body: 'Cores, contraste, desvio facial e duração de leitura já estão ótimos.' });
+      return;
+    }
+    session.history.transaction(`Harmonizar ${res.updatedCount} legenda(s)`, res.commands);
+    toast({
+      tone: 'ok',
+      title: `${res.updatedCount} legenda(s) harmonizada(s)`,
+      body: res.extendedForReading ? `${res.extendedForReading} ajustadas para leitura mais confortável.` : 'Paleta, contraste e posição adaptados às cenas.',
+    });
   };
 
   const alignLyrics = async () => {
@@ -514,12 +654,15 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
             ))}
           </select>
         )}
-        <div className="grid grid-cols-2 gap-1">
+        <div className="grid grid-cols-3 gap-1">
           <Button size="sm" icon={<FileText size={13} />} onClick={() => void importFile()} title="SRT, ASS, VTT, LRC ou TXT sem tempos">
             Importar
           </Button>
           <Button size="sm" icon={<Film size={13} />} onClick={() => void pull()} title="Coloca as falas certas embaixo dos clipes de episódio (selecionados, ou todos)">
             Do episódio
+          </Button>
+          <Button size="sm" icon={<Music size={13} />} disabled={!lyricsClip || transcribing} onClick={() => void extractMusicVocals()} title="Lê e sincroniza automaticamente os vocais cantados da música na timeline">
+            Ler música
           </Button>
         </div>
         {untimedLyrics && (
@@ -734,6 +877,15 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
             >
               Auto-sync
             </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded border border-azure/45 bg-azure/10 px-1.5 py-0.5 text-azure hover:bg-azure/20"
+              onClick={harmonizeTargetSubtitles}
+              title="Adapta cor da cena, contraste, desvio facial e duração de leitura confortável"
+            >
+              <Wand2 size={10} />
+              Harmonizar
+            </button>
           </div>
         )}
       </div>
@@ -781,13 +933,18 @@ export function SubtitlesPanel({ session }: { session: ProjectSession }) {
 function SubRow({ index, clip, selected, onPick, onText, onDelete }: { index: number; clip: Clip; selected: boolean; onPick: (add: boolean) => void; onText: (t: string) => void; onDelete: () => void }) {
   const [text, setText] = useState(clip.text!.text);
   useEffect(() => setText(clip.text!.text), [clip.text]);
-  const warn = readability(text, clip.durationUs / 1e6);
+  const durS = Math.max(0.05, clip.durationUs / 1e6);
+  const cps = Math.round((Array.from(text.replace(/\s+/g, '')).length / durS) * 10) / 10;
+  const warn = readability(text, durS);
   return (
     <li className={`group mx-1 mb-1 rounded-md border px-2 py-1.5 ${selected ? 'border-violet bg-violet/10' : 'border-transparent hover:bg-raised'}`}>
       <button type="button" className="flex w-full items-center gap-1.5 text-left text-2xs text-muted" onClick={(e) => onPick(e.shiftKey || e.ctrlKey || e.metaKey)}>
         <span className="tnum w-5 text-faint">{index}</span>
         <span className="tnum">
           {fmt(clip.timelineStartUs)} → {fmt(clipEndUs(clip))}
+        </span>
+        <span className={`tnum rounded px-1 text-[9px] ${cps > 21 ? 'bg-warn/20 text-warn' : 'bg-base text-faint'}`} title="Velocidade de leitura (caracteres por segundo)">
+          {cps}c/s
         </span>
         {warn && (
           <span title={warn} className="text-warn">
@@ -826,14 +983,18 @@ function SubRow({ index, clip, selected, onPick, onText, onDelete }: { index: nu
 }
 
 const DISPLAY_FONT_BY_LOOK: Partial<Record<SubtitleLook, string>> = {
-  'anime-impact': '"Anton", Impact, sans-serif',
-  'anime-manga': '"Bebas Neue", Impact, sans-serif',
-  'anime-neon': '"Bebas Neue", "Segoe UI", sans-serif',
+  'anime-blend': '"Russo One", "Anton", Impact, sans-serif',
+  'anime-katana': '"Permanent Marker", "Russo One", sans-serif',
+  'anime-impact': '"Russo One", "Anton", Impact, sans-serif',
+  'anime-manga': '"Black Ops One", "Bebas Neue", Impact, sans-serif',
+  'anime-neon': '"Teko", "Bebas Neue", "Segoe UI", sans-serif',
   'anime-gold-epic': '"Cinzel Variable", Cinzel, Georgia, serif',
   'lyrics-cinematic': '"Montserrat Variable", Manrope, sans-serif',
 };
 
 const GENERATOR_GLOW_BY_LOOK: Partial<Record<SubtitleLook, { glowColor: string; glowIntensity: number; highlightColor?: string; useGradient?: boolean }>> = {
+  'anime-blend': { glowColor: '#ffffff', glowIntensity: 10, highlightColor: '#38bdf8' },
+  'anime-katana': { glowColor: '#ff1f5a', glowIntensity: 12, highlightColor: '#ff1f5a' },
   'anime-impact': { glowColor: '#ff5364', glowIntensity: 10, highlightColor: '#ff5364' },
   'anime-neon': { glowColor: '#00d4ff', glowIntensity: 14, highlightColor: '#ff4d9d', useGradient: true },
   'anime-gold-epic': { glowColor: '#f59e0b', glowIntensity: 12, highlightColor: '#fff0a6', useGradient: true },

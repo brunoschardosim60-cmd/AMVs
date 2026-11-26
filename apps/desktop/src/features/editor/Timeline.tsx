@@ -26,8 +26,9 @@ import {
   type Track,
 } from '@amv/project';
 import type { ShotTag } from '@amv/analysis';
+import { alignClipPeakToNearestBeat, harmonizeTextClipsWithScenes } from '@amv/automv';
 import { editSubtitleTextManually, LOOKS, restyleSubtitles, subtitleClips } from '@amv/subtitles';
-import { ChevronDown, ChevronUp, Eye, EyeOff, Headphones, Languages, Layers3, Lock, LockOpen, Magnet, Pencil, Plus, ScanSearch, Scissors, SlidersHorizontal, Sparkles, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronDown, ChevronUp, Eye, EyeOff, Headphones, Languages, Layers3, Lock, LockOpen, Magnet, Pencil, Plus, ScanSearch, Scissors, SlidersHorizontal, Sparkles, Trash2, Type, Volume2, VolumeX, Wand2, Zap, ZoomIn, ZoomOut } from 'lucide-react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
@@ -44,6 +45,7 @@ import { selectClipsInMarquee } from './timelineSelection';
 import { QualityDialog } from './QualityDialog';
 import { GenerateDialog } from '../automv/GenerateDialog';
 import { AudioMixerDialog } from './AudioMixerDialog';
+import { buildSessionReadingInputs } from './readingInputs';
 
 const HEADER_W = 180;
 const RULER_H = 26;
@@ -77,7 +79,77 @@ function trackColor(t: Track): string {
 
 // --------------------------------------------------------------------------- régua
 
-function Ruler({ zoom, width, fps, playheadUs, onScrub }: { zoom: number; width: number; fps: Project['settings']['fps']; playheadUs: number; onScrub: (e: RPointerEvent) => void }) {
+interface TimelineSectionMark {
+  startUs: number;
+  endUs: number;
+  label: string;
+  energy: number;
+}
+
+function RulerPlayhead({ zoom }: { zoom: number }) {
+  const playheadUs = useEditor((s) => s.playheadUs);
+  return (
+    <div
+      className="pointer-events-none absolute bottom-0 size-0"
+      style={{ left: usToPx(playheadUs, zoom) - 6, borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '9px solid var(--color-azure)' }}
+    />
+  );
+}
+
+function TimelinePlayhead({ zoom, scrollRef }: { zoom: number; scrollRef: React.RefObject<HTMLDivElement | null> }) {
+  const playheadUs = useEditor((s) => s.playheadUs);
+  const playing = useEditor((s) => s.playing);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !playing) return;
+    const x = usToPx(playheadUs, zoom);
+    const view = el.clientWidth - HEADER_W;
+    if (x > el.scrollLeft + view - 40 || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 80);
+  }, [playheadUs, zoom, playing, scrollRef]);
+  return <div className="pointer-events-none absolute top-0 bottom-0 z-20 w-px bg-azure" style={{ left: usToPx(playheadUs, zoom) }} />;
+}
+
+function TimelineSplitButton({
+  project,
+  editableSelection,
+  hasSelection,
+  onSplit,
+}: {
+  project: Project;
+  editableSelection: Clip[];
+  hasSelection: boolean;
+  onSplit: (ids: string[]) => void;
+}) {
+  const playheadUs = useEditor((s) => s.playheadUs);
+  const pool = hasSelection
+    ? editableSelection
+    : project.clips.filter((clip) => project.tracks.some((track) => track.id === clip.trackId && !track.locked));
+  const splittable = pool.filter((clip) => clip.timelineStartUs < playheadUs && clipEndUs(clip) > playheadUs);
+  return (
+    <IconButton
+      label="Dividir no cursor (S)"
+      className="size-7 shrink-0"
+      disabled={!splittable.length}
+      onClick={() => onSplit(splittable.map((clip) => clip.id))}
+    >
+      <Scissors size={14} />
+    </IconButton>
+  );
+}
+
+function Ruler({
+  zoom,
+  width,
+  fps,
+  sections = [],
+  onScrub,
+}: {
+  zoom: number;
+  width: number;
+  fps: Project['settings']['fps'];
+  sections?: TimelineSectionMark[];
+  onScrub: (e: RPointerEvent) => void;
+}) {
   // intervalo entre marcas grandes: o menor "bonito" que dá ≥ 90 px
   const steps = [0.04, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
   const major = steps.find((s) => s * zoom >= 90) ?? 600;
@@ -90,17 +162,35 @@ function Ruler({ zoom, width, fps, playheadUs, onScrub }: { zoom: number; width:
     ticks.push(
       <div key={i} className="absolute top-0 bottom-0" style={{ left: s * zoom }}>
         <div className={`absolute bottom-0 w-px ${isMajor ? 'h-2.5 bg-muted' : 'h-1.5 bg-faint'}`} />
-        {isMajor && <span className="tnum absolute top-1 left-1 text-2xs whitespace-nowrap text-muted">{formatTimecode(s * 1e6, fps)}</span>}
+        {isMajor && <span className="tnum absolute top-0.5 left-1 text-2xs whitespace-nowrap text-muted">{formatTimecode(s * 1e6, fps)}</span>}
       </div>,
     );
   }
   return (
     <div className="relative cursor-text border-b border-line bg-panel" style={{ height: RULER_H, width }} onPointerDown={onScrub}>
       {ticks}
-      <div
-        className="pointer-events-none absolute bottom-0 size-0"
-        style={{ left: usToPx(playheadUs, zoom) - 6, borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '9px solid var(--color-azure)' }}
-      />
+      {sections.map((sec, idx) => {
+        const left = usToPx(sec.startUs, zoom);
+        const w = Math.max(0, usToPx(sec.endUs - sec.startUs, zoom));
+        if (w < 44) return null;
+        const isDrop = /drop|refr|cl[ií]max/i.test(sec.label) || sec.energy >= 0.75;
+        return (
+          <div
+            key={`${sec.startUs}-${idx}`}
+            className="pointer-events-none absolute bottom-0 overflow-hidden"
+            style={{ left, width: w, height: 11 }}
+          >
+            <span
+              className={`inline-block rounded-tr px-1 text-[8px] font-bold uppercase leading-[11px] tracking-wider ${
+                isDrop ? 'bg-violet/35 text-violet-strong' : 'bg-raised/85 text-faint'
+              }`}
+            >
+              {sec.label}
+            </span>
+          </div>
+        );
+      })}
+      <RulerPlayhead zoom={zoom} />
     </div>
   );
 }
@@ -176,8 +266,22 @@ const Thumbs = memo(function Thumbs({ clip, widthPx, zoom, session, height }: { 
 // --------------------------------------------------------------------------- timeline
 
 export function Timeline({ session, project }: { session: ProjectSession; project: Project }) {
-  const { zoom, setZoom, playheadUs, setPlayhead, selection, select, toggleSelect, snapping, setSnapping, assetDrag, setAssetDrag, requestInspector, editingClipId, setEditingClipId, soloClipId } = useEditor();
-  const { platform, toast } = useApp();
+  const zoom = useEditor((s) => s.zoom);
+  const setZoom = useEditor((s) => s.setZoom);
+  const setPlayhead = useEditor((s) => s.setPlayhead);
+  const selection = useEditor((s) => s.selection);
+  const select = useEditor((s) => s.select);
+  const toggleSelect = useEditor((s) => s.toggleSelect);
+  const snapping = useEditor((s) => s.snapping);
+  const setSnapping = useEditor((s) => s.setSnapping);
+  const assetDrag = useEditor((s) => s.assetDrag);
+  const setAssetDrag = useEditor((s) => s.setAssetDrag);
+  const requestInspector = useEditor((s) => s.requestInspector);
+  const editingClipId = useEditor((s) => s.editingClipId);
+  const setEditingClipId = useEditor((s) => s.setEditingClipId);
+  const soloClipId = useEditor((s) => s.soloClipId);
+  const toast = useApp((s) => s.toast);
+  const platform = useApp((s) => s.platform);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [gesture, setGesture] = useState<Gesture>(null);
   const [qualityOpen, setQualityOpen] = useState(false);
@@ -237,9 +341,29 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
     }
     return out;
   }, [project.clips, tracks, session, session.changes]);
+  const sectionMarks = useMemo(() => {
+    const out: TimelineSectionMark[] = [];
+    for (const c of project.clips) {
+      const t = tracks.find((x) => x.id === c.trackId);
+      if (t?.kind !== 'audio' || t.role !== 'music' || !c.assetId) continue;
+      const m = session.assetRuntime(c.assetId).music;
+      if (!m?.sections?.length) continue;
+      for (const sec of m.sections) {
+        const startLocal = timelineLocalAtSource(c, Math.max(c.sourceInUs, Math.round(sec.startS * 1e6)));
+        const endLocal = timelineLocalAtSource(c, Math.min(c.sourceOutUs || c.sourceInUs + c.durationUs, Math.round(sec.endS * 1e6)));
+        if (startLocal === null || endLocal === null) continue;
+        const startUs = Math.max(c.timelineStartUs, c.timelineStartUs + Math.min(startLocal, endLocal));
+        const endUs = Math.min(clipEndUs(c), c.timelineStartUs + Math.max(startLocal, endLocal));
+        if (endUs - startUs >= 400_000) {
+          out.push({ startUs, endUs, label: sec.label, energy: sec.energy });
+        }
+      }
+    }
+    return out;
+  }, [project.clips, tracks, session, session.changes]);
   const allSnapPoints = useCallback(
-    (exclude: Set<string>) => [...snapPoints(project, playheadUs, exclude), ...beatMarks.map((b) => ({ atUs: b.atUs, kind: 'marker' as const }))],
-    [project, playheadUs, beatMarks],
+    (exclude: Set<string>) => [...snapPoints(project, useEditor.getState().playheadUs, exclude), ...beatMarks.map((b) => ({ atUs: b.atUs, kind: 'marker' as const }))],
+    [project, beatMarks],
   );
 
   const trackTops = useMemo(() => {
@@ -305,7 +429,8 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
     const hadMultiSelection = selection.length > 1;
     const dragBaseIds = selection.includes(clip.id) ? selection : [clip.id];
     if (!selection.includes(clip.id)) select([clip.id]);
-    if (playheadUs < clip.timelineStartUs || playheadUs >= clipEndUs(clip)) {
+    const currentPlayhead = useEditor.getState().playheadUs;
+    if (currentPlayhead < clip.timelineStartUs || currentPlayhead >= clipEndUs(clip)) {
       setPlayhead(clip.timelineStartUs);
       getPlayer(session).seek(clip.timelineStartUs);
     }
@@ -507,7 +632,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [assetDrag, project, tracks, trackAtY, xToUs, snapping, playheadUs, thresholdUs, run, setAssetDrag, setDropHint, toast, allSnapPoints]);
+  }, [assetDrag, project, tracks, trackAtY, xToUs, snapping, thresholdUs, run, setAssetDrag, setDropHint, toast, allSnapPoints]);
 
   // ---------------------------------------------------------------- zoom com Ctrl+roda, mantendo o ponto sob o mouse
   const onWheel = (e: React.WheelEvent) => {
@@ -522,16 +647,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
     });
   };
 
-  // segue o playhead tocando
-  const playing = useEditor((s) => s.playing);
   const proposalMarks = useEditor((s) => s.proposalMarks);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !playing) return;
-    const x = usToPx(playheadUs, zoom);
-    const view = el.clientWidth - HEADER_W;
-    if (x > el.scrollLeft + view - 40 || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 80);
-  }, [playheadUs, zoom, playing]);
 
   const addText = () => {
     const track = tracks.find((t) => t.kind === 'text' && !t.locked);
@@ -540,7 +656,8 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
       return;
     }
     const id = newId('clp');
-    const startUs = nextTextStart(project, track.id, playheadUs, 3_000_000);
+    const phUs = useEditor.getState().playheadUs;
+    const startUs = nextTextStart(project, track.id, phUs, 3_000_000);
     const P = project.settings;
     const cmds: Command[] = [
       {
@@ -558,7 +675,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
     ];
     run('Adicionar texto', cmds);
     select([id]);
-    if (startUs !== playheadUs) toast({ tone: 'info', title: 'Texto adicionado depois da legenda existente' });
+    if (startUs !== phUs) toast({ tone: 'info', title: 'Texto adicionado depois da legenda existente' });
   };
 
   const addTrack = (kind: Track['kind']) => {
@@ -585,8 +702,10 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (ignoreEditorKey(e)) return;
-      if (e.key.toLowerCase() === 't' && !e.ctrlKey && !e.metaKey) addTextRef.current();
-      if (e.key.toLowerCase() === 's' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (e.key.toLowerCase() === 't' && !e.ctrlKey && !e.metaKey && !e.altKey) addTextRef.current();
+      const isSoloKey = (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'o')
+        || (!e.ctrlKey && !e.metaKey && e.altKey && e.key.toLowerCase() === 's');
+      if (isSoloKey) {
         const selId = useEditor.getState().selection[0];
         const selClip = selId ? session.project.clips.find((c) => c.id === selId) : undefined;
         if (selClip && !selClip.text) {
@@ -642,8 +761,6 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
   };
 
   const editableSelection = project.clips.filter((clip) => selection.includes(clip.id) && tracks.some((track) => track.id === clip.trackId && !track.locked));
-  const splittable = (selection.length ? editableSelection : project.clips.filter((clip) => tracks.some((track) => track.id === clip.trackId && !track.locked)))
-    .filter((clip) => clip.timelineStartUs < playheadUs && clipEndUs(clip) > playheadUs);
   const selectedClip = selection.length === 1 ? project.clips.find((clip) => clip.id === selection[0]) : undefined;
   const editingClip = editingClipId ? project.clips.find((clip) => clip.id === editingClipId) : undefined;
 
@@ -679,7 +796,12 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
           </IconButton>
           <Button variant="ghost" size="sm" className="shrink-0" disabled={durationUs <= 0} onClick={fitAll}>Ajustar tudo</Button>
           <span className="mx-1 h-4 w-px shrink-0 bg-line" />
-          <IconButton label="Dividir no cursor" className="size-7 shrink-0" disabled={!splittable.length} onClick={() => run('Dividir', splitAllAt(project, playheadUs, splittable.map((clip) => clip.id)))}><Scissors size={14} /></IconButton>
+          <TimelineSplitButton
+            project={project}
+            editableSelection={editableSelection}
+            hasSelection={selection.length > 0}
+            onSplit={(ids) => run('Dividir', splitAllAt(project, useEditor.getState().playheadUs, ids))}
+          />
           <IconButton label="Excluir seleção" className="size-7 shrink-0" disabled={!editableSelection.length} onClick={() => { run('Excluir', deleteClips(project, editableSelection.map((clip) => clip.id))); select([]); }}><Trash2 size={14} /></IconButton>
           <span className="tnum ml-auto shrink-0 pr-2 text-[10px] text-muted">
             {selection.length ? `${selection.length} selecionado(s) · ` : ''}{formatTimecode(durationUs, project.settings.fps)}
@@ -751,7 +873,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
             <div className="editor-ruler-gutter sticky left-0 z-30 flex shrink-0 items-center border-r border-b border-line px-3" style={{ width: HEADER_W, height: RULER_H }}>
               <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-faint">Trilhas · tempo</span>
             </div>
-            <Ruler zoom={zoom} width={contentW} fps={project.settings.fps} playheadUs={playheadUs} onScrub={startScrub} />
+            <Ruler zoom={zoom} width={contentW} fps={project.settings.fps} sections={sectionMarks} onScrub={startScrub} />
           </div>
 
           {/* trilhas */}
@@ -883,7 +1005,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
                     <button
                       type="button"
                       aria-label={soloClipId === c.id ? 'Parar escuta isolada' : 'Isolar e escutar só este clipe'}
-                      title={soloClipId === c.id ? 'Parar escuta isolada (S)' : 'Isolar e escutar só este clipe (S)'}
+                      title={soloClipId === c.id ? 'Parar escuta isolada (O)' : 'Isolar e escutar só este clipe (O)'}
                       onPointerDown={(e) => e.stopPropagation()}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -958,7 +1080,7 @@ export function Timeline({ session, project }: { session: ProjectSession; projec
             {snapLine !== null && <div className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-warn" style={{ left: usToPx(snapLine, zoom) }} />}
 
             {/* playhead */}
-            <div className="pointer-events-none absolute top-0 bottom-0 z-20 w-px bg-azure" style={{ left: usToPx(playheadUs, zoom) }} />
+            <TimelinePlayhead zoom={zoom} scrollRef={scrollRef} />
           </div>
         </div>
       </div>
@@ -1160,6 +1282,25 @@ function TimelineQuickEditBar({
         <button
           type="button"
           disabled={locked}
+          onClick={() => {
+            const { episodes } = buildSessionReadingInputs(session);
+            const res = harmonizeTextClipsWithScenes({ project, episodes, clipIds: [clip.id] });
+            if (res.commands.length) {
+              run('Harmonizar texto com a cena', res.commands);
+              toast({ tone: 'ok', title: 'Texto harmonizado com a cena', body: 'Cores, contraste, posição facial e tempo de leitura ajustados.' });
+            } else {
+              toast({ tone: 'info', title: 'Já harmonizado', body: 'Este texto já está alinhado com a luz, o foco e o tempo de leitura da cena.' });
+            }
+          }}
+          title="Harmonizar automaticamente cores, contraste, desvio do rosto e velocidade de leitura com a cena"
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-control border border-azure/45 bg-azure/10 px-2 text-ink-soft hover:bg-azure/20 hover:text-ink disabled:opacity-50"
+        >
+          <Wand2 size={12} />
+          Harmonizar c/ cena
+        </button>
+        <button
+          type="button"
+          disabled={locked}
           onClick={onOpenModal}
           className="ml-auto inline-flex h-7 shrink-0 items-center gap-1 rounded-control bg-violet px-2.5 text-2xs font-medium text-white hover:bg-violet-strong disabled:opacity-50"
         >
@@ -1179,11 +1320,30 @@ function TimelineQuickEditBar({
         <button
           type="button"
           onClick={() => toggleAuditionClip(session, clip)}
-          title="Isolar e escutar apenas o áudio original desta cena (atalho: S)"
+          title="Isolar e escutar apenas o áudio original desta cena (atalho: O)"
           className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-control border px-2 font-medium transition-colors ${isClipSolo ? 'border-azure bg-azure text-action-ink' : 'border-azure/45 bg-azure/10 text-ink hover:bg-azure/20'}`}
         >
           <Headphones size={12} />
           {isClipSolo ? 'Parar escuta' : 'Ouvir só esta cena'}
+        </button>
+        <button
+          type="button"
+          disabled={locked}
+          onClick={() => {
+            const { episodes, musics } = buildSessionReadingInputs(session);
+            const aligned = alignClipPeakToNearestBeat({ project, clipId: clip.id, episodes, musics });
+            if (aligned) {
+              run('Sincronizar golpe na batida', [aligned.command]);
+              toast({ tone: 'ok', title: 'Golpe cravado na batida', body: `Pico em ${aligned.peakSourceS}s alinhado à batida de ${aligned.beatTimelineS}s.` });
+            } else {
+              toast({ tone: 'info', title: 'Golpe já alinhado ou sem batida próxima' });
+            }
+          }}
+          title="Deslizar automaticamente o pico de ação/golpe desta cena para cair cravado na batida da música"
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-control border border-violet/45 bg-violet/10 px-2 font-medium text-ink-soft hover:bg-violet/20 hover:text-ink disabled:opacity-50"
+        >
+          <Zap size={12} />
+          Golpe na batida
         </button>
         <div className="flex shrink-0 items-center overflow-hidden rounded-control border border-line bg-base" title="Deslizar trecho dentro do episódio">
           <span className="px-1.5 text-muted">Trecho</span>

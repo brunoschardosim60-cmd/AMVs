@@ -1,7 +1,8 @@
+import { alignClipPeakToNearestBeat, harmonizeTextClipsWithScenes, readPlayheadInsight } from '@amv/automv';
 import { clipEndUs, evaluateKeyframes, formatTimecode, frameToUs, projectDurationUs, upsertKeyframe, usToFrame, type Clip, type Project } from '@amv/project';
 import { editSubtitleTextManually, LOOKS, restyleSubtitles, type SubtitleLook } from '@amv/subtitles';
-import { ChevronFirst, ChevronLast, Headphones, Maximize2, Minimize2, MonitorPlay, Pause, Pencil, Play, RotateCw, Sparkles, StepBack, StepForward } from 'lucide-react';
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Activity, ChevronFirst, ChevronLast, Headphones, Maximize2, Minimize2, MonitorPlay, Pause, Pencil, Play, RotateCw, Sparkles, StepBack, StepForward, Wand2, Zap } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createCharacterCutoutOnV2 } from '../../core/cutout';
 import type { ProjectSession } from '../../core/session';
 import { useApp } from '../../store';
@@ -9,6 +10,7 @@ import { IconButton } from '../../ui/controls';
 import { useEditor } from './editorStore';
 import { LOCAL_FONT_FAMILIES } from './Inspector';
 import { Player } from './player';
+import { buildSessionReadingInputs } from './readingInputs';
 import { estimateTextBounds } from './textLayer';
 
 /** Um Player por sessão aberta; o React só liga/desliga o canvas. */
@@ -172,22 +174,20 @@ export function Preview({ session, project }: { session: ProjectSession; project
   const boxRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const inlineInputRef = useRef<HTMLTextAreaElement>(null);
-  const {
-    playheadUs,
-    setPlayhead,
-    playing,
-    setPlaying,
-    previewScale,
-    previewOriginal,
-    setPreviewScale,
-    selection,
-    select,
-    requestInspector,
-    setEditingClipId,
-    soloClipId,
-    soloStopAtUs,
-    setSoloClip,
-  } = useEditor();
+  const setPlayhead = useEditor((s) => s.setPlayhead);
+  const playing = useEditor((s) => s.playing);
+  const setPlaying = useEditor((s) => s.setPlaying);
+  const previewScale = useEditor((s) => s.previewScale);
+  const previewOriginal = useEditor((s) => s.previewOriginal);
+  const setPreviewScale = useEditor((s) => s.setPreviewScale);
+  const selection = useEditor((s) => s.selection);
+  const select = useEditor((s) => s.select);
+  const requestInspector = useEditor((s) => s.requestInspector);
+  const setEditingClipId = useEditor((s) => s.setEditingClipId);
+  const soloClipId = useEditor((s) => s.soloClipId);
+  const soloStopAtUs = useEditor((s) => s.soloStopAtUs);
+  const setSoloClip = useEditor((s) => s.setSoloClip);
+  const [playheadUs, setPausedPlayheadUs] = useState(() => useEditor.getState().playheadUs);
   const player = getPlayer(session);
   const P = project.settings;
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
@@ -246,7 +246,7 @@ export function Preview({ session, project }: { session: ProjectSession; project
 
   useEffect(() => {
     player.setProject(project);
-    if (!player.isPlaying) player.seek(playheadUs);
+    if (!player.isPlaying) player.seek(useEditor.getState().playheadUs);
   }, [player, project]);
 
   useEffect(() => {
@@ -256,16 +256,25 @@ export function Preview({ session, project }: { session: ProjectSession; project
   }, []);
 
   useEffect(() => {
-    if (!player.isPlaying) {
-      player.seek(playheadUs);
-    } else if (Math.abs(player.timeUs - playheadUs) > 250_000) {
-      player.seek(playheadUs);
-    }
-  }, [player, playheadUs]);
+    setPausedPlayheadUs(useEditor.getState().playheadUs);
+    return useEditor.subscribe((state, prev) => {
+      if (state.playheadUs === prev.playheadUs) return;
+      if (!player.isPlaying) {
+        player.seek(state.playheadUs);
+      } else if (Math.abs(player.timeUs - state.playheadUs) > 250_000) {
+        player.seek(state.playheadUs);
+      }
+      if (!state.playing) setPausedPlayheadUs(state.playheadUs);
+    });
+  }, [player]);
 
   useEffect(() => {
-    if (playing) player.play();
-    else player.pause();
+    if (playing) {
+      player.play();
+    } else {
+      player.pause();
+      setPausedPlayheadUs(useEditor.getState().playheadUs);
+    }
   }, [player, playing]);
 
   useEffect(() => {
@@ -327,10 +336,11 @@ export function Preview({ session, project }: { session: ProjectSession; project
 
   /** Clipes visuais ativos neste instante, na ordem exata de frente → fundo (texto frontal → V2 → texto atrás → V1). */
   const activeVisualStack = (): Clip[] => {
+    const phUs = useEditor.getState().playheadUs;
     const visualTracks = project.tracks.filter((t) => t.kind !== 'audio' && !t.hidden && !t.locked);
     const bottomVideoId = [...visualTracks].reverse().find((t) => t.kind === 'video')?.id;
     const activeInTrack = (trackId: string) =>
-      project.clips.filter((c) => c.trackId === trackId && playheadUs >= c.timelineStartUs && playheadUs < clipEndUs(c));
+      project.clips.filter((c) => c.trackId === trackId && phUs >= c.timelineStartUs && phUs < clipEndUs(c));
     const drawOrderBottomToTop: Clip[] = [];
     let drewBehindText = false;
     for (let i = visualTracks.length - 1; i >= 0; i--) {
@@ -357,13 +367,14 @@ export function Preview({ session, project }: { session: ProjectSession; project
   const hitTestPreview = (clientX: number, clientY: number): { clip: Clip; box: ScreenBox; isOverlay: boolean } | null => {
     const frameEl = frameRef.current;
     if (!frameEl || frameSize.width <= 0) return null;
+    const phUs = useEditor.getState().playheadUs;
     const rect = frameEl.getBoundingClientRect();
     const px = clientX - rect.left;
     const py = clientY - rect.top;
     const stack = activeVisualStack();
     const bottomVideoId = [...project.tracks].reverse().find((t) => t.kind === 'video')?.id;
     for (const c of stack) {
-      const box = computeClipScreenBox(project, c, playheadUs, frameSize.width);
+      const box = computeClipScreenBox(project, c, phUs, frameSize.width);
       if (!box) continue;
       const pad = c.text ? 10 : 0;
       if (px >= box.left - pad && px <= box.left + box.width + pad && py >= box.top - pad && py <= box.top + box.height + pad) {
@@ -377,7 +388,7 @@ export function Preview({ session, project }: { session: ProjectSession; project
   const selectedTrack = selectedClip && project.tracks.find((track) => track.id === selectedClip.trackId);
   const aspect = P.width / P.height;
   const aspectLabel = Math.abs(aspect - 16 / 9) < 0.02 ? '16:9' : Math.abs(aspect - 9 / 16) < 0.02 ? '9:16' : Math.abs(aspect - 1) < 0.02 ? '1:1' : `${P.width}:${P.height}`;
-  const canManipulate = !!selectedClip && !!selectedTrack && selectedTrack.kind !== 'audio' && !selectedTrack.hidden && !selectedTrack.locked &&
+  const canManipulate = !playing && !!selectedClip && !!selectedTrack && selectedTrack.kind !== 'audio' && !selectedTrack.hidden && !selectedTrack.locked &&
     playheadUs >= selectedClip.timelineStartUs && playheadUs < clipEndUs(selectedClip);
   const handleBox = canManipulate && selectedClip
     ? computeClipScreenBox(project, selectedClip, playheadUs, frameSize.width, draftTransform)
@@ -580,6 +591,7 @@ export function Preview({ session, project }: { session: ProjectSession; project
   const soloClipObj = soloClipId ? project.clips.find((c) => c.id === soloClipId) : undefined;
   const editingTextClip = inlineEditClipId ? project.clips.find((c) => c.id === inlineEditClipId) : undefined;
   const editingBox = editingTextClip ? computeClipScreenBox(project, editingTextClip, playheadUs, frameSize.width) : null;
+  const [hudOpen, setHudOpen] = useState(false);
 
   return (
     <section ref={previewRef} className="editor-preview flex min-h-0 min-w-0 flex-1 flex-col" aria-label="Pré-visualização">
@@ -593,6 +605,20 @@ export function Preview({ session, project }: { session: ProjectSession; project
         <select aria-label="Resolução da prévia" className="min-w-0 rounded border border-line bg-base text-xs text-ink" value={previewScale} onChange={(e) => { const n = Number(e.target.value); if (n === 1 || n === 0.5 || n === 0.25) setPreviewScale(n); }}>
           <option value={1}>100%</option><option value={0.5}>50%</option><option value={0.25}>25%</option>
         </select>
+        <button
+          type="button"
+          aria-pressed={hudOpen}
+          onClick={() => setHudOpen((v) => !v)}
+          title="Raio-X de Leitura ao vivo: mostra batida/seção da música, nitidez/cores da cena e velocidade/contraste da legenda"
+          className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold transition-colors ${
+            hudOpen
+              ? 'border-violet bg-violet/25 text-ink'
+              : 'border-line bg-base text-muted hover:border-violet/50 hover:text-ink'
+          }`}
+        >
+          <Activity size={11} className={hudOpen ? 'text-violet-strong' : ''} />
+          Raio-X
+        </button>
         {soloClipObj && (
           <button
             type="button"
@@ -623,6 +649,7 @@ export function Preview({ session, project }: { session: ProjectSession; project
             onPointerLeave={() => setHoveredClipId(null)}
             onDoubleClick={onCanvasDoubleClick}
           />
+          {hudOpen && <PreviewHudOverlay project={project} session={session} />}
           {hoveredBox && !inlineEditClipId && (
             <div
               aria-hidden="true"
@@ -780,6 +807,23 @@ export function Preview({ session, project }: { session: ProjectSession; project
                     >
                       Atrás V2
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const { episodes } = buildSessionReadingInputs(session);
+                        const res = harmonizeTextClipsWithScenes({ project, episodes, clipIds: [selectedClip.id] });
+                        if (res.commands.length) {
+                          session.history.transaction('Harmonizar texto com a cena', res.commands);
+                          useApp.getState().toast({ tone: 'ok', title: 'Harmonizado com a cena', body: 'Cores, contraste, desvio facial e leitura ajustados.' });
+                        } else {
+                          useApp.getState().toast({ tone: 'info', title: 'Já harmonizado com esta cena' });
+                        }
+                      }}
+                      className="inline-flex h-6 items-center gap-1 rounded border border-azure/50 bg-azure/20 px-1.5 text-[10px] font-semibold text-ink hover:bg-azure/30"
+                      title="Harmonizar cores, contraste, desvio do rosto e tempo de leitura com o vídeo"
+                    >
+                      <Wand2 size={10} /> Harmonizar
+                    </button>
                   </>
                 ) : (
                   <>
@@ -787,9 +831,26 @@ export function Preview({ session, project }: { session: ProjectSession; project
                       type="button"
                       onClick={() => toggleAuditionClip(session, selectedClip)}
                       className={`inline-flex h-6 items-center gap-1 rounded border px-2 text-[10px] font-medium ${soloClipId === selectedClip.id ? 'border-azure bg-azure/25 text-ink' : 'border-line bg-base text-ink-soft hover:text-ink'}`}
-                      title="Isolar e escutar apenas o som original desta cena"
+                      title="Isolar e escutar apenas o som original desta cena (atalho: O)"
                     >
                       <Headphones size={11} /> {soloClipId === selectedClip.id ? 'Parar escuta' : 'Ouvir cena'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const { episodes, musics } = buildSessionReadingInputs(session);
+                        const aligned = alignClipPeakToNearestBeat({ project, clipId: selectedClip.id, episodes, musics });
+                        if (aligned) {
+                          session.history.transaction('Sincronizar golpe na batida', [aligned.command]);
+                          useApp.getState().toast({ tone: 'ok', title: 'Golpe cravado na batida', body: `Pico em ${aligned.peakSourceS}s alinhado em ${aligned.beatTimelineS}s.` });
+                        } else {
+                          useApp.getState().toast({ tone: 'info', title: 'Golpe já alinhado ou sem batida próxima' });
+                        }
+                      }}
+                      className="inline-flex h-6 items-center gap-1 rounded border border-ok/45 bg-ok/15 px-2 text-[10px] font-medium text-ink hover:bg-ok/25"
+                      title="Cravar automaticamente o golpe/pico de movimento desta cena na batida da música"
+                    >
+                      <Zap size={10} /> Golpe na batida
                     </button>
                     <button
                       type="button"
@@ -855,63 +916,210 @@ export function Preview({ session, project }: { session: ProjectSession; project
           )}
         </div>
       </div>
-      <div className="flex min-h-[68px] shrink-0 flex-col justify-center gap-1 border-t border-line-soft bg-panel px-3 py-1.5">
-        <div className="preview-transport flex min-w-0 items-center gap-2">
-          <span className="tnum w-[92px] shrink-0 font-mono text-[13px] font-semibold tracking-tight text-ink">{formatTimecode(playheadUs, P.fps)}</span>
-          <div className="flex min-w-0 flex-1 items-center justify-center gap-0.5">
-            <div className="flex items-center rounded-lg border border-line-soft bg-base/80 p-0.5">
-              <IconButton label="Início (Home)" onClick={() => go(0)}>
-                <ChevronFirst size={17} />
-              </IconButton>
-              <IconButton label="Quadro anterior (←)" onClick={() => go(stepFrames(project, playheadUs, -1))}>
-                <StepBack size={16} />
-              </IconButton>
-              <button
-                type="button"
-                aria-label={playing ? 'Pausar (Espaço)' : 'Reproduzir (Espaço)'}
-                title={playing ? 'Pausar (Espaço)' : 'Reproduzir (Espaço)'}
-                className="mx-1 grid size-9 place-items-center rounded-full bg-ink text-base hover:bg-white"
-                onClick={() => setPlaying(!playing)}
-              >
-                {playing ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" className="translate-x-px" />}
-              </button>
-              <IconButton label="Próximo quadro (→)" onClick={() => go(stepFrames(project, playheadUs, 1))}>
-                <StepForward size={16} />
-              </IconButton>
-              <IconButton label="Fim (End)" onClick={() => go(end)}>
-                <ChevronLast size={17} />
-              </IconButton>
-            </div>
-          </div>
-          <span className="tnum w-[92px] shrink-0 text-right font-mono text-[11px] text-muted">{formatTimecode(end, P.fps)}</span>
-          <label className="hidden shrink-0 items-center justify-end gap-1.5 text-[10px] text-muted sm:flex">
-            Escala
-            <select
-              className="h-7 rounded-md border border-line bg-base px-1.5 text-[11px] text-ink"
-              value={previewScale}
-              onChange={(e) => setPreviewScale(Number(e.target.value) as 1 | 0.5 | 0.25)}
-              title="Resolução do preview; a exportação usa sempre a qualidade total"
-            >
-              <option value={1}>100%</option>
-              <option value={0.5}>1/2</option>
-              <option value={0.25}>1/4</option>
-            </select>
-          </label>
-          <IconButton label={fullscreen ? 'Sair da tela cheia' : 'Ampliar prévia'} onClick={() => void toggleFullscreen()}>
-            {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-          </IconButton>
-        </div>
-        <input
-          type="range"
-          aria-label="Posição da prévia"
-          className="h-1 w-full cursor-pointer accent-violet"
-          min={0}
-          max={Math.max(1, end)}
-          step={Math.max(1, frameToUs(1, P.fps))}
-          value={Math.min(playheadUs, end)}
-          onChange={(event) => go(Number(event.currentTarget.value))}
-        />
-      </div>
+      <PreviewTransportBar
+        project={project}
+        end={end}
+        playing={playing}
+        previewScale={previewScale}
+        setPreviewScale={setPreviewScale}
+        setPlaying={setPlaying}
+        go={go}
+        fullscreen={fullscreen}
+        onToggleFullscreen={toggleFullscreen}
+      />
     </section>
+  );
+}
+
+function PreviewHudOverlay({ project, session }: { project: Project; session: ProjectSession }) {
+  const playheadUs = useEditor((s) => s.playheadUs);
+  const readingInputs = useMemo(
+    () => buildSessionReadingInputs(session),
+    [session, session.changes, project.assets],
+  );
+  const playheadInsight = useMemo(
+    () => readPlayheadInsight({ project, playheadUs, ...readingInputs }),
+    [project, playheadUs, readingInputs],
+  );
+  return (
+    <div
+      aria-label="Raio-X de Leitura Audiovisual"
+      className="pointer-events-none absolute top-2.5 left-2.5 z-10 flex max-w-[92%] flex-col gap-1 rounded-lg border border-white/15 bg-black/75 px-2.5 py-2 text-[10px] text-white shadow-lg backdrop-blur-md"
+    >
+      {playheadInsight.music && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="rounded bg-violet/35 px-1.5 py-0.5 font-bold uppercase tracking-wider text-violet-strong">
+            {playheadInsight.music.sectionLabel}
+          </span>
+          <span className="tnum text-white/85">
+            {playheadInsight.music.bpm} BPM · Energia {Math.round(playheadInsight.music.energy * 100)}%
+          </span>
+          {playheadInsight.music.beatDeltaMs !== null && (
+            <span
+              className={`tnum rounded px-1.5 py-0.5 font-semibold ${
+                playheadInsight.music.beatStatus === 'locked'
+                  ? 'bg-ok/25 text-ok'
+                  : playheadInsight.music.beatStatus === 'near'
+                    ? 'bg-warn/25 text-warn'
+                    : 'bg-white/10 text-white/70'
+              }`}
+            >
+              Batida {playheadInsight.music.beatDeltaMs > 0 ? `+${playheadInsight.music.beatDeltaMs}` : playheadInsight.music.beatDeltaMs}ms
+            </span>
+          )}
+          {playheadInsight.music.nextDropInS !== null && playheadInsight.music.nextDropInS > 0.1 && playheadInsight.music.nextDropInS <= 8 && (
+            <span className="tnum text-azure">Drop em {playheadInsight.music.nextDropInS}s</span>
+          )}
+        </div>
+      )}
+      {playheadInsight.scene && (
+        <div className="flex flex-wrap items-center gap-1.5 text-white/85">
+          <span className="font-semibold text-white">Cena:</span>
+          <span className="tnum">Ação {Math.round(playheadInsight.scene.intensity * 100)}%</span>
+          <span>·</span>
+          <span className="tnum">Nitidez {Math.round(playheadInsight.scene.sharpness * 100)}%</span>
+          {playheadInsight.scene.cameraMotion && (
+            <>
+              <span>·</span>
+              <span className="text-white/70">{playheadInsight.scene.cameraMotion}</span>
+            </>
+          )}
+          {playheadInsight.scene.peakBeatDeltaMs !== null && Math.abs(playheadInsight.scene.peakBeatDeltaMs) <= 60 && (
+            <span className="rounded bg-ok/25 px-1.5 py-0.5 font-semibold text-ok">Golpe na batida</span>
+          )}
+          {playheadInsight.scene.dominantColors.length > 0 && (
+            <span className="ml-0.5 inline-flex items-center gap-1">
+              {playheadInsight.scene.dominantColors.slice(0, 3).map((hex, i) => (
+                <span key={`${hex}-${i}`} className="size-2.5 rounded-full border border-white/40" style={{ backgroundColor: hex }} title={hex} />
+              ))}
+            </span>
+          )}
+        </div>
+      )}
+      {playheadInsight.text && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-semibold text-white">Leitura:</span>
+          <span
+            className={`tnum rounded px-1.5 py-0.5 font-semibold ${
+              playheadInsight.text.readingPace === 'comfortable'
+                ? 'bg-ok/25 text-ok'
+                : 'bg-warn/25 text-warn'
+            }`}
+          >
+            {playheadInsight.text.charsPerSecond} chars/s · {playheadInsight.text.wordsPerMinute} WPM
+          </span>
+          {playheadInsight.text.contrastStatus !== 'good' && (
+            <span className="rounded bg-danger/25 px-1.5 py-0.5 font-semibold text-danger">
+              {playheadInsight.text.contrastStatus === 'covers-face' ? 'Sobre rosto' : 'Baixo contraste'}
+            </span>
+          )}
+          {playheadInsight.text.suggestion && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                const res = harmonizeTextClipsWithScenes({
+                  project,
+                  episodes: readingInputs.episodes,
+                  clipIds: [playheadInsight.text!.clipId],
+                });
+                if (res.commands.length) {
+                  session.history.transaction('Harmonizar legenda com cena', res.commands);
+                  useApp.getState().toast({ tone: 'ok', title: 'Legenda harmonizada com a cena' });
+                }
+              }}
+              className="pointer-events-auto inline-flex items-center gap-1 rounded bg-azure px-1.5 py-0.5 font-semibold text-action-ink hover:opacity-90"
+              title={playheadInsight.text.suggestion}
+            >
+              <Wand2 size={10} /> Corrigir leitura
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PreviewTransportBar({
+  project,
+  end,
+  playing,
+  previewScale,
+  setPreviewScale,
+  setPlaying,
+  go,
+  fullscreen,
+  onToggleFullscreen,
+}: {
+  project: Project;
+  end: number;
+  playing: boolean;
+  previewScale: 1 | 0.5 | 0.25;
+  setPreviewScale: (s: 1 | 0.5 | 0.25) => void;
+  setPlaying: (p: boolean) => void;
+  go: (us: number) => void;
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
+}) {
+  const playheadUs = useEditor((s) => s.playheadUs);
+  const P = project.settings;
+  return (
+    <div className="flex min-h-[68px] shrink-0 flex-col justify-center gap-1 border-t border-line-soft bg-panel px-3 py-1.5">
+      <div className="preview-transport flex min-w-0 items-center gap-2">
+        <span className="tnum w-[92px] shrink-0 font-mono text-[13px] font-semibold tracking-tight text-ink">{formatTimecode(playheadUs, P.fps)}</span>
+        <div className="flex min-w-0 flex-1 items-center justify-center gap-0.5">
+          <div className="flex items-center rounded-lg border border-line-soft bg-base/80 p-0.5">
+            <IconButton label="Início (Home)" onClick={() => go(0)}>
+              <ChevronFirst size={17} />
+            </IconButton>
+            <IconButton label="Quadro anterior (←)" onClick={() => go(stepFrames(project, playheadUs, -1))}>
+              <StepBack size={16} />
+            </IconButton>
+            <button
+              type="button"
+              aria-label={playing ? 'Pausar (Espaço)' : 'Reproduzir (Espaço)'}
+              title={playing ? 'Pausar (Espaço)' : 'Reproduzir (Espaço)'}
+              className="mx-1 grid size-9 place-items-center rounded-full bg-ink text-base hover:bg-white"
+              onClick={() => setPlaying(!playing)}
+            >
+              {playing ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" className="translate-x-px" />}
+            </button>
+            <IconButton label="Próximo quadro (→)" onClick={() => go(stepFrames(project, playheadUs, 1))}>
+              <StepForward size={16} />
+            </IconButton>
+            <IconButton label="Fim (End)" onClick={() => go(end)}>
+              <ChevronLast size={17} />
+            </IconButton>
+          </div>
+        </div>
+        <span className="tnum w-[92px] shrink-0 text-right font-mono text-[11px] text-muted">{formatTimecode(end, P.fps)}</span>
+        <label className="hidden shrink-0 items-center justify-end gap-1.5 text-[10px] text-muted sm:flex">
+          Escala
+          <select
+            className="h-7 rounded-md border border-line bg-base px-1.5 text-[11px] text-ink"
+            value={previewScale}
+            onChange={(e) => setPreviewScale(Number(e.target.value) as 1 | 0.5 | 0.25)}
+            title="Resolução do preview; a exportação usa sempre a qualidade total"
+          >
+            <option value={1}>100%</option>
+            <option value={0.5}>1/2</option>
+            <option value={0.25}>1/4</option>
+          </select>
+        </label>
+        <IconButton label={fullscreen ? 'Sair da tela cheia' : 'Ampliar prévia'} onClick={onToggleFullscreen}>
+          {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+        </IconButton>
+      </div>
+      <input
+        type="range"
+        aria-label="Posição da prévia"
+        className="h-1 w-full cursor-pointer accent-violet"
+        min={0}
+        max={Math.max(1, end)}
+        step={Math.max(1, frameToUs(1, P.fps))}
+        value={Math.min(playheadUs, end)}
+        onChange={(event) => go(Number(event.currentTarget.value))}
+      />
+    </div>
   );
 }
