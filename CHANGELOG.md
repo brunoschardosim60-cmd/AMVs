@@ -1,5 +1,15 @@
 # Novidades
 
+## 0.9.6
+
+**Seleção inteligente da melhor parte da música, mixagem anti-abafamento e controles completos de edição pós-geração de letras, legendas e música.**
+
+- **Melhor parte da música & fim do som abafado:** `chooseMusicRange` e `suggestMusicRanges` (`packages/automv/src/music-selection.ts`) agora avaliam a energia sustentada pós-drop e o contraste dinâmico para escolher o verdadeiro clímax quando há múltiplos drops ou quando a faixa não possui drop explícito (localizando o refrão principal); cortes visuais gerados em `V1` saem silenciados (`-60 dB`), `automaticDuckingGain` ignora clipes inaudíveis e micro-impactos (`Golpe anime`), e o ducking inteligente protege seções de alta energia contra quedas excessivas de volume sem atravessar o drop.
+- **Controle completo de letras e legendas pós-geração:** novo módulo puro `packages/subtitles/src/post-edit.ts` e barra pós-geração em `SubtitlesPanel` + `Timeline` com **Editar letra inteira** (editor multilinha em lote com localizar/substituir mantendo tempos e estilos), **Separar Letras × Falas** em trilhas independentes, **Explodir em palavras** (alinhado às batidas), **Juntar em frase**, **Dividir no cursor**, conversão de caixa (`AA`/`Aa`/`aa`), troca de fonte/tamanho/cor/posição em lote, **Copiar estilo para toda a trilha** e criação rápida de legendas/trilhas (tudo com `Ctrl+Z`).
+- **Controle pós-geração da música e do áudio das cenas:** novo painel `MusicPostControls` no Inspector, na barra rápida da timeline e no modal de áudio para ouvir e deslizar o trecho da música, saltar em 1 clique para as melhores partes sugeridas, alternar o equilíbrio **Música × Falas** (`Sem abafar 0 dB`, `Suave -6 dB`, `Inteligente`, `Forte -16 dB`) e ligar/desligar o som original de cenas específicas em `V1`.
+- **Verificação:** `pnpm typecheck`, `pnpm --filter @amv/desktop build` e suíte completa (`pnpm -r --workspace-concurrency=2 test`) validados apenas com mídia sintética e integração FFmpeg.
+- **Limitações novas:** nenhuma limitação nova introduzida; a validação subjetiva de mixagem e leitura em episódios comerciais permanece `PENDENTE` em `docs/VALIDACAO_REAL.md`.
+
 ## 0.9.5
 
 **Estabilização do preview com textos animados e cortes rápidos, eliminação de corrida em undo/redo de importação, blindagem numérica na pontuação e protocolo de validação real.**
