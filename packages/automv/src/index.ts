@@ -1,4 +1,5 @@
 export * from './styles.js';
+export * from './music-selection.js';
 export * from './generate.js';
 export * from './characters.js';
 export * from './narrative.js';

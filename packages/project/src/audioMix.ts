@@ -8,7 +8,16 @@ function isAudibleTrack(project: Project, trackId: string): boolean {
   return !anySolo || track.solo;
 }
 
+export const INAUDIBLE_CLIP_GAIN_DB = -40;
+
+function isClipAudible(clip: Clip): boolean {
+  if (clip.audio.gainDb > INAUDIBLE_CLIP_GAIN_DB) return true;
+  const kf = clip.keyframes['audio.gainDb'];
+  return Boolean(kf?.some((point) => point.value > INAUDIBLE_CLIP_GAIN_DB));
+}
+
 function isVoiceClip(project: Project, clip: Project['clips'][number]): boolean {
+  if (clip.label === 'Golpe anime') return false;
   const track = project.tracks.find((item) => item.id === clip.trackId);
   if (track?.role === 'voice') return true;
   const asset = project.assets.find((item) => item.id === clip.assetId);
@@ -22,7 +31,7 @@ function mergedAudibleVoiceIntervals(project: Project): { start: number; end: nu
   const intervals: { start: number; end: number }[] = [];
   for (const clip of project.clips) {
     const track = project.tracks.find((item) => item.id === clip.trackId);
-    if (!track || !isVoiceClip(project, clip) || !clip.assetId || !isAudibleTrack(project, track.id)) continue;
+    if (!track || !isVoiceClip(project, clip) || !clip.assetId || !isClipAudible(clip) || !isAudibleTrack(project, track.id)) continue;
     intervals.push({ start: clip.timelineStartUs, end: clipEndUs(clip) });
   }
   intervals.sort((a, b) => a.start - b.start || a.end - b.end);

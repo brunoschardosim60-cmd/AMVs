@@ -20,7 +20,21 @@ import { lyricCueKey } from './lyric-cue-key.js';
 import { layoutLyrics } from './lyrics-layout.js';
 import { reliableBeatGrid } from './beat-confidence.js';
 import { refineImpactEffects } from './impact-effects.js';
+import {
+  buildSmartDuckingKeyframes,
+  chooseMusicRange,
+  scoreClimaxMoment,
+  suggestMusicRanges,
+  type MusicDuckingPreset,
+  type RangeSuggestion,
+} from './music-selection.js';
 export { lyricCueKey } from './lyric-cue-key.js';
+export {
+  chooseMusicRange,
+  suggestMusicRanges,
+  type MusicDuckingPreset,
+  type RangeSuggestion,
+} from './music-selection.js';
 
 export interface EpisodeInput {
   assetId: string;
@@ -125,6 +139,8 @@ export interface GenerateOptions {
   autonomous?: boolean;
   /** Adapta tipografia e sonorização dinamicamente por seção musical (ligado automaticamente no Modo Livre). */
   dynamicTypography?: boolean;
+  /** Controle anti-abafamento da música durante falas: 'smart' protege o refrão/drop, 'gentle' reduz suave (-6 dB), 'deep' reduz forte (-16 dB), 'off' mantém a música 100% limpa. */
+  musicDucking?: MusicDuckingPreset;
 }
 
 export interface GenerateResult {
@@ -185,24 +201,21 @@ function sectionAt(m: MusicAnalysis, t: number) {
   return m.sections.find((s) => t >= s.startS && t < s.endS) ?? m.sections.at(-1);
 }
 
-/** Escolhe o trecho da música: o drop principal cai em ~40% do vídeo, começando num compasso. */
-export function chooseMusicRange(m: MusicAnalysis, durationS: number, startS: number | null): [number, number] {
-  const D = Math.min(durationS, m.durationS);
-  let s0 = startS ?? 0;
-  if (startS === null && m.drops.length) {
-    s0 = Math.max(0, m.drops[0]! - 0.4 * D);
-    const db = (m.downbeats ?? []).filter((d) => d <= s0).at(-1);
-    if (db !== undefined) s0 = db;
-  }
-  s0 = Math.max(0, Math.min(s0, m.durationS - D));
-  return [s0, s0 + D];
+function pickWindowDrop(m: MusicAnalysis, a: number, b: number, beatOffsetS: number): number | null {
+  const inRange = m.drops.map((d) => d + beatOffsetS).filter((d) => d > a + 1 && d < b - 1);
+  if (inRange.length === 0) return null;
+  if (inRange.length === 1) return inRange[0]!;
+  const D = Math.max(1, b - a);
+  return [...inRange].sort(
+    (left, right) => scoreClimaxMoment(m, right - beatOffsetS, D) - scoreClimaxMoment(m, left - beatOffsetS, D),
+  )[0]!;
 }
 
 /** Divide o trecho da música em cortes nas batidas, mais curtos quanto mais energia. */
 export function makeSlots(m: MusicAnalysis, range: [number, number], style: StyleDef, intensity: number, lyrics?: Cue[], beatOffsetS = 0): Slot[] {
   const [a, b] = range;
   const musicMap = buildMusicMap(m, range, beatOffsetS);
-  const drop = m.drops.map((d) => d + beatOffsetS).find((d) => d > a + 1 && d < b - 1) ?? null;
+  const drop = pickWindowDrop(m, a, b, beatOffsetS);
   // Só usa cortes por palavra com timings confiáveis (ASS/LRC/manual ou Whisper ≥0,90).
   if (style.id === 'letra' && lyrics?.length) {
     const words: { t: number; endS: number; w: string; cueKey: string; timing: NonNullable<Cue['words']>[number] }[] = [];
@@ -621,60 +634,6 @@ export function planFootage(eps: EpisodeInput[], o: Pick<GenerateOptions, 'style
     }
   const boost = [-0.1, 0, 0.05, 0.1][o.intensity]!;
   return { wanted, mode, pool, fit: { intensities, lowI: Math.max(0, style.targetIntensity[0] + boost), highI: Math.min(1, style.targetIntensity[1] + boost) }, warnings };
-}
-
-// ---------------------------------------------------------------- trecho da música que combina
-
-export interface RangeSuggestion {
-  startS: number;
-  endS: number;
-  /** 0..1 */
-  score: number;
-  reasons: string[];
-}
-
-/**
- * Compara janelas da música (começando em compassos) com as cenas que existem:
- * (40%) o drop cai em ~40% do vídeo; (35%) a energia que a janela pede é a
- * intensidade que as cenas escolhidas realmente têm; (25%) começa/termina em
- * limite de seção. Devolve as melhores, sem janelas quase iguais.
- */
-export function suggestMusicRanges(m: MusicAnalysis, durationS: number, fit: FootageFit | null, limit = 3): RangeSuggestion[] {
-  const D = Math.min(durationS, m.durationS);
-  let starts = m.downbeats.filter((d) => d + D <= m.durationS + 0.01);
-  if (starts.length < 3) starts = Array.from({ length: Math.max(1, Math.floor((m.durationS - D) / 2) + 1) }, (_, i) => i * 2);
-  const N = 12;
-  const footage = fit ? [...fit.intensities].sort((a, b) => a - b) : [];
-  const qAt = (k: number) => footage[Math.min(footage.length - 1, Math.floor(((k + 0.5) / N) * footage.length))]!;
-  const out: RangeSuggestion[] = starts.map((s0) => {
-    const reasons: string[] = [];
-    const drop = m.drops.find((d) => d > s0 + 1 && d < s0 + D - 1);
-    let dropScore = 0;
-    if (drop !== undefined) {
-      dropScore = 1 - Math.min(1, Math.abs((drop - s0) / D - 0.4) / 0.4);
-      if (dropScore > 0.6) reasons.push(`drop aos ${Math.round(((drop - s0) / D) * 100)}% do vídeo`);
-    }
-    let fitScore = 0.5;
-    if (fit && footage.length) {
-      const wanted = Array.from({ length: N }, (_, k) => fit.lowI + (fit.highI - fit.lowI) * energyAt(m, s0 + ((k + 0.5) / N) * D)).sort((a, b) => a - b);
-      const dist = wanted.reduce((a, w, k) => a + Math.abs(w - qAt(k)), 0) / N;
-      fitScore = 1 - Math.min(1, dist / 0.5);
-      if (fitScore > 0.75) reasons.push('a energia da música combina com a força das cenas escolhidas');
-    }
-    const startsOnSection = s0 < 0.4 || m.sections.some((x) => Math.abs(x.startS - s0) < 0.4);
-    const endsOnSection = Math.abs(m.durationS - (s0 + D)) < 0.8 || m.sections.some((x) => Math.abs(x.endS - (s0 + D)) < 0.8);
-    if (startsOnSection) reasons.push('começa no início de uma parte da música');
-    if (endsOnSection) reasons.push('termina no fim de uma parte');
-    const score = 0.4 * dropScore + 0.35 * fitScore + 0.25 * ((startsOnSection ? 0.6 : 0) + (endsOnSection ? 0.4 : 0));
-    return { startS: s0, endS: s0 + D, score: Math.round(score * 1000) / 1000, reasons };
-  });
-  out.sort((a, b) => b.score - a.score || a.startS - b.startS);
-  const picked: RangeSuggestion[] = [];
-  for (const c of out) {
-    if (picked.every((p) => Math.abs(p.startS - c.startS) >= D * 0.5)) picked.push(c);
-    if (picked.length >= limit) break;
-  }
-  return picked;
 }
 
 // ---------------------------------------------------------------- faixa de áudio da fala
@@ -1282,7 +1241,6 @@ interface VoiceBlock {
   preDrop: boolean;
 }
 
-const DUCK_DB = -16;
 /** Referência aproximada de voz em dB RMS (percentil 90), não LUFS. */
 const VOICE_REF_DB = -18;
 /** Correção conservadora para diferenças entre episódios; limita boost/cut para reduzir risco de clipping. */
@@ -1292,49 +1250,6 @@ export function voiceGainDb(baseDb: number, loudnessDb: number | undefined): num
   return Math.round((baseDb + correction) * 10) / 10;
 }
 const VOICE_GAP_S = 1.5;
-
-/** Agrupa intervalos de voz próximos para manter a música abaixada em pausas curtas sem efeito gangorra. */
-function buildDuckingKeyframes(
-  intervals: { startS: number; endS: number; preDrop?: boolean }[],
-  mergeGapS: number,
-  rampDownS: number,
-  rampUpAfterS: number,
-): Keyframe[] {
-  const ordered = [...intervals].sort((a, b) => a.startS - b.startS);
-  const groups: { startS: number; endS: number; preDrop: boolean }[] = [];
-  for (const curr of ordered) {
-    const prev = groups.at(-1);
-    if (prev && !prev.preDrop && !curr.preDrop && curr.startS - prev.endS <= mergeGapS) {
-      prev.endS = Math.max(prev.endS, curr.endS);
-    } else {
-      groups.push({ startS: curr.startS, endS: curr.endS, preDrop: !!curr.preDrop });
-    }
-  }
-  const kf: Keyframe[] = [];
-  for (const g of groups) {
-    const startUs = us(g.startS);
-    const downUs = us(Math.max(0, g.startS - rampDownS));
-    const prevEndUs = kf.at(-1)?.atUs ?? -1;
-    if (g.startS > 0 && downUs > prevEndUs) {
-      kf.push({ atUs: downUs, value: 0, easing: 'linear' });
-    }
-    if (startUs > (kf.at(-1)?.atUs ?? -1)) {
-      kf.push({ atUs: startUs, value: DUCK_DB, easing: 'linear' });
-    }
-    if (g.preDrop) {
-      kf.push(
-        { atUs: us(g.endS - 0.06), value: DUCK_DB, easing: 'linear' },
-        { atUs: us(g.endS), value: 0, easing: 'linear' },
-      );
-    } else {
-      kf.push(
-        { atUs: us(g.endS), value: DUCK_DB, easing: 'linear' },
-        { atUs: us(g.endS + rampUpAfterS), value: 0, easing: 'linear' },
-      );
-    }
-  }
-  return kf;
-}
 
 export function resolveAutonomousOptions(
   music: MusicInput,
@@ -1376,7 +1291,7 @@ export function resolveAutonomousOptions(
     });
   const autoVoiceCount = strongSpeeches.length === 0
     ? 0
-    : base.durationS >= 42 && strongSpeeches.length >= 3
+    : base.durationS >= 42 && strongSpeeches.length >= 3 && avgEnergy < 0.72
       ? 3
       : base.durationS >= 22 && strongSpeeches.length >= 2
         ? 2
@@ -1391,6 +1306,7 @@ export function resolveAutonomousOptions(
     useSpeech: autoVoiceCount > 0,
     voiceMoments: autoVoiceCount,
     speechVisualMode: 'hybrid',
+    musicDucking: base.musicDucking ?? 'smart',
     useEffects: true,
     showText: base.showText !== false,
     showSpeechCaptions: base.showSpeechCaptions !== false,
@@ -1461,7 +1377,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     range = best ? [best.startS, best.endS] : chooseMusicRange(m, opts.durationS, null);
   } else range = chooseMusicRange(m, opts.durationS, null);
   const D = range[1] - range[0];
-  const dropAbs = m.drops.map((d) => d + beatOffsetS).find((d) => d > range[0] + 1 && d < range[1] - 1) ?? null;
+  const dropAbs = pickWindowDrop(m, range[0], range[1], beatOffsetS);
   const dropT = dropAbs === null ? null : dropAbs - range[0];
   const direction = planNarrative(m, range, beatOffsetS);
   if (!reliableBeatGrid(m)) warnings.push('Ritmo com baixa confiança: subdivisões rápidas foram evitadas. Revise as batidas e o ajuste de tempo antes de exportar.');
@@ -1544,7 +1460,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       }
       return Math.min(1, covered / (b - a));
     };
-    const free = (a: number, b: number) => blocks.every((x) => b <= x.from - VOICE_GAP_S || a >= x.to + VOICE_GAP_S) && (dropT === null || b <= dropT - 0.5 || a >= dropT + 1.2);
+    const free = (a: number, b: number) =>
+      blocks.every((x) => b <= x.from - VOICE_GAP_S || a >= x.to + VOICE_GAP_S)
+      && (dropT === null || b <= dropT - 0.5 || a >= dropT + 1.8);
     const allowPostDropSpeech = speechVisualMode !== 'scene';
     const limit = allowPostDropSpeech ? Math.max(1.5, D - 0.6) : (blocks[0] ? blocks[0].atS : D);
     const downs = m.downbeats.map((d) => d + beatOffsetS - range[0]).filter((t) => t >= 1.5 && t <= D - (allowPostDropSpeech ? 1.2 : 3));
@@ -1557,11 +1475,18 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       const len = sp.endS - sp.startS;
       const ideal = (limit * (placed + 1)) / (extraWanted + 1);
       const slotLimit = allowPostDropSpeech ? limit : limit - VOICE_GAP_S;
-      const validSlots = fallbackGrid.filter((t) => t + len <= slotLimit && free(t, t + len));
+      const relaxedFree = (a: number, b: number) =>
+        blocks.every((x) => b <= x.from - VOICE_GAP_S || a >= x.to + VOICE_GAP_S)
+        && (dropT === null || b <= dropT - 0.5 || a >= dropT + 1.2);
+      const primaryValid = fallbackGrid.filter((t) => t + len <= slotLimit && free(t, t + len));
+      const validSlots = primaryValid.length ? primaryValid : fallbackGrid.filter((t) => t + len <= slotLimit && relaxedFree(t, t + len));
       if (!validSlots.length) continue;
       const calmFits = validSlots.filter((t) => quiet(t, t + len) < 0.6 && vocalDensity(t, t + len) <= 0.45).sort((a, b) => Math.abs(a - ideal) - Math.abs(b - ideal));
-      // Em voiceover/hybrid encaixa inclusive na ação pós-drop, priorizando janelas de menor colisão vocal com o cantor.
-      const slotCost = (t: number) => vocalDensity(t, t + len) * 1.25 + (Math.abs(t - ideal) / Math.max(1, D)) * 1.1;
+      // Em voiceover/hybrid distribui na timeline priorizando respiros vocais/energéticos e protegendo o impacto exato do drop.
+      const slotCost = (t: number) =>
+        vocalDensity(t, t + len) * 1.25
+        + quiet(t, t + len) * 0.14
+        + (Math.abs(t - ideal) / Math.max(1, D)) * 1.35;
       const pickedAt = allowPostDropSpeech
         ? [...validSlots].sort((a, b) => slotCost(a) - slotCost(b))[0]
         : (calmFits[0] ?? [...validSlots].sort((a, b) => quiet(a, a + len) + vocalDensity(a, a + len) * 0.6 - (quiet(b, b + len) + vocalDensity(b, b + len) * 0.6) || Math.abs(a - ideal) - Math.abs(b - ideal))[0]);
@@ -1573,14 +1498,30 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     if (placed < extraWanted && lines.length > 0) warnings.push(`Só coube ${placed + blocks.filter((b) => b.preDrop).length} de ${totalVoice} falas: faltou trecho livre na música ou fala marcante na luta escolhida.`);
   }
   blocks.sort((a, b) => a.atS - b.atS);
-  // a música abaixa durante cada fala e só volta quando há respiro real (evita gangorra em pausas curtas)
-  if (blocks.length && generatedVoiceAndMusicAreAudible(project, musicTrack, voice)) {
-    musicClip.keyframes['audio.gainDb'] = buildDuckingKeyframes(
-      blocks.map((b) => ({ startS: b.atS, endS: b.preDrop ? dropT! : b.atS + b.len, preDrop: b.preDrop })),
+  const sampleQuiet = (a: number, b: number) => {
+    let sum = 0;
+    let n = 0;
+    for (let t = a; t < b; t += m.energyStepS) {
+      sum += energyAt(m, range[0] + t);
+      n++;
+    }
+    return n ? sum / n : 0.5;
+  };
+  // a música abaixa durante cada fala sem atravessar o drop e sem abafar excessivamente o refrão/clímax
+  if (opts.musicDucking === 'off') {
+    musicClip.audio.duckingMode = 'manual';
+  } else if (blocks.length && generatedVoiceAndMusicAreAudible(project, musicTrack, voice)) {
+    const kf = buildSmartDuckingKeyframes(
+      blocks.map((b) => {
+        const endS = b.preDrop ? dropT! : b.atS + b.len;
+        return { startS: b.atS, endS, preDrop: b.preDrop, musicEnergy: sampleQuiet(b.atS, endS) };
+      }),
       2.2,
       0.35,
       0.4,
+      { preset: opts.musicDucking, dropTimelineS: dropT },
     );
+    if (kf.length > 0) musicClip.keyframes['audio.gainDb'] = kf;
     musicClip.audio.duckingMode = 'manual';
   }
   // ---------------------------------------------------------------- estilo discurso: as falas são a espinha
@@ -1635,8 +1576,11 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       clipsMade++;
       t += len + 0.35;
     }
-    if (speechIntervals.length && generatedVoiceAndMusicAreAudible(project, musicTrack, voice)) {
-      musicClip.keyframes['audio.gainDb'] = buildDuckingKeyframes(speechIntervals, 2.5, 0.1, 0.25);
+    if (opts.musicDucking === 'off') {
+      musicClip.audio.duckingMode = 'manual';
+    } else if (speechIntervals.length && generatedVoiceAndMusicAreAudible(project, musicTrack, voice)) {
+      const kf = buildSmartDuckingKeyframes(speechIntervals, 2.5, 0.1, 0.25, { preset: opts.musicDucking ?? 'deep' });
+      if (kf.length > 0) musicClip.keyframes['audio.gainDb'] = kf;
       musicClip.audio.duckingMode = 'manual';
     }
     cmds.push({ type: 'clip.add', clip: musicClip });
@@ -2502,7 +2446,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       sourceOutUs: us(srcIn) + us(srcLen),
       effects: clipEffects,
       transitionIn: transition,
-      audio: selectedVideoAudio(streamFor(c.ep)),
+      audio: selectedVideoAudio(streamFor(c.ep), -60),
       transform: {
         x: punchX,
         y: punchY,

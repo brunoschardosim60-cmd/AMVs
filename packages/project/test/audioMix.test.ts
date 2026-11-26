@@ -62,4 +62,26 @@ describe('mixagem de áudio', () => {
     expect(automaticDuckingGain(project, music.id, 3_000_000)).toBeCloseTo(reduced);
     expect(automaticDuckingGain(project, music.id, 5_500_000)).toBeCloseTo(1);
   });
+
+  it('não abafa a música sob clipes visuais ou de voz silenciados (-60 dB) mesmo com includeVideoAudio ativo', () => {
+    let project = baseProject();
+    const music = track(project, 'Música');
+    const v1 = track(project, 'V1');
+    const musAsset = audioAsset();
+    const vidAsset = { ...audioAsset(), id: 'vid_ep', kind: 'video' as const };
+    project = applyCommand(project, { type: 'asset.add', asset: musAsset }).project;
+    project = applyCommand(project, { type: 'asset.add', asset: vidAsset }).project;
+    project = applyCommand(project, { type: 'clip.add', clip: clip(music.id, musAsset.id, { timelineStartUs: 0, durationUs: 5_000_000 }) }).project;
+    project = applyCommand(project, {
+      type: 'clip.add',
+      clip: clip(v1.id, vidAsset.id, {
+        timelineStartUs: 0,
+        durationUs: 5_000_000,
+        audio: { gainDb: -60, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null },
+      }),
+    }).project;
+
+    expect(automaticDuckingGain(project, music.id, 2_500_000)).toBe(1);
+    expect(automaticDuckingExpression(project, music.id, 0)).toBeNull();
+  });
 });

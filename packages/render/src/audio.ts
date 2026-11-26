@@ -75,6 +75,7 @@ export function audioClips(o: AudioJobInput): AudioClipPlan[] {
     for (const c of p.clips) {
       if (c.trackId !== track.id || !c.assetId) continue;
       if (c.reverse) continue;
+      if (c.audio.gainDb <= -55 && !c.keyframes['audio.gainDb']?.some((k) => k.value > -55)) continue;
       const src = o.source(c.assetId);
       if (!src || src.audioStreams.length === 0) continue;
       const stream = c.audio.streamIndex !== null && src.audioStreams.includes(c.audio.streamIndex) ? c.audio.streamIndex : src.audioStreams[0]!;
