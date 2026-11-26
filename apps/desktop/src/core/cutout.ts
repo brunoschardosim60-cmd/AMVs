@@ -1,5 +1,5 @@
-import { joinPath } from '@amv/media';
-import { clipEndUs, ClipSchema, newId, sourceTimeAt, type Clip, type Command } from '@amv/project';
+import { inspectFile, joinPath } from '@amv/media';
+import { clipEndUs, ClipSchema, newId, sourceTimeAt, type Asset, type Clip, type Command, type Project } from '@amv/project';
 import type { Platform } from '../platform/types';
 import type { ProjectSession } from './session';
 
@@ -26,6 +26,7 @@ async function canvasAnimeCutoutPng(
   rawPngBytes: Uint8Array,
   strokePx = 4,
   strokeColor = '#ffffff',
+  focus: [number, number] = [0.5, 0.46],
 ): Promise<Uint8Array> {
   const blob = new Blob([rawPngBytes as BlobPart], { type: 'image/png' });
   const bmp = await createImageBitmap(blob);
@@ -62,12 +63,14 @@ async function canvasAnimeCutoutPng(
   const bgR = (rSum / Math.max(1, samples)) / 255;
   const bgG = (gSum / Math.max(1, samples)) / 255;
   const bgB = (bSum / Math.max(1, samples)) / 255;
+  const fx = Math.max(0.22, Math.min(0.78, focus[0]));
+  const fy = Math.max(0.22, Math.min(0.72, focus[1]));
 
   const alpha = new Float32Array(w * h);
   for (let y = 0; y < h; y++) {
-    const ny = (y / Math.max(1, h - 1) - 0.46) / 0.46;
+    const ny = (y / Math.max(1, h - 1) - fy) / 0.46;
     for (let x = 0; x < w; x++) {
-      const nx = (x / Math.max(1, w - 1) - 0.5) / 0.34;
+      const nx = (x / Math.max(1, w - 1) - fx) / 0.34;
       const p = y * w + x;
       const idx = p * 4;
       const r = data[idx]! / 255;
@@ -131,27 +134,14 @@ async function canvasAnimeCutoutPng(
 }
 
 /**
- * Extrai o quadro do clipe no instante atual, recorta o personagem (usando ONNX/DirectML no sidecar
- * quando disponível ou matting local em Canvas), importa o PNG RGBA em `V2` com punch de escala
- * e marca automaticamente as legendas/letras sobrepostas com `behindCutout = true`.
+ * Gera um PNG RGBA com fundo transparente e contorno nítido do personagem para o instante `sourceTimeS`.
  */
-export async function createCharacterCutoutOnV2(
+export async function generateCutoutPngForSource(
   platform: Platform,
-  session: ProjectSession,
-  clip: Clip,
-  playheadUs: number,
-  options: { durationS?: number; strokePx?: number; strokeColor?: string } = {},
-): Promise<{ assetId: string; clipId: string; engine: string }> {
-  const project = session.project;
-  const asset = project.assets.find((a) => a.id === clip.assetId);
-  if (!asset || asset.kind !== 'video') throw new Error('Selecione um clipe de vídeo para recortar o personagem.');
-  const v2 = project.tracks.find((t) => t.kind === 'video' && t.name === 'V2')
-    ?? project.tracks.find((t) => t.kind === 'video' && t.id !== clip.trackId);
-  if (!v2) throw new Error('Adicione ou mantenha uma trilha de vídeo superior (V2) para colocar o recorte.');
-
-  const clampedPlayheadUs = Math.max(clip.timelineStartUs, Math.min(clipEndUs(clip) - 1_000, playheadUs));
-  const localUs = Math.max(0, clampedPlayheadUs - clip.timelineStartUs);
-  const sourceTimeS = sourceTimeAt(clip, localUs) / 1e6;
+  asset: Asset,
+  sourceTimeS: number,
+  options: { strokePx?: number; strokeColor?: string; focus?: [number, number] } = {},
+): Promise<{ pngPath: string; engine: string }> {
   const cutoutDir = joinPath(await platform.cacheDir(), 'cutouts');
   await platform.fs.mkdir(cutoutDir);
 
@@ -200,7 +190,7 @@ export async function createCharacterCutoutOnV2(
     }
     try {
       const rawBytes = await platform.fs.readFile(rawFramePath);
-      const rgbaPng = await canvasAnimeCutoutPng(rawBytes, strokePx, strokeColor);
+      const rgbaPng = await canvasAnimeCutoutPng(rawBytes, strokePx, strokeColor, options.focus);
       await platform.fs.writeFile(outFramePath, rgbaPng);
       pngPath = outFramePath;
     } finally {
@@ -209,6 +199,110 @@ export async function createCharacterCutoutOnV2(
       } catch {}
     }
   }
+  return { pngPath, engine };
+}
+
+/**
+ * Converte automaticamente os clipes de destaque em `V2` criados pelo gerador em recortes transparentes
+ * reais (`PNG RGBA` com contorno) dentro do mesmo lote de comandos da geração (um único Ctrl+Z).
+ */
+export async function upgradeGeneratedV2Cutouts(
+  platform: Platform,
+  session: ProjectSession,
+  project: Project,
+  commands: Command[],
+  focusByClipId?: Map<string, [number, number]>,
+): Promise<{ commands: Command[]; upgraded: number; engine: string | null }> {
+  const v2Track = project.tracks.find((t) => t.kind === 'video' && t.name === 'V2')
+    ?? project.tracks.find((t) => t.kind === 'video');
+  if (!v2Track) return { commands, upgraded: 0, engine: null };
+
+  const targetAddIndices: number[] = [];
+  for (let i = 0; i < commands.length && targetAddIndices.length < 3; i++) {
+    const cmd = commands[i]!;
+    if (
+      cmd.type === 'clip.add'
+      && cmd.clip.trackId === v2Track.id
+      && cmd.clip.assetId
+      && (cmd.clip.mask === 'subject-focus' || cmd.clip.mask === 'manga-slash')
+    ) {
+      targetAddIndices.push(i);
+    }
+  }
+  if (!targetAddIndices.length) return { commands, upgraded: 0, engine: null };
+
+  const env = await session.mediaEnv();
+  const extraAssets: Command[] = [];
+  const nextCommands = [...commands];
+  let upgraded = 0;
+  let lastEngine: string | null = null;
+
+  await Promise.all(
+    targetAddIndices.map(async (cmdIdx) => {
+      const cmd = nextCommands[cmdIdx];
+      if (!cmd || cmd.type !== 'clip.add' || !cmd.clip.assetId) return;
+      const clip = cmd.clip;
+      const asset = project.assets.find((a) => a.id === clip.assetId);
+      if (!asset || asset.kind !== 'video' || asset.status === 'missing') return;
+      try {
+        const sourceS = Math.max(0, (clip.sourceInUs + Math.round(clip.durationUs * 0.2)) / 1e6);
+        const { pngPath, engine } = await generateCutoutPngForSource(platform, asset, sourceS, {
+          focus: focusByClipId?.get(clip.id),
+        });
+        const inspected = await inspectFile(env, pngPath);
+        const cutoutAsset: Asset = { ...inspected.asset, name: `Recorte · ${asset.name}` };
+        extraAssets.push({ type: 'asset.add', asset: cutoutAsset });
+        nextCommands[cmdIdx] = {
+          type: 'clip.add',
+          clip: {
+            ...clip,
+            assetId: cutoutAsset.id,
+            sourceInUs: 0,
+            sourceOutUs: clip.durationUs,
+            mask: 'none',
+            speed: 1,
+            reason: `Recorte transparente real (${engine}) em V2 com letra atrás`,
+          },
+        };
+        upgraded++;
+        lastEngine = engine;
+      } catch {
+        // Mantém a máscara geométrica de fallback se algum quadro falhar
+      }
+    }),
+  );
+
+  if (!extraAssets.length) return { commands, upgraded: 0, engine: null };
+  return { commands: [...extraAssets, ...nextCommands], upgraded, engine: lastEngine };
+}
+
+/**
+ * Extrai o quadro do clipe no instante atual, recorta o personagem (usando ONNX/DirectML no sidecar
+ * quando disponível ou matting local em Canvas), importa o PNG RGBA em `V2` com punch de escala
+ * e marca automaticamente as legendas/letras sobrepostas com `behindCutout = true`.
+ */
+export async function createCharacterCutoutOnV2(
+  platform: Platform,
+  session: ProjectSession,
+  clip: Clip,
+  playheadUs: number,
+  options: { durationS?: number; strokePx?: number; strokeColor?: string; focus?: [number, number] } = {},
+): Promise<{ assetId: string; clipId: string; engine: string }> {
+  const project = session.project;
+  const asset = project.assets.find((a) => a.id === clip.assetId);
+  if (!asset || asset.kind !== 'video') throw new Error('Selecione um clipe de vídeo para recortar o personagem.');
+  const v2 = project.tracks.find((t) => t.kind === 'video' && t.name === 'V2')
+    ?? project.tracks.find((t) => t.kind === 'video' && t.id !== clip.trackId);
+  if (!v2) throw new Error('Adicione ou mantenha uma trilha de vídeo superior (V2) para colocar o recorte.');
+
+  const clampedPlayheadUs = Math.max(clip.timelineStartUs, Math.min(clipEndUs(clip) - 1_000, playheadUs));
+  const localUs = Math.max(0, clampedPlayheadUs - clip.timelineStartUs);
+  const sourceTimeS = sourceTimeAt(clip, localUs) / 1e6;
+  const { pngPath, engine } = await generateCutoutPngForSource(platform, asset, sourceTimeS, {
+    strokePx: options.strokePx,
+    strokeColor: options.strokeColor,
+    focus: options.focus,
+  });
 
   await session.importFiles([pngPath]);
   const importedAsset = session.project.assets.find((a) => a.path === pngPath);

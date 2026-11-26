@@ -318,8 +318,8 @@ export function windowArgs(o: WindowInput): WindowJob {
     const blendedRgb = `blendrgb${filters.length}`;
     const blended = `blend${filters.length}`;
     const next = `v${filters.length}`;
-    filters.push(`color=c=black@0:s=${W}x${H}:r=${FPS}:d=${n(Dw + 1, 3)},format=yuva420p[${transparent}]`);
-    filters.push(`[${transparent}][${label}]overlay=x='${x}':y='${y}':eval=frame:eof_action=pass:format=auto${enable ? `:enable='${enable}'` : ''}[${fullLayer}]`);
+    filters.push(`color=c=black@0:s=${W}x${H}:r=${FPS}:d=${n(Dw + 1, 3)},format=rgba[${transparent}]`);
+    filters.push(`[${transparent}][${label}]overlay=x='${x}':y='${y}':eval=frame:eof_action=pass:format=rgb${enable ? `:enable='${enable}'` : ''}[${fullLayer}]`);
     filters.push(`[${fullLayer}]split=2[${topLayer}][${alphaLayer}]`);
     filters.push(`[${topLayer}]format=gbrp[${topRgb}]`);
     filters.push(`[${cur}]format=gbrp[${bottomRgb}]`);

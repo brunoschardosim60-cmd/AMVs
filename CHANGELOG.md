@@ -1,5 +1,11 @@
 # Novidades
 
+## 0.9.1
+
+- Preview: texto est·tico em cache e mescla correta (blend) de camadas de texto em buffer isolado.
+- Render: blend com RGBA para melhor fidelidade de cor.
+- Recortes: geraÁ„o/upgrade de m·scaras V2 reutiliz·vel.
+
 ## 0.9.0
 
 **Modo Livre com Diretor Mestre unificado, an√°lise visual 10√ó mais r√°pida e rigorosa, corre√ß√£o profunda de fluidez/travamentos no preview e na timeline, HUD Raio-X de leitura ao vivo e Central de Leitura com auto-reparo e harmoniza√ß√£o em 1 clique.**

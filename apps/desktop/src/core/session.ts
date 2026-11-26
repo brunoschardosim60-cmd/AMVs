@@ -457,7 +457,7 @@ export class ProjectSession {
 
   // ---------- mídia ----------
 
-  private async mediaEnv(): Promise<MediaEnv> {
+  async mediaEnv(): Promise<MediaEnv> {
     if (!this.env) {
       this.env = { runner: this.platform.runner, fs: this.platform.fs, queue: this.queue, cacheRoot: await this.platform.cacheDir() };
     }

@@ -5,7 +5,7 @@
  * O preview usa os PROXIES (H.264 leve). É "melhor esforço": a exportação (Fase 3)
  * usa os originais e é exata. O tempo do projeto é sempre a fonte da verdade.
  */
-import { drawTextLayer } from './textLayer';
+import { drawTextLayer, textIsAnimated } from './textLayer';
 import { playbackIndex } from './playbackIndex';
 import { aggregateColorGrade, applyWhipPan, applyZoomThrough, automaticDuckingGain, clipEndUs, createColorGradeLut, evalClipLook, evaluateKeyframes, isColorGradeNeutral, projectDurationUs, sampleColorGradeLut, sourceTimeAt, speedAt, transitionUnderlay, type Clip, type ClipLook, type ColorGradeLut, type Project, type Track } from '@amv/project';
 
@@ -269,6 +269,8 @@ export class Player {
   private lastNotifyAtMs = 0;
   private ctx: CanvasRenderingContext2D | null = null;
   private colorBuffer: HTMLCanvasElement | null = null;
+  private textBlendBuffer: HTMLCanvasElement | null = null;
+  private readonly staticTextCache = new Map<string, HTMLCanvasElement>();
   private readonly colorLuts = new Map<string, ColorGradeLut>();
   private colorGradeGpu: ColorGradeGpu | null | undefined;
   private audioContext: AudioContext | null = null;
@@ -316,6 +318,16 @@ export class Player {
     this.colorGradeGpu?.dispose();
     this.colorGradeGpu = undefined;
     this.colorLuts.clear();
+    for (const c of this.staticTextCache.values()) {
+      c.width = 0;
+      c.height = 0;
+    }
+    this.staticTextCache.clear();
+    if (this.textBlendBuffer) {
+      this.textBlendBuffer.width = 0;
+      this.textBlendBuffer.height = 0;
+      this.textBlendBuffer = null;
+    }
     if (this.colorBuffer) {
       this.colorBuffer.width = 0;
       this.colorBuffer.height = 0;
@@ -345,6 +357,11 @@ export class Player {
       }
     }
     this.colorLuts.clear();
+    for (const c of this.staticTextCache.values()) {
+      c.width = 0;
+      c.height = 0;
+    }
+    this.staticTextCache.clear();
     if (!this.playing) {
       for (const slot of this.slots.values()) {
         if (slot.kind !== 'image') slot.needsSeek = true;
@@ -1004,9 +1021,70 @@ export class Player {
   }
 
   private drawText(ctx: CanvasRenderingContext2D, c: Clip, k: number, look: ClipLook, localS: number): void {
+    const W = ctx.canvas.width;
+    const H = ctx.canvas.height;
+    const canCacheStatic =
+      W > 0 && H > 0
+      && !textIsAnimated(c)
+      && c.mask === 'none'
+      && look.dx === 0 && look.dy === 0 && look.blur === 0 && look.zoom === 1 && look.rgbSplit === 0
+      && (typeof document === 'undefined' || !document.fonts || document.fonts.status === 'loaded');
+
+    if (canCacheStatic) {
+      const cacheKey = `${c.id}:${W}x${H}`;
+      let cached = this.staticTextCache.get(cacheKey);
+      if (!cached) {
+        cached = document.createElement('canvas');
+        cached.width = W;
+        cached.height = H;
+        const cCtx = cached.getContext('2d');
+        if (cCtx) {
+          const opaqueClip = c.transform.opacity === 1 ? c : { ...c, transform: { ...c.transform, opacity: 1 } };
+          drawTextLayer(cCtx, opaqueClip, this.project.settings.width, this.project.settings.height, k, { ...look, alpha: 1 }, localS);
+        }
+        this.staticTextCache.set(cacheKey, cached);
+        if (this.staticTextCache.size > 32) {
+          const oldest = this.staticTextCache.keys().next().value!;
+          const oldCanvas = this.staticTextCache.get(oldest);
+          if (oldCanvas) {
+            oldCanvas.width = 0;
+            oldCanvas.height = 0;
+          }
+          this.staticTextCache.delete(oldest);
+        }
+      }
+      ctx.save();
+      ctx.globalAlpha = look.alpha;
+      ctx.globalCompositeOperation = canvasBlendMode(c.blendMode);
+      ctx.drawImage(cached, 0, 0);
+      ctx.restore();
+      return;
+    }
+
+    if (c.blendMode !== 'normal' && W > 0 && H > 0) {
+      // Renderiza o texto completo em buffer isolado para mesclar uma única vez como no FFmpeg (evita dupla inversão entre contorno e preenchimento).
+      this.textBlendBuffer ??= document.createElement('canvas');
+      const buf = this.textBlendBuffer;
+      if (buf.width !== W) buf.width = W;
+      if (buf.height !== H) buf.height = H;
+      const bCtx = buf.getContext('2d');
+      if (bCtx) {
+        bCtx.clearRect(0, 0, W, H);
+        bCtx.save();
+        clipMask(bCtx, c.mask, 0, 0, W, H);
+        drawTextLayer(bCtx, c, this.project.settings.width, this.project.settings.height, k, look, localS);
+        bCtx.restore();
+        ctx.save();
+        ctx.globalCompositeOperation = canvasBlendMode(c.blendMode);
+        ctx.drawImage(buf, 0, 0);
+        ctx.restore();
+        return;
+      }
+    }
+
     ctx.save();
     ctx.globalCompositeOperation = canvasBlendMode(c.blendMode);
-    clipMask(ctx, c.mask, 0, 0, ctx.canvas.width, ctx.canvas.height);
+    clipMask(ctx, c.mask, 0, 0, W, H);
     drawTextLayer(ctx, c, this.project.settings.width, this.project.settings.height, k, look, localS);
     ctx.restore();
   }
