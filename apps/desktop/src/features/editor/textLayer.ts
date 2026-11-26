@@ -38,6 +38,41 @@ export function textIsAnimated(c: Clip): boolean {
   );
 }
 
+/** Índice da palavra ativa (só timings confiáveis) no instante 
+owUs, ou -1. */
+export function activeWordIndex(wordTimings: NonNullable<Clip['text']>['wordTimings'], nowUs: number): number {
+  return wordTimings.findIndex((word) => {
+    const reliable = !word.uncertain && (
+      word.source === 'ass' || word.source === 'lrc' || word.source === 'manual' ||
+      ((word.source === 'whisper' || word.source === 'estimated') && (word.confidence ?? 0) >= 0.55)
+    );
+    return reliable && nowUs >= word.startUs && nowUs < word.endUs;
+  });
+}
+
+/**
+ * Chave de "estado estável" do texto: quando o desenho só depende da palavra ativa
+ * (sem entrada/saída/keyframes/shake/brilho animado), devolve uma chave para cachear o frame.
+ * Devolve null se o desenho muda a cada frame.
+ */
+export function textSteadyKey(c: Clip, localS: number): string | null {
+  const t = c.text;
+  if (!t) return null;
+  const dur = c.durationUs / 1e6;
+  const inS = t.animationIn ? Math.min((t.animationInUs ?? 300_000) / 1e6, dur * 0.4) : 0;
+  const outS = t.animationOut ? Math.min((t.animationOutUs ?? 250_000) / 1e6, dur * 0.25) : 0;
+  const trS = c.transitionIn ? c.transitionIn.durationUs / 1e6 : 0;
+  if (localS < Math.max(inS, trS) || localS > dur - outS) return null;
+  if (t.animationIn === 'typewriter' || t.sheen || (t.chromaticAberration ?? 0) > 0) return null;
+  if (t.syllableAnimation && t.wordTimings.some((w) => w.syllables.length)) return null;
+  if (t.wordTimings.length && t.wordAnimation !== 'none' && t.wordAnimation !== 'highlight') return null;
+  if (
+    c.keyframes['transform.scale']?.length || c.keyframes['transform.rotation']?.length ||
+    c.keyframes['transform.x']?.length || c.keyframes['transform.y']?.length ||
+    c.keyframes['transform.opacity']?.length || c.effects.some((f) => f.enabled && f.effect === 'shake')
+  ) return null;
+  return String(t.wordTimings.length ? activeWordIndex(t.wordTimings, Math.round(localS * 1e6)) : -1);
+}
 function backOut(x: number): number {
   const c1 = 1.70158;
   const c3 = c1 + 1;
@@ -338,13 +373,8 @@ export function drawTextLayer(ctx: CanvasRenderingContext2D | OffscreenCanvasRen
   }
 
   const nowUs = Math.round(localS * 1e6);
-  const activeWord = wordTimings.findIndex((word) => {
-    const reliable = !word.uncertain && (
-      word.source === 'ass' || word.source === 'lrc' || word.source === 'manual' ||
-      ((word.source === 'whisper' || word.source === 'estimated') && (word.confidence ?? 0) >= 0.55)
-    );
-    return reliable && nowUs >= word.startUs && nowUs < word.endUs;
-  });
+  const activeWord = activeWordIndex(wordTimings, nowUs);
+
   const y0 = -((lines.length - 1) * lh) / 2;
   // Escolhe a palavra "Hero" (última palavra forte >= 3 letras, ou maior palavra da frase) quando heroWord=true
   const allParts = lines.flatMap((l) => l.parts);

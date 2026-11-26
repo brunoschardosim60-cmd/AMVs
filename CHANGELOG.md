@@ -1,5 +1,9 @@
 # Novidades
 
+## 0.9.3
+
+- Preview: textos com legenda palavra a palavra agora são cacheados por palavra ativa, eliminando o travamento com textos seguidos.
+
 ## 0.9.2
 
 - Legendas: corrigido cache de texto estático que mantinha a legenda antiga/sumida após edições.

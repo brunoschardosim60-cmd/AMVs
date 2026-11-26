@@ -5,7 +5,7 @@
  * O preview usa os PROXIES (H.264 leve). É "melhor esforço": a exportação (Fase 3)
  * usa os originais e é exata. O tempo do projeto é sempre a fonte da verdade.
  */
-import { drawTextLayer, textIsAnimated } from './textLayer';
+import { drawTextLayer, textIsAnimated, textSteadyKey } from './textLayer';
 import { playbackIndex } from './playbackIndex';
 import { aggregateColorGrade, applyWhipPan, applyZoomThrough, automaticDuckingGain, clipEndUs, createColorGradeLut, evalClipLook, evaluateKeyframes, isColorGradeNeutral, projectDurationUs, sampleColorGradeLut, sourceTimeAt, speedAt, transitionUnderlay, type Clip, type ClipLook, type ColorGradeLut, type Project, type Track } from '@amv/project';
 
@@ -1021,7 +1021,7 @@ export class Player {
     }
   }
 
-  /** Assinatura do conte�do/estilo do texto: invalida o cache est�tico quando o clip � editado. */
+  /** Assinatura do conte�do/estilo do texto: invalida o cache est�tico quando o clip � editado. */
   private textSignature(c: Clip): string {
     let sig = this.textSigCache.get(c);
     if (!sig) {
@@ -1034,15 +1034,16 @@ export class Player {
   private drawText(ctx: CanvasRenderingContext2D, c: Clip, k: number, look: ClipLook, localS: number): void {
     const W = ctx.canvas.width;
     const H = ctx.canvas.height;
+    const steadyKey = textIsAnimated(c) ? textSteadyKey(c, localS) : null;
     const canCacheStatic =
       W > 0 && H > 0
-      && !textIsAnimated(c)
+      && (!textIsAnimated(c) || steadyKey !== null)
       && c.mask === 'none'
       && look.dx === 0 && look.dy === 0 && look.blur === 0 && look.zoom === 1 && look.rgbSplit === 0
       && (typeof document === 'undefined' || !document.fonts || document.fonts.status === 'loaded');
 
     if (canCacheStatic) {
-      const cacheKey = `${c.id}:${W}x${H}:${this.textSignature(c)}`;
+      const cacheKey = `${c.id}:${W}x${H}:${this.textSignature(c)}:${steadyKey ?? 's'}`;
       let cached = this.staticTextCache.get(cacheKey);
       if (!cached) {
         cached = document.createElement('canvas');
