@@ -39,9 +39,11 @@ async function runFfmpegWithProgress(
   if (r.code !== 0) throw new ToolError('ffmpeg', r.code, r.stderr);
 }
 
-/** Escreve em `<destino>.part` e só renomeia no fim: cancelamento nunca deixa arquivo pela metade. */
+let atomicPartSeq = 0;
+
+/** Escreve em `<destino>.<seq>.part` e só renomeia no fim: cancelamento nunca colide com novo job. */
 async function atomicOutput<T>(fs: FileSystem, finalPath: string, work: (tmp: string) => Promise<T>): Promise<T> {
-  const tmp = `${finalPath}.part`;
+  const tmp = `${finalPath}.${++atomicPartSeq}.part`;
   try {
     const result = await work(tmp);
     // ffmpeg pode sair com código 0 sem gerar nada; isso é erro, não sucesso

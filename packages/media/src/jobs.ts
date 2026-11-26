@@ -89,7 +89,7 @@ export class JobQueue {
 
   enqueue<T>(spec: JobSpec<T>): { id: string; promise: Promise<T> } {
     for (const j of this.jobs.values()) {
-      if (j.spec.key === spec.key && (j.snap.status === 'queued' || j.snap.status === 'running')) {
+      if (j.spec.key === spec.key && !j.controller.signal.aborted && (j.snap.status === 'queued' || j.snap.status === 'running')) {
         return { id: j.snap.id, promise: j.promise as Promise<T> };
       }
     }

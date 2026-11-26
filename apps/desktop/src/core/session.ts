@@ -195,6 +195,13 @@ export class ProjectSession {
   }
 
   private changeCount = 0;
+  private readonly processSeq = new Map<string, number>();
+
+  private bumpProcessSeq(assetId: string): number {
+    const next = (this.processSeq.get(assetId) ?? 0) + 1;
+    this.processSeq.set(assetId, next);
+    return next;
+  }
 
   /** Incrementa a cada mudança (projeto, fila de jobs, artefatos). A UI usa para re-renderizar. */
   /** Só muda quando a UI é avisada: estável durante a renderização (senão o React entra em loop). */
@@ -240,11 +247,13 @@ export class ProjectSession {
   private afterChange(before: Map<string, string>): void {
     const now = new Map(this.project.assets.map((asset) => [asset.id, asset.path]));
     for (const id of before.keys()) if (!now.has(id)) {
+      this.bumpProcessSeq(id);
       this.queue.cancelAsset(id);
       this.runtime.delete(id);
     }
     for (const a of this.project.assets) {
       if ((!before.has(a.id) || before.get(a.id) !== a.path) && a.status !== 'missing') {
+        this.bumpProcessSeq(a.id);
         this.queue.cancelAsset(a.id);
         this.runtime.delete(a.id);
         void this.process(a);
@@ -988,6 +997,7 @@ export class ProjectSession {
 
   /** Gera (ou reaproveita do cache) os artefatos de um asset e atualiza seu estado. */
   private async process(asset: Asset): Promise<void> {
+    const mySeq = this.bumpProcessSeq(asset.id);
     if (!asset.probe || asset.kind === 'image') {
       const rt = this.assetRuntime(asset.id);
       this.runtime.set(asset.id, { ...rt, artifacts: { posterPath: asset.path, stripPath: null, waveformPath: null, proxyPath: null, audioProxyPath: null, audioStreamProxyPaths: {} } });
@@ -995,6 +1005,7 @@ export class ProjectSession {
       return;
     }
     const env = await this.mediaEnv();
+    if (this.disposed || this.processSeq.get(asset.id) !== mySeq) return;
     this.setStatus(asset.id, 'processing', null);
     // Músicas iniciam a análise musical imediatamente sem esperar proxies de vídeo na fila.
     if (asset.kind === 'audio' && !isSfxAsset(asset)) {
@@ -1003,7 +1014,7 @@ export class ProjectSession {
     const { artifacts, errors } = prepareArtifacts(env, { ...asset, probe: asset.probe });
     const result = await artifacts;
     const errs = await errors;
-    if (this.disposed || !this.project.assets.some((a) => a.id === asset.id)) return;
+    if (this.disposed || this.processSeq.get(asset.id) !== mySeq || !this.project.assets.some((a) => a.id === asset.id)) return;
     const rt = this.assetRuntime(asset.id);
     this.runtime.set(asset.id, { ...rt, artifacts: result, errors: errs });
     const cancelled = errs.length > 0 && errs.every((e) => e.endsWith('cancelado'));
@@ -1193,7 +1204,10 @@ export class ProjectSession {
 
   dispose(): void {
     this.disposed = true;
-    for (const a of this.project.assets) this.queue.cancelAsset(a.id);
+    for (const a of this.project.assets) {
+      this.bumpProcessSeq(a.id);
+      this.queue.cancelAsset(a.id);
+    }
     this.listeners.clear();
   }
 }
