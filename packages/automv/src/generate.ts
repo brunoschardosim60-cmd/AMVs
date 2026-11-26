@@ -1618,14 +1618,16 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       speechIntervals.push({ startS, endS: startS + len });
       const sourceText = speechCaptionText(ep, s, lang, opts);
       const reason = `Fala ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}" ` : ''}de ${ep.name} ${fmt(s.startS)} (impacto ${s.impact.toFixed(2)})`;
+      const speechConf = Number.isFinite(s.confidence) ? Math.max(0, Math.min(1, s.confidence)) : null;
       cmds.push({
         type: 'clip.add',
         clip: baseClip(v1.id, ep.assetId, t, len + 0.35, s.startS, reason, {
+          confidence: speechConf,
           effects: opts.useEffects ? [...gradeFx(style.grade)] : [],
           audio: selectedVideoAudio(streamFor(ep), -60),
         }),
       });
-      cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { audio: { gainDb: voiceGainDb(2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep), voiceIsolation: opts.useEffects !== false, echoTail: false } }) });
+      cmds.push({ type: 'clip.add', clip: baseClip(voice.id, ep.assetId, t, len, s.startS, reason, { confidence: speechConf, audio: { gainDb: voiceGainDb(2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.1), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep), voiceIsolation: opts.useEffects !== false, echoTail: false } }) });
       const subtitleTranslations = speechTranslation(ep, s, opts);
       const speechPreset = resolveSpeechPreset(opts.lyricStyle, Boolean(opts.lyrics?.length));
       if (opts.showText && opts.showSpeechCaptions !== false && text && sourceText) addCaptionPhrases(cmds, text.id, t, len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset, opts.useEffects);
@@ -2488,7 +2490,14 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       .join(' — ');
     const wasReused = used.has(c.id);
     const effectivePunchScale = wasReused && punchScale === 1 ? 1.12 : punchScale;
+    const measuredVisionConf = typeof currentVision?.confidence === 'number'
+      && Number.isFinite(currentVision.confidence)
+      && currentVision.confidence >= 0
+      && currentVision.confidence <= 1
+      ? currentVision.confidence
+      : null;
     const clip = baseClip(v1.id, c.ep.assetId, sl.startS, len, srcIn, why, {
+      confidence: measuredVisionConf,
       speed,
       sourceOutUs: us(srcIn) + us(srcLen),
       effects: clipEffects,
@@ -2681,11 +2690,13 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const reason = b.preDrop
       ? `Fala marcante antes do drop: ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada durante a fala`
       : `${visualSpeech ? 'Fala intercalada' : 'Narração sobre cortes de ação'}: ${sourceText ? `"${sourceText.replace(/\n/g, ' ')}"` : s.kind} — ${ep.name} ${fmt(s.startS)}; música abaixada`;
+    const blockSpeechConf = Number.isFinite(s.confidence) ? Math.max(0, Math.min(1, s.confidence)) : null;
     if (visualSpeech) {
       const lead = b.atS - b.from;
       const voiceDurS = Math.max(0.05, b.to - b.from);
       const voicePunchScale = opts.useEffects ? 1.06 : 1;
       const voiceClip = baseClip(v1.id, ep.assetId, b.from, voiceDurS, Math.max(0, s.startS - lead), reason, {
+        confidence: blockSpeechConf,
         effects: opts.useEffects ? gradeFx(style.grade) : [],
         audio: selectedVideoAudio(streamFor(ep), -60),
         transform: {
@@ -2705,7 +2716,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       }
       cmds.push({ type: 'clip.add', clip: voiceClip });
     }
-    cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { audio: { gainDb: voiceGainDb(b.preDrop ? 3 : 2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep), voiceIsolation: opts.useEffects !== false, echoTail: Boolean(opts.useEffects !== false && b.preDrop) } }) });
+    cmds.push({ type: 'clip.add', clip: baseClip(voice!.id, ep.assetId, b.atS, b.len, s.startS, reason, { confidence: blockSpeechConf, audio: { gainDb: voiceGainDb(b.preDrop ? 3 : 2, measuredVoiceLevel(ep, s)), fadeInUs: us(0.05), fadeOutUs: us(0.08), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: streamFor(ep), voiceIsolation: opts.useEffects !== false, echoTail: Boolean(opts.useEffects !== false && b.preDrop) } }) });
     const speechPreset = resolveSpeechPreset(opts.lyricStyle, Boolean(opts.lyrics?.length));
     if (opts.showText && opts.showSpeechCaptions !== false && text && sourceText && style.subtitles !== 'none') addCaptionPhrases(cmds, text.id, b.atS, b.len, sourceText, H, 'Legenda da fala', Math.max(s.impact, impactScore(sourceText)), subtitleTranslations, speechPreset, opts.useEffects, true);
     if (visualSpeech) clipsMade++;

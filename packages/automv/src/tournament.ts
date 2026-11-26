@@ -74,8 +74,10 @@ export function scoreAssemblyQuality(input: {
   const technical = Math.max(0, Math.min(28, 28 - issuePenalty));
 
   // 2. Sincronia Rítmica & Golpes na Batida (0..24)
-  const targetHitCount = Math.max(1, summary.cuts * 0.35);
-  const hitRatio = summary.cuts > 0 ? Math.min(1, summary.hitsSynced / targetHitCount) : 0;
+  const safeCuts = Number.isFinite(summary.cuts) && summary.cuts > 0 ? summary.cuts : 0;
+  const safeHits = Number.isFinite(summary.hitsSynced) && summary.hitsSynced > 0 ? summary.hitsSynced : 0;
+  const targetHitCount = Math.max(1, safeCuts * 0.35);
+  const hitRatio = safeCuts > 0 ? Math.min(1, safeHits / targetHitCount) : 0;
   const metChecks = review.alignment.filter((item) => item.status === 'met').length;
   const alignmentRatio = review.alignment.length ? metChecks / review.alignment.length : 0.7;
   const dropBonus = summary.drop !== null ? 4 : 2.5;
@@ -113,7 +115,7 @@ export function scoreAssemblyQuality(input: {
     for (const clip of v1Clips) {
       const ep = epById.get(clip.assetId!);
       const shot = findShotForClip(ep, clip);
-      if (!shot) continue;
+      if (!shot || !Number.isFinite(shot.intensity)) continue;
       const rel = (clip.timelineStartUs - start0) / totalDurUs;
       if (rel <= 0.25) openingIntensities.push(shot.intensity);
       else if (rel >= 0.32 && rel <= 0.82) climaxIntensities.push(shot.intensity);

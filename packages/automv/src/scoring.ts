@@ -56,6 +56,15 @@ export interface SceneScoreBreakdown {
 
 const TRUSTED_VISION_CONFIDENCE = 0.55;
 
+function finiteOr(value: number | null | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function clampFinite(value: number | null | undefined, min: number, max: number, fallback: number): number {
+  const n = finiteOr(value, fallback);
+  return Math.max(min, Math.min(max, n));
+}
+
 function trusted(vision: VisualEvidence | undefined): vision is VisualEvidence & { confidence: number } {
   const confidence = vision?.confidence;
   return typeof confidence === 'number'
@@ -116,9 +125,11 @@ function motionTransition(
 export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdown {
   const { shot, style, current, previous, vision } = input;
   const reasons: string[] = [];
-  const sceneIntensity = input.effectiveIntensity ?? shot.intensity;
-  const music = 1 - Math.abs(input.targetIntensity - sceneIntensity) * 1.6;
-  if (Math.abs(input.targetIntensity - sceneIntensity) <= 0.2) reasons.push('energia visual próxima da meta musical');
+  const sceneIntensity = clampFinite(input.effectiveIntensity ?? shot.intensity, 0, 1, 0.5);
+  const targetIntensity = clampFinite(input.targetIntensity, 0, 1, 0.5);
+  const musicEnergy = clampFinite(input.musicEnergy, 0, 1, 0.5);
+  const music = 1 - Math.abs(targetIntensity - sceneIntensity) * 1.6;
+  if (Math.abs(targetIntensity - sceneIntensity) <= 0.2) reasons.push('energia visual próxima da meta musical');
   else reasons.push('energia visual distante da meta; outros critérios podem justificar a escolha');
 
   let narrative = 0;
@@ -518,19 +529,19 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
     }
   }
 
-  const lyricBase = input.lyricMatchScore === undefined
+  const lyricBase = input.lyricMatchScore === undefined || !Number.isFinite(input.lyricMatchScore)
     ? 0
-    : (Math.max(0, Math.min(1, input.lyricMatchScore)) - 0.5) * 2;
+    : (clampFinite(input.lyricMatchScore, 0, 1, 0.5) - 0.5) * 2;
   const lyric = lyricBase * (style.editorialIntent === 'lyrics' ? 1.3 : 1);
   if (lyric > 0) reasons.push(style.editorialIntent === 'lyrics'
     ? 'correspondência semântica reforçada pelo objetivo de sincronizar a letra'
     : 'correspondência opcional entre letra e cena');
   else if (lyric < 0) reasons.push('correspondência opcional letra/cena abaixo do ponto neutro');
 
-  const actionEmphasis = input.creativeEmphasis?.action ?? 50;
-  const emotionEmphasis = input.creativeEmphasis?.emotion ?? 50;
-  const actionWeight = 0.5 + Math.max(0, Math.min(100, actionEmphasis)) / 100;
-  const emotionWeight = 0.5 + Math.max(0, Math.min(100, emotionEmphasis)) / 100;
+  const actionEmphasis = clampFinite(input.creativeEmphasis?.action, 0, 100, 50);
+  const emotionEmphasis = clampFinite(input.creativeEmphasis?.emotion, 0, 100, 50);
+  const actionWeight = 0.5 + actionEmphasis / 100;
+  const emotionWeight = 0.5 + emotionEmphasis / 100;
   if (input.creativeEmphasis?.preferredEmotion && trusted(vision) && vision.emotion === input.creativeEmphasis.preferredEmotion) {
     emotion += 0.18;
     reasons.push(`emoção principal do perfil identificada com confiança (${vision.emotion})`);
@@ -538,18 +549,28 @@ export function scoreSceneCandidate(input: SceneScoringInput): SceneScoreBreakdo
   if (action !== 0 && actionWeight !== 1) reasons.push(`peso de ação do perfil (${Math.round(actionEmphasis)}%) aplicado às evidências disponíveis`);
   if (emotion !== 0 && emotionWeight !== 1) reasons.push(`peso emocional do perfil (${Math.round(emotionEmphasis)}%) aplicado às evidências disponíveis`);
 
+  const safeAction = finiteOr(action, 0);
+  const safeEmotion = finiteOr(emotion, 0);
+  const safeNarrative = finiteOr(narrative, 0);
+  const safeTransition = finiteOr(transition, 0);
+  const safeDiversity = finiteOr(diversity, 0);
+  const safeLyric = finiteOr(lyric, 0);
+  const safeVisual = finiteOr(visual, 0);
+  const safeFraming = finiteOr(framingProgression, 0);
+  const rawTotal = music + safeAction * actionWeight + safeEmotion * emotionWeight + safeNarrative + safeTransition + safeDiversity + safeLyric + safeVisual + safeFraming;
+
   return {
     music,
-    action,
+    action: safeAction,
     actionWeight,
-    emotion,
+    emotion: safeEmotion,
     emotionWeight,
-    narrative,
-    transition,
-    diversity,
-    lyric,
-    visual,
-    total: music + action * actionWeight + emotion * emotionWeight + narrative + transition + diversity + lyric + visual + framingProgression,
+    narrative: safeNarrative,
+    transition: safeTransition,
+    diversity: safeDiversity,
+    lyric: safeLyric,
+    visual: safeVisual,
+    total: finiteOr(rawTotal, 0),
     reasons,
   };
 }

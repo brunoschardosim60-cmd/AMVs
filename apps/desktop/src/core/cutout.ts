@@ -140,40 +140,55 @@ export async function generateCutoutPngForSource(
   platform: Platform,
   asset: Asset,
   sourceTimeS: number,
-  options: { strokePx?: number; strokeColor?: string; focus?: [number, number] } = {},
+  options: { strokePx?: number; strokeColor?: string; focus?: [number, number]; sidecarTimeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<{ pngPath: string; engine: string }> {
+  if (options.signal?.aborted) throw new DOMException('recorte cancelado', 'AbortError');
   const cutoutDir = joinPath(await platform.cacheDir(), 'cutouts');
   await platform.fs.mkdir(cutoutDir);
 
   const strokePx = options.strokePx ?? 4;
   const strokeColor = options.strokeColor ?? '#ffffff';
+  const sidecarTimeoutMs = Math.max(50, options.sidecarTimeoutMs ?? 12_000);
   let pngPath: string | null = null;
   let engine = 'canvas-matting';
 
-  // Tenta primeiro o sidecar Python (/cutout/frame com suporte a ONNX DirectML GPU)
+  // Tenta primeiro o sidecar Python (/cutout/frame com suporte a ONNX DirectML GPU), degradando em timeout/indisponibilidade
   try {
-    const conn = await platform.analyzer.start();
-    const res = await platform.http(`${conn.baseUrl}/cutout/frame`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${conn.token}` },
-      body: JSON.stringify({
-        path: asset.path,
-        ffmpeg_path: 'ffmpeg',
-        output_dir: cutoutDir,
-        time_s: sourceTimeS,
-        stroke_px: strokePx,
-        stroke_color: strokeColor,
-      }),
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('timeout no sidecar de recorte')), sidecarTimeoutMs);
     });
-    if (res.ok) {
-      const data = JSON.parse(await res.text()) as { path?: string; engine?: string };
-      if (data.path && (await platform.fs.exists(data.path))) {
-        pngPath = data.path;
-        engine = data.engine ?? 'analyzer';
-      }
+    try {
+      const sidecarWork = (async () => {
+        const conn = await platform.analyzer.start();
+        if (options.signal?.aborted) throw new DOMException('recorte cancelado', 'AbortError');
+        const res = await platform.http(`${conn.baseUrl}/cutout/frame`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${conn.token}` },
+          body: JSON.stringify({
+            path: asset.path,
+            ffmpeg_path: 'ffmpeg',
+            output_dir: cutoutDir,
+            time_s: sourceTimeS,
+            stroke_px: strokePx,
+            stroke_color: strokeColor,
+          }),
+        });
+        if (res.ok) {
+          const data = JSON.parse(await res.text()) as { path?: string; engine?: string };
+          if (data.path && (await platform.fs.exists(data.path))) {
+            pngPath = data.path;
+            engine = data.engine ?? 'analyzer';
+          }
+        }
+      })();
+      await Promise.race([sidecarWork, timeoutPromise]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
-  } catch {
-    // Fallback local abaixo quando o sidecar não está ativo ou FFmpeg não está no PATH do sidecar
+  } catch (err) {
+    if ((err as Error)?.name === 'AbortError' || options.signal?.aborted) throw err;
+    // Fallback local abaixo quando o sidecar não está ativo, expira ou FFmpeg não está no PATH do sidecar
   }
 
   if (!pngPath) {
