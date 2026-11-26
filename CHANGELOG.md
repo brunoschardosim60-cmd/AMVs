@@ -1,5 +1,13 @@
 # Novidades
 
+## 0.9.8
+
+**Alinhamento do workflow de Release no GitHub Actions com a concorrência controlada de testes (`--workspace-concurrency=2`) e PATH do FFmpeg empacotado.**
+
+- **Pipeline de Release Windows:** alinhado `.github/workflows/release.yml` e `package.json` com `.github/workflows/ci.yml` (`--workspace-concurrency=2` e `GITHUB_PATH` do FFmpeg) para evitar contenção de CPU durante os testes de integração FFmpeg em runners Windows antes de assinar e publicar o instalador.
+- **Verificação:** `pnpm --filter @amv/desktop test` e `pnpm typecheck` validados localmente; workflow `CI` de `main` já aprovado no GitHub Actions.
+- **Limitações novas:** nenhuma.
+
 ## 0.9.7
 
 **Reconstrução do recorte de personagem (V2): segmentação neural real IS-Net Anime (ONNX DirectML GPU), recorte em vídeo transparente em movimento 1:1 e eliminação definitiva do fallback heurístico que despedaçava cenas escuras.**

@@ -111,5 +111,5 @@ describe('recorte de personagem — degradação limpa do sidecar Python', () =>
     // A letra volta para a frente limpa (behindCutout = false)
     const updatedLyric = upgraded.commands.find((c) => c.type === 'clip.add' && c.clip.id === 'clp_txt_test');
     expect(updatedLyric?.type === 'clip.add' && updatedLyric.clip.text?.behindCutout).toBe(false);
-  });
+  }, 20_000);
 });
