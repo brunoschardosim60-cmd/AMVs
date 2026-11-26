@@ -1,25 +1,52 @@
 # Novidades
 
+## 0.9.5
+
+**Estabilização do preview com textos animados e cortes rápidos, eliminação de corrida em undo/redo de importação, blindagem numérica na pontuação e protocolo de validação real.**
+
+- **Preview fluido na entrada e sequência de textos:** desacoplada a rasterização dos glifos (`renderTextSpriteCanvas`, em canvas recortado) do envelope quadro a quadro (`evalTextEnvelope` para `pop`, `slide`, `fade`, `blur`, `keyframes` e `shake`), com pré-aquecimento antecipado antes da entrada do texto e da próxima palavra ativa, além de espaçamento nativo sem repetir desfoque Gaussiano caractere a caractere.
+- **Fim do retorno/mensagem indevida no vídeo:** eliminada a realimentação em que `Preview.tsx` interpretava atrasos de renderização como seek manual e rebobinava o relógio; limitado o pool de mídia abaixo do teto de 6 conexões HTTP/1.1 simultâneas de `asset.localhost` no WebView2; descartados quadros antigos de preload em seeks distantes e absorvidos engasgos de thread principal no relógio.
+- **Robustez e concorrência:** corrigida corrida em `JobQueue.enqueue`, `atomicOutput` e `ProjectSession.process` ao desfazer e refazer importações em sequência; blindados `scoreSceneCandidate` e `scoreAssemblyQuality` contra `NaN`/`Infinity` e divisão por zero; adicionado timeout explícito no fallback do sidecar Python de recorte.
+- **Documentação e protocolo de estabilização:** criados `docs/BASELINE.md`, `docs/VALIDACAO_REAL.md` (todos os itens de mídia real marcados como `PENDENTE`) e `docs/PROPOSTA_MODO_PRO.md`; consolidados `docs/LIMITATIONS.md`, `docs/STATUS.md`, `docs/ROADMAP.md` e `README.md`; removidos caracteres corrompidos e caminhos pessoais do repositório.
+- **Verificação:** `pnpm typecheck`, `pnpm --filter @amv/desktop build` e suíte automatizada (`pnpm -r --workspace-concurrency=2 test`) validados apenas com mídia sintética e testes unitários/integração FFmpeg.
+- **Limitações novas:** nenhuma funcionalidade nova; a fluidez e a paridade visual em episódios reais no WebView2 permanecem `PENDENTE` de execução humana conforme `docs/VALIDACAO_REAL.md`.
+
 ## 0.9.4
 
-- Desempenho do preview: o Raio-X (HUD) recalculava a leitura a cada 50 ms durante a reprodução e o Inspector de texto re-renderizava a cada quadro; agora o HUD atualiza ~3x/s tocando e o Inspector só observa o playhead na prévia de palavra.
-- Cortes rápidos: pré-carrega até 5 próximos clipes por trilha (antes 2), 3 s de antecedência, e guarda o 1º quadro para não aparecer buraco na entrada.
+**Redução de re-renderizações no HUD Raio-X e no Inspector de texto durante a reprodução.**
+
+- **Desempenho do preview:** o Raio-X (HUD) passou a atualizar ~3×/s durante a reprodução (acompanhando na hora quando pausado) e a seção de texto do Inspector deixou de re-renderizar a cada quadro fora da prévia de palavra.
+- **Pré-carregamento de cortes:** ajustada a janela de pré-carregamento e captura do primeiro quadro nos slots de vídeo.
+- **Verificação:** `pnpm typecheck`, build Vite e testes de `apps/desktop` validados apenas com mídia sintética.
+- **Limitações novas:** o aumento do pool de conexões pré-carregadas e os textos com entrada animada ainda podiam causar contenção no WebView2 (corrigido na `0.9.5`).
 
 ## 0.9.3
 
-- Preview: textos com legenda palavra a palavra agora s�o cacheados por palavra ativa, eliminando o travamento com textos seguidos.
+**Cache de estado estável por palavra ativa em legendas cronometradas no preview.**
+
+- **Preview:** adicionados `activeWordIndex` e `textSteadyKey` para reaproveitar o quadro de texto entre trocas de palavra quando não há animação contínua de entrada/saída.
+- **Verificação:** `pnpm typecheck`, build Vite e testes de `apps/desktop` validados apenas com mídia sintética.
+- **Limitações novas:** presets com `sheen`, `chromaticAberration`, `keyframes` de escala ou `animationIn` ainda redesenhavam fora do cache (corrigido na `0.9.5`).
 
 ## 0.9.2
 
-- Legendas: corrigido cache de texto est�tico que mantinha a legenda antiga/sumida ap�s edi��es.
-- Legibilidade: sombra m�nima autom�tica no preview e contorno/sombra m�nimos ao harmonizar textos pequenos.
-- Gera��o: m�scaras V2 geradas agora viram recortes PNG reais automaticamente.
+**Invalidação correta do cache de texto ao editar legendas, piso de legibilidade e ligação de recortes V2 na geração.**
+
+- **Legendas:** incluída assinatura do conteúdo/estilo na chave do cache de texto do preview para refletir edições imediatamente.
+- **Legibilidade:** sombra mínima de segurança em textos sem contorno/brilho no preview e contorno/sombra mínimos para textos pequenos em `harmonizeTextClipsWithScenes`.
+- **Geração:** conectada `upgradeGeneratedV2Cutouts` ao fluxo final do `GenerateDialog` com fallback não bloqueante.
+- **Verificação:** `pnpm typecheck`, build Vite e suíte completa de testes validados apenas com mídia sintética.
+- **Limitações novas:** o piso de sombra automática do preview aplica-se ao canvas e à harmonização; validação em episódios reais pendente.
 
 ## 0.9.1
 
-- Preview: texto est�tico em cache e mescla correta (blend) de camadas de texto em buffer isolado.
-- Render: blend com RGBA para melhor fidelidade de cor.
-- Recortes: gera��o/upgrade de m�scaras V2 reutiliz�vel.
+**Cache inicial para textos estáticos, buffer isolado para modos de mesclagem no preview e blend RGBA no FFmpeg.**
+
+- **Preview:** textos totalmente estáticos cacheados em canvas off-screen e composição em camada isolada para `blendMode` diferente de `normal` (evitando dupla inversão entre contorno e preenchimento).
+- **Render:** filtro de mesclagem alterado de `yuva420p` para `rgba` em `packages/render` para preservar croma.
+- **Recortes:** extraídas `generateCutoutPngForSource` e `upgradeGeneratedV2Cutouts` em `cutout.ts`.
+- **Verificação:** `pnpm typecheck`, build Vite e suíte completa de testes validados apenas com mídia sintética.
+- **Limitações novas:** a chave inicial do cache estático não incluía edições no texto do mesmo clipe (corrigido na `0.9.2`).
 
 ## 0.9.0
 

@@ -1,25 +1,26 @@
 # AMV Studio
 
-App desktop (Tauri + React + Python) para criar Anime Music Videos com editor não linear, montagem automática assistida por IA, Music Hub e Translation Studio.
+App desktop (Tauri 2 + React/TypeScript + sidecar Python opcional) para criar Anime Music Videos com editor não linear multipista, montagem automática auditável, Music Hub e Translation Studio.
 
-O que já faz:
-- **Editor** multipista com preview, efeitos, transições, textos, mixagem e exportação até 4K a partir dos originais.
-- **Gerar meu AMV**: analisa música, cenas, falas e legendas e monta o vídeo em 6 estilos, com clipes editáveis.
-- **Assistente**: pedidos em português viram propostas que você aprova item por item. Funciona offline ou com Ollama, Claude, OpenAI e compatíveis.
-- **Músicas**: biblioteca com análise, filtros, playlists, comparação, player persistente e recomendação por tema.
-- **Legendas**: importar SRT/ASS/VTT/LRC, encaixar as falas do episódio, editar, sincronizar e exportar.
+O que faz:
+- **Editor** multipista com preview por proxy, efeitos, transições, tipografia, mixagem e exportação até 4K a partir dos originais intactos.
+- **Gerar meu AMV**: analisa música, cenas, falas e legendas e monta o vídeo em estilos editoriais com clipes 100% editáveis e justificativa (`reason` + `confidence`).
+- **Assistente**: pedidos em português viram propostas (`ChangeSet`) que você aprova antes de aplicar. Funciona offline ou com provedores configuráveis.
+- **Músicas**: biblioteca local com análise de BPM/energia, filtros, comparação e recomendações.
+- **Legendas**: importar SRT/ASS/VTT/LRC, extrair do episódio, sincronizar, traduzir e exportar.
 
-- Direção editorial e prompt reutilizável do Auto AMV: [`docs/prompts/AMV_EDITORIAL_PROMPT.md`](docs/prompts/AMV_EDITORIAL_PROMPT.md) · [pesquisa e critérios](docs/AMV_EDITORIAL_QUALITY.md)
-- Pesquisa técnica de algoritmos: [`docs/AMV_ALGORITHM_RESEARCH.md`](docs/AMV_ALGORITHM_RESEARCH.md)
-- Validação real do Auto AMV: [`docs/AMV_REAL_MEDIA_VALIDATION.md`](docs/AMV_REAL_MEDIA_VALIDATION.md)
-- Integração do patch e validações pendentes: [`docs/MELHORIAS-AMV.md`](docs/MELHORIAS-AMV.md)
-- Roadmap de melhorias: [`ROADMAP-MELHORIAS-AMV.md`](ROADMAP-MELHORIAS-AMV.md)
-- Especificação, arquitetura e regras: [`AGENTS.md`](AGENTS.md)
-- Andamento: [`docs/STATUS.md`](docs/STATUS.md) · decisões: [`docs/DECISIONS.md`](docs/DECISIONS.md) · limitações: [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md)
+Documentação principal:
+- Especificação, arquitetura travada e invariantes: [`AGENTS.md`](AGENTS.md) · [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- Estado atual, roadmap e decisões: [`docs/STATUS.md`](docs/STATUS.md) · [`docs/ROADMAP.md`](docs/ROADMAP.md) · [`docs/DECISIONS.md`](docs/DECISIONS.md)
+- Limitações conhecidas e histórico arquivado: [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md)
+- Baseline técnico e métricas de complexidade: [`docs/BASELINE.md`](docs/BASELINE.md)
+- Protocolo de validação com mídia real e checklist Windows: [`docs/VALIDACAO_REAL.md`](docs/VALIDACAO_REAL.md) · [`docs/TESTE_MANUAL_WINDOWS.md`](docs/TESTE_MANUAL_WINDOWS.md)
+- Proposta de organização da interface (`Modo Pro`): [`docs/PROPOSTA_MODO_PRO.md`](docs/PROPOSTA_MODO_PRO.md)
+- Direção editorial e critérios de qualidade: [`docs/prompts/AMV_EDITORIAL_PROMPT.md`](docs/prompts/AMV_EDITORIAL_PROMPT.md) · [`docs/AMV_EDITORIAL_QUALITY.md`](docs/AMV_EDITORIAL_QUALITY.md)
 
 ## Baixar e testar no Windows
 
-Baixe o instalador em **Releases** (a versão mais nova). Depois de instalado, o app se atualiza sozinho.
+Baixe o instalador NSIS em **Releases** (versão mais recente). O instalador atualiza a pasta única em `%LOCALAPPDATA%\AMV Studio`.
 
 ## Desenvolvimento
 
@@ -29,24 +30,25 @@ Requisitos: Node 22+, pnpm 10, Rust estável. No Windows, o WebView2 já vem com
 pnpm install
 pnpm ffmpeg      # baixa o FFmpeg para src-tauri/binaries (Windows) ou copia o do sistema (Linux/macOS)
 pnpm fixtures    # gera mídia de teste sintética
-pnpm test        # testes, incluindo integração com FFmpeg real
-pnpm dev         # abre o app
+pnpm typecheck   # validação estática TypeScript em todos os pacotes
+pnpm test        # testes unitários e de integração com FFmpeg real
+pnpm dev         # abre o app em modo desenvolvimento
 ```
 
 Estrutura:
 
-```
+```text
 apps/desktop        app Tauri + React (core/ = lógica testável, features/ = telas)
-packages/project    modelo do projeto, comandos, undo/redo, serialização
+packages/project    modelo do projeto, comandos puros, undo/redo, migrações
 packages/media      FFmpeg: probe, proxy, miniaturas, waveform, fila de jobs
-packages/render     projeto → FFmpeg (exportação), mesma matemática dos efeitos do preview
-packages/analysis   análise de música e de episódio, legendas (parse)
-packages/automv     Gerar meu AMV (montagem por evidências, perfis criativos e qualidade)
-packages/subtitles  legendas na timeline (importar, puxar do episódio, exportar)
+packages/render     projeto → grafo FFmpeg (exportação)
+packages/analysis   análise de música, episódio e legendas
+packages/automv     planejamento, pontuação, revisão e reparo automático de AMVs
+packages/subtitles  operações puras de legendas (SRT/ASS/VTT/LRC)
 packages/music      biblioteca de músicas e recomendação
-packages/assistant  assistente: provedores de IA, ferramentas, propostas (ChangeSet)
-packages/sfx        geração local de efeitos sonoros sintéticos
+packages/assistant  provedores de IA, ferramentas e ChangeSet
+packages/sfx        síntese local de efeitos sonoros
 packages/sound-design biblioteca e sugestões locais de sound design
-services/analyzer   sidecar Python de análise (opcional)
-scripts             fixtures sintéticas e download do FFmpeg
+services/analyzer   sidecar Python opcional (Whisper / recorte neural)
+scripts             fixtures sintéticas, release e download do FFmpeg
 ```

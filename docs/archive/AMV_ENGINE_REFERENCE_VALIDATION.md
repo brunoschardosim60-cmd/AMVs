@@ -5,7 +5,7 @@
 
 ## Arquivos recebidos
 
-Os originais ficaram em `C:\Users\Bruno\Downloads` e não foram alterados, copiados para o repositório, enviados a serviços externos ou incluídos num commit.
+Os originais ficaram em `<LOCAL_USER_DIR>\Downloads` e não foram alterados, copiados para o repositório, enviados a serviços externos ou incluídos num commit.
 
 | Arquivo | Dados observados |
 |---|---|

@@ -79,7 +79,7 @@ Referências upstream:
 
 ## Fase 2.2 — primeiro teste visual com o episódio fornecido (2026-11-09)
 
-**Estado: teste real executado, mas cobertura parcial e gate reprovado.** A mídia estava na raiz de `C:\Users\Bruno\Videos\AMV-SAM2-Quality`, não em `originais`. Foi usado o venv isolado já verificado em `runtime\venv`; não foi instalado CUDA, alterado o instalador nem incluída mídia no Git.
+**Estado: teste real executado, mas cobertura parcial e gate reprovado.** A mídia estava na raiz de `<LOCAL_USER_DIR>\Videos\AMV-SAM2-Quality`, não em `originais`. Foi usado o venv isolado já verificado em `runtime\venv`; não foi instalado CUDA, alterado o instalador nem incluída mídia no Git.
 
 ### Execução e desempenho
 
@@ -112,7 +112,7 @@ O SHA-256 dos pesos conferiu (`7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5
 Comparativos e medições estão fora do repositório, em:
 
 ```text
-C:\Users\Bruno\Videos\AMV-SAM2-Quality\resultados\sam2_real_857_5_860_5\
+<LOCAL_USER_DIR>\Videos\AMV-SAM2-Quality\resultados\sam2_real_857_5_860_5\
   visual_comparison.png
   correction_before_after.png
   original_silent.mp4
@@ -123,7 +123,7 @@ C:\Users\Bruno\Videos\AMV-SAM2-Quality\resultados\sam2_real_857_5_860_5\
   prompts.json
   results.json
 
-C:\Users\Bruno\Videos\AMV-SAM2-Quality\resultados\sam2_correction_validated\
+<LOCAL_USER_DIR>\Videos\AMV-SAM2-Quality\resultados\sam2_correction_validated\
   correction_frame36_before_after.png
   corrected_mask.mp4
   corrected_rgba_rgb_preview.mp4

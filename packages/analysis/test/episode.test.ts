@@ -53,7 +53,7 @@ describe('episódio', () => {
     expect(viaFile.some((f) => f.ydif > 0) && viaFile.some((f) => f.yavg > 0) && viaFile.some((f) => f.scene > 0.3)).toBe(true);
     expect(existsSync(file)).toBe(false);
     expect(fr.length).toBeGreaterThan(0);
-    expect(filterPath('C:\\Users\\Bruno\\cache\\q.txt')).toBe('C\\\\:/Users/Bruno/cache/q.txt');
+    expect(filterPath('C:\\Users\\Exemplo\\cache\\q.txt')).toBe('C\\\\:/Users/Exemplo/cache/q.txt');
   });
 
 

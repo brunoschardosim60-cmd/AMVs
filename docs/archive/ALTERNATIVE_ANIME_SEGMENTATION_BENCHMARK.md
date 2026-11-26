@@ -29,13 +29,13 @@ Não foi testado vídeo/tracking, CUTIE nem o episódio inteiro. Não houve alte
 
 O benchmark de tempo cobre inferência ONNX, não decodificação ou escrita das imagens. A memória é o pico observado do processo, incluindo o runtime, não uma medida isolada de alocação do modelo. VRAM não foi usada nem medida.
 
-JSON com os valores por imagem: `C:\Users\Bruno\Videos\AMV-SAM2-Quality\resultados\skytnt_isnetis_image_tests\metrics.json`.
+JSON com os valores por imagem: `<LOCAL_USER_DIR>\Videos\AMV-SAM2-Quality\resultados\skytnt_isnetis_image_tests\metrics.json`.
 
 ## Avaliação visual — Fase 2.3
 
 Comparativo gerado com original, máscara em escala de cinza, composição sobre preto, branco, magenta e quadriculado de transparência:
 
-`C:\Users\Bruno\Videos\AMV-SAM2-Quality\resultados\skytnt_isnetis_image_tests\comparison.png`
+`<LOCAL_USER_DIR>\Videos\AMV-SAM2-Quality\resultados\skytnt_isnetis_image_tests\comparison.png`
 
 Arquivos PNG integrais de origem, máscara e recorte RGBA também ficam nessa pasta (`original_*.png`, `mask_*.png`, `cutout_*.png`). As cinco máscaras têm área com alpha ≥ 0,5 igual a zero. Os quadros de close-up deixam uma resposta muito fraca, sem recorte de cabelo/rosto/roupa; nas imagens de ação a máscara também não separa o personagem do cenário. Isso é falha de recorte, não uma avaliação de fidelidade de contorno: não existe silhueta suficientemente opaca para avaliar fios, acessórios ou bordas com precisão.
 
@@ -107,7 +107,7 @@ Estatísticas calculadas sobre a máscara float32 restaurada à resolução orig
 - Média de inferência PyTorch: **0,748 s/quadro em 640** e **1,878 s/quadro em 1024**, com carregamento de pesos de 0,644 s e 0,439 s, respectivamente. ONNX em 1024: 1,50–1,72 s/quadro nesta comparação. Tempos são inferência, sem decodificação ou escrita.
 - Não há anotação de referência, então não foram calculados IoU/precisão. Os dados não permitem avaliar tracking, estabilidade temporal ou cortes de câmera.
 
-Comparativos completos salvos fora do Git em `C:\Users\Bruno\Videos\AMV-SAM2-Quality\resultados\skytnt_isnetis_pytorch_validation`:
+Comparativos completos salvos fora do Git em `<LOCAL_USER_DIR>\Videos\AMV-SAM2-Quality\resultados\skytnt_isnetis_pytorch_validation`:
 
 - `comparison_pytorch_640.png`: original, máscara PyTorch 640 e composições em preto, branco e magenta.
 - `comparison_pytorch_vs_onnx_1024.png`: original e máscara/composições PyTorch e ONNX para os mesmos cinco quadros.

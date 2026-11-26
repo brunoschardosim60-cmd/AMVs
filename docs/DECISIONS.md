@@ -180,7 +180,7 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - Decisão: **REPROVADO para avançar o gate de integração**. Isto não é uma conclusão de que SAM 2 nunca possa servir ao caso; não houve teste com anime autorizado, múltiplos prompts nem correção manual. Requer dados reais anotados e nova avaliação antes de integrar.
 - `_C` faz o preenchimento opcional de buracos pequenos via componentes conectados. O upstream só oferece construção CUDA (`CUDAExtension`/`.cu`); no host CPU/Radeon não há comparação ou instalação compatível. SciPy/OpenCV são alternativas CPU a avaliar, mas não foram instaladas nem testadas.
 - Relatório, métricas e comparações sintéticas: [benchmark SAM 2.1](./SAM2_QUALITY_BENCHMARK.md). Os PNGs são explicitamente sintéticos, não evidência de qualidade em anime.
-- Para a Fase 2.2, não buscar vídeos aleatórios na internet. A pasta de entrada fica em `C:\Users\Bruno\Videos\AMV-SAM2-Quality`, fora do Git. A avaliação real permanece bloqueada até receber clipes próprios/licenciados.
+- Para a Fase 2.2, não buscar vídeos aleatórios na internet. A pasta de entrada fica em `<LOCAL_USER_DIR>\Videos\AMV-SAM2-Quality`, fora do Git. A avaliação real permanece bloqueada até receber clipes próprios/licenciados.
 - O predictor SAM 2 fixado oferece pontos positivos/negativos por quadro (`add_new_points_or_box`) e máscara binária por quadro (`add_new_mask`). A possibilidade de usar esses prompts para corrigir o estado e propagar novamente é tecnicamente fundamentada no upstream, mas ainda não existe protótipo do ciclo nem teste local com o modelo; não considerar implementado.
 
 ## 2026-11-09 · Fase 2.2 — teste visual real de SAM 2.1 Tiny
@@ -189,7 +189,7 @@ Registro de decisões técnicas. Formato: data · decisão · motivo · alternat
 - Adicionar pontos positivos/negativos ao estado propagado no quadro 36 e repetir a propagação não alterou a máscara vazia. Um teste isolado com novos pontos no mesmo quadro gerou somente uma máscara parcial de pernas/roupa, ~5,023% da imagem.
 - Decisão mantida: **REPROVADO para integração**. Os resultados reais reforçam que a saída não é confiável sem revisão, mas não cobrem todos os cenários nem substituem ground truth anotado; não são uma avaliação geral do modelo.
 - A música fornecida não foi usada nesta validação visual. Nenhum clipe foi copiado ao repositório, e não houve mudança na UI, timeline, instalador ou dependências do app.
-- Comparativos, prompts e medições ficaram fora do Git em `C:\Users\Bruno\Videos\AMV-SAM2-Quality\resultados`; ver [relatório SAM 2.1](./SAM2_QUALITY_BENCHMARK.md).
+- Comparativos, prompts e medições ficaram fora do Git em `<LOCAL_USER_DIR>\Videos\AMV-SAM2-Quality\resultados`; ver [relatório SAM 2.1](./SAM2_QUALITY_BENCHMARK.md).
 
 ## 2026-11-09 · Fase 2.3 — gate visual do SkyTNT ISNet_IS
 - Testar primeiro o ONNX oficial do `skytnt/anime-seg` isoladamente, sem instalar dependências no app, e só executar a etapa temporal se os quadros individuais fossem utilizáveis.
