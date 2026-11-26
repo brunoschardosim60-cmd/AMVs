@@ -561,6 +561,13 @@ export function harmonizeTextClipsWithScenes(input: {
     let nextDurationUs = tc.durationUs;
     let changed = false;
 
+    // 0. Piso de legibilidade: texto pequeno e sem fundo sempre ganha contorno e sombra mínimos.
+    if (textSpec.size <= H * 0.068 && (!textSpec.background || textSpec.background === 'none')) {
+      if ((nextTextPatch.outlineWidth ?? 0) < 2) { nextTextPatch.outlineWidth = 2; changed = true; }
+      if (!nextTextPatch.outlineColor) { nextTextPatch.outlineColor = '#000000'; changed = true; }
+      if (!nextTextPatch.shadow) { nextTextPatch.shadow = true; changed = true; }
+    }
+
     // 1. Paleta reativa da cena (apenas para letras/títulos, mantendo legendas de fala legíveis na base)
     const isBottomDialogue = tc.transform.y >= H * 0.28 && textSpec.size <= H * 0.068;
     const palette = local?.dominantColors?.map(boostPaletteColor).find(Boolean) ?? null;

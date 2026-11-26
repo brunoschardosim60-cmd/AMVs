@@ -271,6 +271,7 @@ export class Player {
   private colorBuffer: HTMLCanvasElement | null = null;
   private textBlendBuffer: HTMLCanvasElement | null = null;
   private readonly staticTextCache = new Map<string, HTMLCanvasElement>();
+  private readonly textSigCache = new WeakMap<Clip, string>();
   private readonly colorLuts = new Map<string, ColorGradeLut>();
   private colorGradeGpu: ColorGradeGpu | null | undefined;
   private audioContext: AudioContext | null = null;
@@ -1020,6 +1021,16 @@ export class Player {
     }
   }
 
+  /** Assinatura do conteúdo/estilo do texto: invalida o cache estático quando o clip é editado. */
+  private textSignature(c: Clip): string {
+    let sig = this.textSigCache.get(c);
+    if (!sig) {
+      sig = JSON.stringify([c.text, c.transform, c.mask, c.blendMode, c.effects, c.durationUs]);
+      this.textSigCache.set(c, sig);
+    }
+    return sig;
+  }
+
   private drawText(ctx: CanvasRenderingContext2D, c: Clip, k: number, look: ClipLook, localS: number): void {
     const W = ctx.canvas.width;
     const H = ctx.canvas.height;
@@ -1031,7 +1042,7 @@ export class Player {
       && (typeof document === 'undefined' || !document.fonts || document.fonts.status === 'loaded');
 
     if (canCacheStatic) {
-      const cacheKey = `${c.id}:${W}x${H}`;
+      const cacheKey = `${c.id}:${W}x${H}:${this.textSignature(c)}`;
       let cached = this.staticTextCache.get(cacheKey);
       if (!cached) {
         cached = document.createElement('canvas');

@@ -9,6 +9,7 @@ import { getAnalysisReadiness } from './analysis-readiness';
 import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2, Zap } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectSession } from '../../core/session';
+import { upgradeGeneratedV2Cutouts } from '../../core/cutout';
 import { useApp, useLibraryVersion, useSessionVersion } from '../../store';
 import { displayTitle, recommend, STYLE_THEME } from '@amv/music';
 import { applyCommand, clipEndUs, newId, sourceTimeAt, type Clip, type Project } from '@amv/project';
@@ -1460,7 +1461,16 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
       const label = isAutonomous
         ? `Modo Livre · ${STYLES.find((s) => s.id === effectiveStyleId)!.label} (${tournament.winner.score.total.toFixed(0)}/100)`
         : `${directionLabel} · ${styleMode === 'auto' ? 'Aberto · ' : ''}${STYLES.find((s) => s.id === selectedStyle)!.label}`;
-      session.history.transaction(`Gerar meu AMV — ${label}`, r.commands);
+      // Converte máscaras V2 geradas em recortes PNG reais (falha não bloqueia a geração).
+      let finalCommands = r.commands;
+      if (platform) {
+        try {
+          const up = await upgradeGeneratedV2Cutouts(platform, session, session.project, r.commands);
+          finalCommands = up.commands;
+          if (up.upgraded > 0) r.warnings.push('Recortes reais gerados: ' + up.upgraded + (up.engine ? ' (' + up.engine + ')' : '') + '.');
+        } catch {}
+      }
+      session.history.transaction(`Gerar meu AMV — ${label}`, finalCommands);
       useEditor.getState().setPlayhead(0);
       useEditor.getState().setPlaying(false);
       try {

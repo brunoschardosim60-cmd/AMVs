@@ -1,5 +1,11 @@
 # Novidades
 
+## 0.9.2
+
+- Legendas: corrigido cache de texto estático que mantinha a legenda antiga/sumida após edições.
+- Legibilidade: sombra mínima automática no preview e contorno/sombra mínimos ao harmonizar textos pequenos.
+- Geração: máscaras V2 geradas agora viram recortes PNG reais automaticamente.
+
 ## 0.9.1
 
 - Preview: texto estático em cache e mescla correta (blend) de camadas de texto em buffer isolado.
