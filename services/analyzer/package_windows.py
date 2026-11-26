@@ -1,6 +1,7 @@
 """Build and smoke-test the bundled Windows analyzer runtime."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import queue
@@ -52,14 +53,13 @@ def build() -> None:
         "ctranslate2",
         "--collect-all",
         "av",
+        *(["--collect-all", "onnxruntime"] if importlib.util.find_spec("onnxruntime") is not None else []),
         "--exclude-module",
         "sam2",
         "--exclude-module",
         "torch",
         "--exclude-module",
         "torchvision",
-        "--exclude-module",
-        "onnxruntime",
         str(ROOT / "package_entry.py"),
     ]
     subprocess.run(command, cwd=ROOT, check=True)

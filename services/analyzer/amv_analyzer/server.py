@@ -19,7 +19,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .cutout import cutout_engine_status, extract_and_cutout_frame
+from .cutout import cutout_engine_status, extract_and_cutout_clip, extract_and_cutout_frame, resolve_ffmpeg_binary
 from .segmentation import SegmentationCancelled, checkpoint_path, propagate_character
 from .speech import MODEL_SIZES, TranscriptionCancelled, transcribe
 
@@ -60,12 +60,25 @@ class SegmentationRequest(BaseModel):
 
 class CutoutFrameRequest(BaseModel):
     path: str = Field(min_length=1)
-    ffmpeg_path: str = Field(min_length=1)
+    ffmpeg_path: str = Field(default="ffmpeg", min_length=1)
     output_dir: str = Field(min_length=1)
     time_s: float = Field(ge=0)
     focus_x: float = Field(default=0.5, ge=0, le=1)
     focus_y: float = Field(default=0.46, ge=0, le=1)
-    stroke_px: int = Field(default=4, ge=0, le=20)
+    stroke_px: int = Field(default=0, ge=0, le=20)
+    stroke_color: str = Field(default="#ffffff", min_length=4, max_length=9)
+
+
+class CutoutClipRequest(BaseModel):
+    path: str = Field(min_length=1)
+    ffmpeg_path: str = Field(default="ffmpeg", min_length=1)
+    output_dir: str = Field(min_length=1)
+    start_s: float = Field(ge=0)
+    duration_s: float = Field(default=0.65, gt=0.08, le=2.5)
+    fps: float = Field(default=24.0, ge=12.0, le=30.0)
+    focus_x: float = Field(default=0.5, ge=0, le=1)
+    focus_y: float = Field(default=0.46, ge=0, le=1)
+    stroke_px: int = Field(default=0, ge=0, le=20)
     stroke_color: str = Field(default="#ffffff", min_length=4, max_length=9)
 
 
@@ -297,12 +310,13 @@ def create_app(token: str) -> FastAPI:
     def run_cutout_frame(request: CutoutFrameRequest) -> dict[str, Any]:
         if not Path(request.path).is_file():
             raise HTTPException(status_code=404, detail="arquivo de vídeo não encontrado")
-        if not Path(request.ffmpeg_path).is_file():
-            raise HTTPException(status_code=404, detail="FFmpeg empacotado não encontrado")
+        resolved_ff = resolve_ffmpeg_binary(request.ffmpeg_path)
+        if not resolved_ff:
+            raise HTTPException(status_code=404, detail="FFmpeg não encontrado")
         try:
             return extract_and_cutout_frame(
                 media_path=request.path,
-                ffmpeg_path=request.ffmpeg_path,
+                ffmpeg_path=resolved_ff,
                 output_dir=request.output_dir,
                 time_s=request.time_s,
                 focus_x=request.focus_x,
@@ -311,7 +325,30 @@ def create_app(token: str) -> FastAPI:
                 stroke_color=request.stroke_color,
             )
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"falha no recorte do personagem: {exc}") from exc
+            raise HTTPException(status_code=503, detail=f"falha no recorte neural do personagem: {exc}") from exc
+
+    @app.post("/cutout/clip", dependencies=[Depends(auth)])
+    def run_cutout_clip(request: CutoutClipRequest) -> dict[str, Any]:
+        if not Path(request.path).is_file():
+            raise HTTPException(status_code=404, detail="arquivo de vídeo não encontrado")
+        resolved_ff = resolve_ffmpeg_binary(request.ffmpeg_path)
+        if not resolved_ff:
+            raise HTTPException(status_code=404, detail="FFmpeg não encontrado")
+        try:
+            return extract_and_cutout_clip(
+                media_path=request.path,
+                ffmpeg_path=resolved_ff,
+                output_dir=request.output_dir,
+                start_s=request.start_s,
+                duration_s=request.duration_s,
+                fps=request.fps,
+                focus_x=request.focus_x,
+                focus_y=request.focus_y,
+                stroke_px=request.stroke_px,
+                stroke_color=request.stroke_color,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"falha no recorte neural em vídeo: {exc}") from exc
 
     return app
 

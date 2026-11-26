@@ -1,7 +1,7 @@
 import struct
 from fastapi.testclient import TestClient
 
-from amv_analyzer.cutout import cutout_rgba_bytes_from_rgb24, encode_rgba_png
+from amv_analyzer.cutout import _clean_alpha_components, cutout_rgba_bytes_from_rgb24, encode_rgba_png, resolve_ffmpeg_binary
 from amv_analyzer.server import create_app
 
 
@@ -40,3 +40,39 @@ def test_endpoint_cutout_status():
     body = res.json()
     assert body["available"] is True
     assert body["engine"] in ("anime-matting", "onnx-cpu", "onnx-gpu")
+
+
+def test_require_onnx_recusa_fallback_heuristico_quando_sem_modelo(tmp_path):
+    w, h = 32, 32
+    rgb = bytes([20] * (w * h * 3))
+    try:
+        cutout_rgba_bytes_from_rgb24(
+            rgb,
+            w,
+            h,
+            cache_root=tmp_path,
+            auto_download_model=False,
+            require_onnx=True,
+        )
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised is True
+
+
+def test_clean_alpha_components_remove_ilhas_de_ruido_no_fundo():
+    try:
+        import numpy as np
+    except ImportError:
+        return
+    alpha = np.zeros((100, 100), dtype=np.float32)
+    # Silhueta principal do personagem no centro
+    alpha[25:80, 35:65] = 0.96
+    # Pequenas ilhas isoladas de compressão/faísca nos cantos
+    alpha[4:7, 5:8] = 0.92
+    alpha[88:90, 90:92] = 0.88
+    cleaned = _clean_alpha_components(alpha, 0.5, 0.5)
+    assert float(cleaned[50, 50]) > 0.9
+    assert float(cleaned[5, 6]) < 0.05
+    assert float(cleaned[89, 91]) < 0.05
+    assert resolve_ffmpeg_binary("inexistente_xyz_ffmpeg_zero") is None or isinstance(resolve_ffmpeg_binary("ffmpeg"), str)

@@ -46,7 +46,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - name: Instalar runtime do analisador
-        run: python -m pip install ".\services\analyzer[speech,package]"
+        run: python -m pip install ".\services\analyzer[speech,cutout,package]"
       - name: Empacotar e testar runtime Python
         run: python services/analyzer/package_windows.py
       - run: node scripts/fetch-ffmpeg.mjs
