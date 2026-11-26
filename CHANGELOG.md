@@ -1,5 +1,15 @@
 # Novidades
 
+## 0.9.7
+
+**Reconstrução do recorte de personagem (V2): segmentação neural real IS-Net Anime (ONNX DirectML GPU), recorte em vídeo transparente em movimento 1:1 e eliminação definitiva do fallback heurístico que despedaçava cenas escuras.**
+
+- **Fim dos recortes quebrados e com borda branca:** removido completamente o fallback heurístico por cor de borda + arestas (`canvasAnimeCutoutPng` / `anime-matting` em quadros reais), que apagava roupas/cabelos escuros em cenas noturnas e desenhava anéis brancos ao redor de blocos de compressão.
+- **Segmentação neural real `IS-Net Anime` (`isnetis.onnx`) + GPU DirectML no Windows:** incluído `onnxruntime-directml` no runtime empacotado do analisador Windows (`package_windows.py`, `ci.yml` e `release.yml`), com download automático em cache de `isnetis.onnx` no primeiro uso, redimensionamento bilinear, remoção morfológica de ilhas de ruído isoladas no fundo, descontaminação de cor nas bordas e `stroke_px = 0` por padrão.
+- **Recorte em vídeo em movimento (`WebM VP9 yuva420p`) e registro 1:1 em `V2`:** novo endpoint `/cutout/clip` que segmenta o trecho quadro a quadro com suavização temporal e gera vídeo transparente VP9 Alpha sincronizado 1:1 em escala, posição, cor e keyframes com `V1` (sem congelar uma estátua estática sobre lutas em movimento); preservado canal alfa em `libvpx-vp9`, `lut3d` (`rgba`) e `rgbashift` (`gbrap`) na exportação FFmpeg, e ocultadas camadas internas `alpha-cutout` da biblioteca de mídias. Quando o motor neural não está disponível, `upgradeGeneratedV2Cutouts` limpa o `V2` provisório e mantém a letra nítida na frente em vez de inventar recortes defeituosos.
+- **Verificação:** `pytest` em `services/analyzer`, `pnpm typecheck`, `pnpm --filter @amv/desktop build` e `pnpm -r --workspace-concurrency=2 test` validados com mídia sintética e integração FFmpeg.
+- **Limitações novas:** o primeiro uso do recorte neural `IS-Net Anime` requer conexão com a internet uma única vez para baixar e gravar em cache o modelo `isnetis.onnx` (~176 MB); sem ele, o gerador mantém o texto na frente do vídeo sem criar recortes falsos.
+
 ## 0.9.6
 
 **Seleção inteligente da melhor parte da música, mixagem anti-abafamento e controles completos de edição pós-geração de letras, legendas e música.**
