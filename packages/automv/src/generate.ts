@@ -2875,13 +2875,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
             sourceOutUs: base.sourceInUs + Math.round(cutDurUs * base.speed),
             mask: maskKind,
             audio: { ...base.audio, gainDb: -60 },
-            transform: { ...base.transform, scale: Math.max(1.06, base.transform.scale * 1.04) },
-            keyframes: {
-              'transform.scale': [
-                { atUs: 0, value: Math.max(1.06, base.transform.scale * 1.04), easing: 'ease-out' },
-                { atUs: cutDurUs, value: Math.max(1.14, base.transform.scale * 1.12), easing: 'linear' },
-              ],
-            },
+            effects: base.effects.filter((fx) => fx.effect === 'color'),
+            transform: { ...base.transform },
+            keyframes: { ...base.keyframes },
           },
         );
         cmds.push({ type: 'clip.add', clip: v2Clip });

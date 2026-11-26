@@ -998,9 +998,20 @@ export class ProjectSession {
   /** Gera (ou reaproveita do cache) os artefatos de um asset e atualiza seu estado. */
   private async process(asset: Asset): Promise<void> {
     const mySeq = this.bumpProcessSeq(asset.id);
-    if (!asset.probe || asset.kind === 'image') {
+    if (!asset.probe || asset.kind === 'image' || asset.tags.includes('alpha-cutout')) {
       const rt = this.assetRuntime(asset.id);
-      this.runtime.set(asset.id, { ...rt, artifacts: { posterPath: asset.path, stripPath: null, waveformPath: null, proxyPath: null, audioProxyPath: null, audioStreamProxyPaths: {} } });
+      const isAlphaVideo = asset.kind === 'video' && asset.tags.includes('alpha-cutout');
+      this.runtime.set(asset.id, {
+        ...rt,
+        artifacts: {
+          posterPath: asset.kind === 'image' ? asset.path : null,
+          stripPath: null,
+          waveformPath: null,
+          proxyPath: isAlphaVideo ? asset.path : null,
+          audioProxyPath: null,
+          audioStreamProxyPaths: {},
+        },
+      });
       this.setStatus(asset.id, 'ok', null);
       return;
     }

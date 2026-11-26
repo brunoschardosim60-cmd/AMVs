@@ -46,6 +46,7 @@ export function createPlayer(session: ProjectSession, project: Project, original
     videoUrl: (id) => {
       const asset = session.project.assets.find((a) => a.id === id);
       if (!asset || asset.status === 'missing') return null;
+      if (asset.tags.includes('alpha-cutout')) return platform.fileUrl(asset.path);
       const useOriginal = original ?? useEditor.getState().previewOriginal;
       const proxyPath = session.assetRuntime(id).artifacts?.proxyPath ?? null;
       const path = useOriginal

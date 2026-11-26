@@ -3,138 +3,39 @@ import { clipEndUs, ClipSchema, newId, sourceTimeAt, type Asset, type Clip, type
 import type { Platform } from '../platform/types';
 import type { ProjectSession } from './session';
 
-function parseHexRgb(hex: string): [number, number, number] {
-  const clean = hex.trim().replace(/^#/, '');
-  if (clean.length === 3) {
-    return [
-      parseInt(clean[0]! + clean[0]!, 16) || 255,
-      parseInt(clean[1]! + clean[1]!, 16) || 255,
-      parseInt(clean[2]! + clean[2]!, 16) || 255,
-    ];
-  }
-  if (clean.length === 6) {
-    return [
-      parseInt(clean.slice(0, 2), 16) || 255,
-      parseInt(clean.slice(2, 4), 16) || 255,
-      parseInt(clean.slice(4, 6), 16) || 255,
-    ];
-  }
-  return [255, 255, 255];
+/** Tag aplicada às camadas internas de recorte transparente para não poluir a lista de mídias nem gerar proxy opaco. */
+export const ALPHA_CUTOUT_TAG = 'alpha-cutout';
+
+export function isAlphaCutoutAsset(asset: Pick<Asset, 'tags'>): boolean {
+  return asset.tags.includes(ALPHA_CUTOUT_TAG);
 }
 
-async function canvasAnimeCutoutPng(
-  rawPngBytes: Uint8Array,
-  strokePx = 4,
-  strokeColor = '#ffffff',
-  focus: [number, number] = [0.5, 0.46],
-): Promise<Uint8Array> {
-  const blob = new Blob([rawPngBytes as BlobPart], { type: 'image/png' });
-  const bmp = await createImageBitmap(blob);
-  const w = bmp.width;
-  const h = bmp.height;
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d')!;
-  ctx.drawImage(bmp, 0, 0);
-  bmp.close();
-
-  const img = ctx.getImageData(0, 0, w, h);
-  const data = img.data;
-  const bw = Math.max(2, Math.round(w * 0.07));
-  const bh = Math.max(2, Math.round(h * 0.07));
-
-  let rSum = 0;
-  let gSum = 0;
-  let bSum = 0;
-  let samples = 0;
-  const addSample = (x: number, y: number) => {
-    const idx = (y * w + x) * 4;
-    rSum += data[idx]!;
-    gSum += data[idx + 1]!;
-    bSum += data[idx + 2]!;
-    samples++;
-  };
-  for (let y = 0; y < bh; y += 2) for (let x = 0; x < w; x += 4) addSample(x, y);
-  for (let y = bh; y < h; y += 4) {
-    for (let x = 0; x < bw; x += 2) addSample(x, y);
-    for (let x = w - bw; x < w; x += 2) addSample(x, y);
-  }
-  const bgR = (rSum / Math.max(1, samples)) / 255;
-  const bgG = (gSum / Math.max(1, samples)) / 255;
-  const bgB = (bSum / Math.max(1, samples)) / 255;
-  const fx = Math.max(0.22, Math.min(0.78, focus[0]));
-  const fy = Math.max(0.22, Math.min(0.72, focus[1]));
-
-  const alpha = new Float32Array(w * h);
-  for (let y = 0; y < h; y++) {
-    const ny = (y / Math.max(1, h - 1) - fy) / 0.46;
-    for (let x = 0; x < w; x++) {
-      const nx = (x / Math.max(1, w - 1) - fx) / 0.34;
-      const p = y * w + x;
-      const idx = p * 4;
-      const r = data[idx]! / 255;
-      const g = data[idx + 1]! / 255;
-      const b = data[idx + 2]! / 255;
-      const dist = Math.hypot(r - bgR, g - bgG, b - bgB);
-      let edge = 0;
-      if (x > 0 && x < w - 1 && y > 0 && y < h - 1) {
-        const lL = (0.299 * data[idx - 4]! + 0.587 * data[idx - 3]! + 0.114 * data[idx - 2]!) / 255;
-        const lR = (0.299 * data[idx + 4]! + 0.587 * data[idx + 5]! + 0.114 * data[idx + 6]!) / 255;
-        const lU = (0.299 * data[idx - w * 4]! + 0.587 * data[idx - w * 4 + 1]! + 0.114 * data[idx - w * 4 + 2]!) / 255;
-        const lD = (0.299 * data[idx + w * 4]! + 0.587 * data[idx + w * 4 + 1]! + 0.114 * data[idx + w * 4 + 2]!) / 255;
-        edge = Math.min(1, (Math.abs(lR - lL) + Math.abs(lD - lU)) * 2.4);
-      }
-      const ell = Math.max(0, Math.min(1, 1.35 - (nx * nx + ny * ny)));
-      const core = Math.max(0, Math.min(1, 1 - (nx * nx * 2.2 + ny * ny * 2)));
-      const score = (Math.min(1.2, dist * 2.5) + edge * 0.45) * (0.25 + 0.75 * ell);
-      const baseA = Math.max(0, Math.min(1, (score - 0.25) / 0.32));
-      alpha[p] = Math.max(baseA, core * Math.min(1, dist * 3 + edge));
+async function runWithSidecarTimeout<T>(
+  work: () => Promise<T>,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (signal?.aborted) throw new DOMException('recorte cancelado', 'AbortError');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const raceGuard = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Tempo esgotado no motor de recorte neural.')), timeoutMs);
+    if (signal) {
+      onAbort = () => reject(new DOMException('recorte cancelado', 'AbortError'));
+      signal.addEventListener('abort', onAbort, { once: true });
     }
+  });
+  try {
+    return await Promise.race([work(), raceGuard]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (signal && onAbort) signal.removeEventListener('abort', onAbort);
   }
-
-  const [sr, sg, sb] = parseHexRgb(strokeColor);
-  const rad = Math.max(0, Math.min(8, Math.round(strokePx)));
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const p = y * w + x;
-      const a = alpha[p]!;
-      let ring = 0;
-      if (rad > 0 && a < 0.98) {
-        let dMax = a;
-        for (const dy of [-rad, 0, rad]) {
-          const yy = y + dy;
-          if (yy < 0 || yy >= h) continue;
-          for (const dx of [-rad, 0, rad]) {
-            const xx = x + dx;
-            if (xx < 0 || xx >= w) continue;
-            const v = alpha[yy * w + xx]!;
-            if (v > dMax) dMax = v;
-          }
-        }
-        ring = Math.max(0, dMax - a);
-      }
-      const totalA = Math.min(1, a + ring);
-      const idx = p * 4;
-      if (totalA > 1e-4) {
-        data[idx] = Math.min(255, Math.round((data[idx]! * a + sr * ring) / totalA));
-        data[idx + 1] = Math.min(255, Math.round((data[idx + 1]! * a + sg * ring) / totalA));
-        data[idx + 2] = Math.min(255, Math.round((data[idx + 2]! * a + sb * ring) / totalA));
-        data[idx + 3] = Math.min(255, Math.round(totalA * 255));
-      } else {
-        data[idx + 3] = 0;
-      }
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  const outBlob = await new Promise<Blob>((resolve, reject) =>
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Falha ao codificar PNG RGBA'))), 'image/png'),
-  );
-  return new Uint8Array(await outBlob.arrayBuffer());
 }
 
 /**
- * Gera um PNG RGBA com fundo transparente e contorno nítido do personagem para o instante `sourceTimeS`.
+ * Gera um PNG RGBA segmentado por rede neural (`IS-Net Anime` ONNX) para o instante `sourceTimeS`.
+ * Nunca usa recorte heurístico por cor de borda (que despedaçava roupas escuras e criava ruído).
  */
 export async function generateCutoutPngForSource(
   platform: Platform,
@@ -146,80 +47,104 @@ export async function generateCutoutPngForSource(
   const cutoutDir = joinPath(await platform.cacheDir(), 'cutouts');
   await platform.fs.mkdir(cutoutDir);
 
-  const strokePx = options.strokePx ?? 4;
+  const strokePx = options.strokePx ?? 0;
   const strokeColor = options.strokeColor ?? '#ffffff';
-  const sidecarTimeoutMs = Math.max(50, options.sidecarTimeoutMs ?? 12_000);
-  let pngPath: string | null = null;
-  let engine = 'canvas-matting';
+  const focus = options.focus ?? [0.5, 0.46];
+  const sidecarTimeoutMs = Math.max(50, options.sidecarTimeoutMs ?? 90_000);
 
-  // Tenta primeiro o sidecar Python (/cutout/frame com suporte a ONNX DirectML GPU), degradando em timeout/indisponibilidade
-  try {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('timeout no sidecar de recorte')), sidecarTimeoutMs);
+  return runWithSidecarTimeout(async () => {
+    const conn = await platform.analyzer.start();
+    if (options.signal?.aborted) throw new DOMException('recorte cancelado', 'AbortError');
+    const res = await platform.http(`${conn.baseUrl}/cutout/frame`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${conn.token}` },
+      body: JSON.stringify({
+        path: asset.path,
+        ffmpeg_path: 'ffmpeg',
+        output_dir: cutoutDir,
+        time_s: Math.max(0, sourceTimeS),
+        focus_x: Math.max(0, Math.min(1, focus[0])),
+        focus_y: Math.max(0, Math.min(1, focus[1])),
+        stroke_px: strokePx,
+        stroke_color: strokeColor,
+      }),
     });
-    try {
-      const sidecarWork = (async () => {
-        const conn = await platform.analyzer.start();
-        if (options.signal?.aborted) throw new DOMException('recorte cancelado', 'AbortError');
-        const res = await platform.http(`${conn.baseUrl}/cutout/frame`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${conn.token}` },
-          body: JSON.stringify({
-            path: asset.path,
-            ffmpeg_path: 'ffmpeg',
-            output_dir: cutoutDir,
-            time_s: sourceTimeS,
-            stroke_px: strokePx,
-            stroke_color: strokeColor,
-          }),
-        });
-        if (res.ok) {
-          const data = JSON.parse(await res.text()) as { path?: string; engine?: string };
-          if (data.path && (await platform.fs.exists(data.path))) {
-            pngPath = data.path;
-            engine = data.engine ?? 'analyzer';
-          }
-        }
-      })();
-      await Promise.race([sidecarWork, timeoutPromise]);
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-    }
-  } catch (err) {
-    if ((err as Error)?.name === 'AbortError' || options.signal?.aborted) throw err;
-    // Fallback local abaixo quando o sidecar não está ativo, expira ou FFmpeg não está no PATH do sidecar
-  }
-
-  if (!pngPath) {
-    const stamp = `${asset.id}-${Math.round(sourceTimeS * 1000)}`;
-    const rawFramePath = joinPath(cutoutDir, `raw-${stamp}.png`);
-    const outFramePath = joinPath(cutoutDir, `cutout-${stamp}.png`);
-    const ff = await platform.runner.run('ffmpeg', [
-      '-y', '-hide_banner', '-loglevel', 'error',
-      '-ss', sourceTimeS.toFixed(3), '-i', asset.path,
-      '-frames:v', '1', '-vf', "scale='min(1280,iw)':-2", rawFramePath,
-    ]);
-    if (ff.code !== 0 || !(await platform.fs.exists(rawFramePath))) {
-      throw new Error(`Não consegui extrair o quadro do vídeo: ${ff.stderr.trim() || ff.code}`);
-    }
-    try {
-      const rawBytes = await platform.fs.readFile(rawFramePath);
-      const rgbaPng = await canvasAnimeCutoutPng(rawBytes, strokePx, strokeColor, options.focus);
-      await platform.fs.writeFile(outFramePath, rgbaPng);
-      pngPath = outFramePath;
-    } finally {
+    const text = await res.text();
+    if (!res.ok) {
+      let detail = text;
       try {
-        await platform.fs.remove(rawFramePath);
+        detail = (JSON.parse(text) as { detail?: string }).detail ?? text;
       } catch {}
+      throw new Error(`Recorte neural indisponível (${res.status}): ${detail}`);
     }
-  }
-  return { pngPath, engine };
+    const data = JSON.parse(text) as { path?: string; engine?: string };
+    if (!data.path || !(await platform.fs.exists(data.path))) {
+      throw new Error('O motor de recorte não produziu o arquivo PNG esperado.');
+    }
+    return { pngPath: data.path, engine: data.engine ?? 'onnx' };
+  }, sidecarTimeoutMs, options.signal);
 }
 
 /**
- * Converte automaticamente os clipes de destaque em `V2` criados pelo gerador em recortes transparentes
- * reais (`PNG RGBA` com contorno) dentro do mesmo lote de comandos da geração (um único Ctrl+Z).
+ * Segmenta quadro a quadro um trecho em movimento com `IS-Net Anime` ONNX e devolve um vídeo
+ * `.webm` VP9 com canal alfa (`yuva420p`) sincronizado 1:1 com o movimento real da cena.
+ */
+export async function generateCutoutClipForRange(
+  platform: Platform,
+  asset: Asset,
+  startS: number,
+  durationS: number,
+  options: { fps?: number; strokePx?: number; strokeColor?: string; focus?: [number, number]; sidecarTimeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<{ mediaPath: string; engine: string }> {
+  if (options.signal?.aborted) throw new DOMException('recorte cancelado', 'AbortError');
+  const cutoutDir = joinPath(await platform.cacheDir(), 'cutouts');
+  await platform.fs.mkdir(cutoutDir);
+
+  const strokePx = options.strokePx ?? 0;
+  const strokeColor = options.strokeColor ?? '#ffffff';
+  const focus = options.focus ?? [0.5, 0.46];
+  const fps = Math.max(12, Math.min(30, options.fps ?? 24));
+  const sidecarTimeoutMs = Math.max(50, options.sidecarTimeoutMs ?? 120_000);
+
+  return runWithSidecarTimeout(async () => {
+    const conn = await platform.analyzer.start();
+    if (options.signal?.aborted) throw new DOMException('recorte cancelado', 'AbortError');
+    const res = await platform.http(`${conn.baseUrl}/cutout/clip`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${conn.token}` },
+      body: JSON.stringify({
+        path: asset.path,
+        ffmpeg_path: 'ffmpeg',
+        output_dir: cutoutDir,
+        start_s: Math.max(0, startS),
+        duration_s: Math.max(0.12, Math.min(2.5, durationS)),
+        fps,
+        focus_x: Math.max(0, Math.min(1, focus[0])),
+        focus_y: Math.max(0, Math.min(1, focus[1])),
+        stroke_px: strokePx,
+        stroke_color: strokeColor,
+      }),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let detail = text;
+      try {
+        detail = (JSON.parse(text) as { detail?: string }).detail ?? text;
+      } catch {}
+      throw new Error(`Recorte neural em vídeo indisponível (${res.status}): ${detail}`);
+    }
+    const data = JSON.parse(text) as { path?: string; engine?: string };
+    if (!data.path || !(await platform.fs.exists(data.path))) {
+      throw new Error('O motor de recorte não produziu o vídeo transparente esperado.');
+    }
+    return { mediaPath: data.path, engine: data.engine ?? 'onnx' };
+  }, sidecarTimeoutMs, options.signal);
+}
+
+/**
+ * Converte os clipes de destaque em `V2` criados pelo gerador em recortes neurais transparentes em movimento
+ * (`IS-Net Anime` + VP9 Alpha 1:1 com `V1`). Se o motor neural não estiver disponível, remove o `V2`
+ * provisório e restaura `behindCutout = false` nas letras para nunca deixar máscaras falsas ou recortes quebrados.
  */
 export async function upgradeGeneratedV2Cutouts(
   platform: Platform,
@@ -248,53 +173,85 @@ export async function upgradeGeneratedV2Cutouts(
 
   const env = await session.mediaEnv();
   const extraAssets: Command[] = [];
-  const nextCommands = [...commands];
+  const nextCommands: (Command | null)[] = [...commands];
+  const failedRangesUs: Array<[number, number]> = [];
   let upgraded = 0;
   let lastEngine: string | null = null;
 
-  await Promise.all(
-    targetAddIndices.map(async (cmdIdx) => {
-      const cmd = nextCommands[cmdIdx];
-      if (!cmd || cmd.type !== 'clip.add' || !cmd.clip.assetId) return;
-      const clip = cmd.clip;
-      const asset = project.assets.find((a) => a.id === clip.assetId);
-      if (!asset || asset.kind !== 'video' || asset.status === 'missing') return;
-      try {
-        const sourceS = Math.max(0, (clip.sourceInUs + Math.round(clip.durationUs * 0.2)) / 1e6);
-        const { pngPath, engine } = await generateCutoutPngForSource(platform, asset, sourceS, {
-          focus: focusByClipId?.get(clip.id),
-        });
-        const inspected = await inspectFile(env, pngPath);
-        const cutoutAsset: Asset = { ...inspected.asset, name: `Recorte · ${asset.name}` };
-        extraAssets.push({ type: 'asset.add', asset: cutoutAsset });
-        nextCommands[cmdIdx] = {
-          type: 'clip.add',
-          clip: {
-            ...clip,
-            assetId: cutoutAsset.id,
-            sourceInUs: 0,
-            sourceOutUs: clip.durationUs,
-            mask: 'none',
-            speed: 1,
-            reason: `Recorte transparente real (${engine}) em V2 com letra atrás`,
-          },
-        };
-        upgraded++;
-        lastEngine = engine;
-      } catch {
-        // Mantém a máscara geométrica de fallback se algum quadro falhar
-      }
-    }),
-  );
+  // Executa em série para compartilhar o primeiro download/sessão do modelo ONNX sem corrida
+  for (const cmdIdx of targetAddIndices) {
+    const cmd = nextCommands[cmdIdx];
+    if (!cmd || cmd.type !== 'clip.add' || !cmd.clip.assetId) continue;
+    const clip = cmd.clip;
+    const asset = project.assets.find((a) => a.id === clip.assetId);
+    if (!asset || asset.kind !== 'video' || asset.status === 'missing') {
+      nextCommands[cmdIdx] = null;
+      failedRangesUs.push([clip.timelineStartUs, clipEndUs(clip)]);
+      continue;
+    }
+    try {
+      const srcStartS = Math.max(0, clip.sourceInUs / 1e6);
+      const srcSpanS = Math.max(0.15, (clip.sourceOutUs - clip.sourceInUs) / 1e6);
+      const srcFps = asset.probe?.video?.fps
+        ? asset.probe.video.fps.num / Math.max(1, asset.probe.video.fps.den)
+        : project.settings.fps.num / Math.max(1, project.settings.fps.den);
+      const { mediaPath, engine } = await generateCutoutClipForRange(platform, asset, srcStartS, srcSpanS, {
+        fps: Math.min(30, Math.max(15, srcFps)),
+        strokePx: 0,
+        focus: focusByClipId?.get(clip.id),
+      });
+      const inspected = await inspectFile(env, mediaPath);
+      const cutoutAsset: Asset = {
+        ...inspected.asset,
+        name: `Recorte V2 · ${asset.name}`,
+        tags: [...new Set([...inspected.asset.tags, ALPHA_CUTOUT_TAG])],
+      };
+      extraAssets.push({ type: 'asset.add', asset: cutoutAsset });
+      const cutSpanUs = Math.max(40_000, clip.sourceOutUs - clip.sourceInUs);
+      nextCommands[cmdIdx] = {
+        type: 'clip.add',
+        clip: {
+          ...clip,
+          assetId: cutoutAsset.id,
+          sourceInUs: 0,
+          sourceOutUs: cutSpanUs,
+          mask: 'none',
+          reason: `Personagem recortado por IA (${engine}) em movimento 1:1 com letra atrás`,
+        },
+      };
+      upgraded++;
+      lastEngine = engine;
+    } catch {
+      // Sem modelo neural disponível: remove a camada V2 provisória e volta a letra para a frente limpa
+      nextCommands[cmdIdx] = null;
+      failedRangesUs.push([clip.timelineStartUs, clipEndUs(clip)]);
+    }
+  }
 
-  if (!extraAssets.length) return { commands, upgraded: 0, engine: null };
-  return { commands: [...extraAssets, ...nextCommands], upgraded, engine: lastEngine };
+  if (failedRangesUs.length > 0) {
+    for (let i = 0; i < nextCommands.length; i++) {
+      const cmd = nextCommands[i];
+      if (!cmd || cmd.type !== 'clip.add' || !cmd.clip.text?.behindCutout) continue;
+      const cStart = cmd.clip.timelineStartUs;
+      const cEnd = clipEndUs(cmd.clip);
+      const overlapsFailed = failedRangesUs.some(([a, b]) => cStart < b && cEnd > a);
+      if (overlapsFailed) {
+        nextCommands[i] = {
+          type: 'clip.add',
+          clip: { ...cmd.clip, text: { ...cmd.clip.text, behindCutout: false } },
+        };
+      }
+    }
+  }
+
+  const filtered = nextCommands.filter((c): c is Command => c !== null);
+  return { commands: [...extraAssets, ...filtered], upgraded, engine: lastEngine };
 }
 
 /**
- * Extrai o quadro do clipe no instante atual, recorta o personagem (usando ONNX/DirectML no sidecar
- * quando disponível ou matting local em Canvas), importa o PNG RGBA em `V2` com punch de escala
- * e marca automaticamente as legendas/letras sobrepostas com `behindCutout = true`.
+ * Recorta o personagem do clipe selecionado em movimento (`IS-Net Anime` ONNX -> WebM VP9 transparente),
+ * posiciona em `V2` alinhado 1:1 com o vídeo de `V1` (sem contorno artificial branco nem imagem estática)
+ * e coloca automaticamente as letras/legendas sobrepostas atrás do personagem (`behindCutout = true`).
  */
 export async function createCharacterCutoutOnV2(
   platform: Platform,
@@ -310,30 +267,56 @@ export async function createCharacterCutoutOnV2(
     ?? project.tracks.find((t) => t.kind === 'video' && t.id !== clip.trackId);
   if (!v2) throw new Error('Adicione ou mantenha uma trilha de vídeo superior (V2) para colocar o recorte.');
 
-  const clampedPlayheadUs = Math.max(clip.timelineStartUs, Math.min(clipEndUs(clip) - 1_000, playheadUs));
-  const localUs = Math.max(0, clampedPlayheadUs - clip.timelineStartUs);
-  const sourceTimeS = sourceTimeAt(clip, localUs) / 1e6;
-  const { pngPath, engine } = await generateCutoutPngForSource(platform, asset, sourceTimeS, {
-    strokePx: options.strokePx,
+  const clampedStartUs = Math.max(clip.timelineStartUs, Math.min(clipEndUs(clip) - 80_000, playheadUs));
+  const localOffsetUs = Math.max(0, clampedStartUs - clip.timelineStartUs);
+  const remainingTlS = Math.max(0.15, (clipEndUs(clip) - clampedStartUs) / 1e6);
+  const timelineDurS = Math.min(remainingTlS, options.durationS ?? Math.min(1.2, remainingTlS));
+  const durUs = Math.max(80_000, Math.round(timelineDurS * 1e6));
+  const srcStartUs = sourceTimeAt(clip, localOffsetUs);
+  const srcEndUs = sourceTimeAt(clip, Math.min(clip.durationUs, localOffsetUs + durUs));
+  const srcStartS = Math.min(srcStartUs, srcEndUs) / 1e6;
+  const srcSpanS = Math.max(0.15, Math.abs(srcEndUs - srcStartUs) / 1e6);
+  const srcFps = asset.probe?.video?.fps
+    ? asset.probe.video.fps.num / Math.max(1, asset.probe.video.fps.den)
+    : project.settings.fps.num / Math.max(1, project.settings.fps.den);
+
+  const { mediaPath, engine } = await generateCutoutClipForRange(platform, asset, srcStartS, srcSpanS, {
+    fps: Math.min(30, Math.max(15, srcFps)),
+    strokePx: options.strokePx ?? 0,
     strokeColor: options.strokeColor,
     focus: options.focus,
   });
 
-  await session.importFiles([pngPath]);
-  const importedAsset = session.project.assets.find((a) => a.path === pngPath);
-  if (!importedAsset) throw new Error('Não consegui importar a camada recortada no projeto.');
+  const env = await session.mediaEnv();
+  const { asset: inspected } = await inspectFile(env, mediaPath);
+  const existing = session.project.assets.find((a) => a.hash === inspected.hash);
+  const cutoutAsset: Asset = existing ?? {
+    ...inspected,
+    name: `Recorte V2 · ${asset.name}`,
+    tags: [...new Set([...inspected.tags, ALPHA_CUTOUT_TAG])],
+  };
 
-  const durUs = Math.round((options.durationS ?? 0.65) * 1e6);
-  const startUs = clampedPlayheadUs;
+  const startUs = clampedStartUs;
   const endUs = startUs + durUs;
   const cutoutClipId = newId('clp');
-
   const commands: Command[] = [];
-  // Remove sobreposição prévia em V2 nesse intervalo
-  for (const existing of session.project.clips) {
-    if (existing.trackId === v2.id && existing.timelineStartUs < endUs && clipEndUs(existing) > startUs) {
-      commands.push({ type: 'clip.remove', clipId: existing.id });
+
+  if (!existing) {
+    commands.push({ type: 'asset.add', asset: cutoutAsset });
+  }
+  for (const prev of session.project.clips) {
+    if (prev.trackId === v2.id && prev.timelineStartUs < endUs && clipEndUs(prev) > startUs) {
+      commands.push({ type: 'clip.remove', clipId: prev.id });
     }
+  }
+
+  // Reaproveita keyframes deslocados em -localOffsetUs para manter alinhamento 1:1 com V1
+  const shiftedKeyframes: Clip['keyframes'] = {};
+  for (const [kPath, kList] of Object.entries(clip.keyframes)) {
+    if (!kPath.startsWith('transform.')) continue;
+    shiftedKeyframes[kPath] = kList
+      .map((kf) => ({ ...kf, atUs: Math.max(0, kf.atUs - localOffsetUs) }))
+      .filter((kf, idx, arr) => idx === 0 || kf.atUs > arr[idx - 1]!.atUs);
   }
 
   commands.push({
@@ -341,24 +324,21 @@ export async function createCharacterCutoutOnV2(
     clip: ClipSchema.parse({
       id: cutoutClipId,
       trackId: v2.id,
-      assetId: importedAsset.id,
+      assetId: cutoutAsset.id,
       timelineStartUs: startUs,
       durationUs: durUs,
       sourceInUs: 0,
-      sourceOutUs: durUs,
-      label: `Cutout · ${asset.name}`,
-      reason: `Personagem recortado (${engine}) com contorno e texto atrás`,
-      transform: { x: 0, y: 0, scale: 1.04, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
-      keyframes: {
-        'transform.scale': [
-          { atUs: 0, value: 1.04, easing: 'ease-out' },
-          { atUs: durUs, value: 1.14, easing: 'linear' },
-        ],
-      },
+      sourceOutUs: Math.round(srcSpanS * 1e6),
+      speed: clip.speed,
+      label: `Recorte IA · ${asset.name}`,
+      reason: `Personagem recortado por IA (${engine}) em movimento 1:1 com letra atrás`,
+      audio: { gainDb: -60, fadeInUs: 0, fadeOutUs: 0, pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null },
+      effects: clip.effects.filter((fx) => fx.effect === 'color'),
+      transform: { ...clip.transform },
+      keyframes: shiftedKeyframes,
     }),
   });
 
-  // Marca textos/letras sobrepostos para passarem ATRÁS do personagem recortado!
   for (const tClip of session.project.clips) {
     if (!tClip.text) continue;
     if (tClip.timelineStartUs < endUs && clipEndUs(tClip) > startUs && !tClip.text.behindCutout) {
@@ -370,6 +350,6 @@ export async function createCharacterCutoutOnV2(
     }
   }
 
-  session.history.transaction('Destacar personagem recortado (V2)', commands);
-  return { assetId: importedAsset.id, clipId: cutoutClipId, engine };
+  session.execute({ type: 'batch', commands }, 'Destacar personagem recortado (V2)');
+  return { assetId: cutoutAsset.id, clipId: cutoutClipId, engine };
 }

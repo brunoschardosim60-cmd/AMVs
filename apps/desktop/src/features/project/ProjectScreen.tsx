@@ -86,8 +86,11 @@ export function ProjectScreen() {
   }, []);
 
   const project = session!.project;
-  // os efeitos sonoros do app ficam no projeto, mas fora das listas
-  const userAssets = useMemo(() => project.assets.filter((a) => !isSfxAsset(a)), [project.assets]);
+  // os efeitos sonoros internos e as máscaras de recorte transparente ficam no projeto, mas fora da lista de mídias do usuário
+  const userAssets = useMemo(
+    () => project.assets.filter((a) => !isSfxAsset(a) && !a.tags.includes('alpha-cutout')),
+    [project.assets],
+  );
   const assets = useMemo(
     () =>
       userAssets.filter(

@@ -371,9 +371,11 @@ export function windowArgs(o: WindowInput): WindowJob {
         const sourceStart = Math.min(sourceAtStart, sourceAtEnd) / 1e6;
         const sourceSpan = Math.abs(sourceAtEnd - sourceAtStart) / 1e6;
         const frameDuration = fps.den / fps.num;
+        const isWebmAlpha = src.path.toLowerCase().endsWith('.webm');
         inputs.push(
           '-ss', n(Math.max(0, sourceStart), 6),
           '-t', n(Math.max(frameDuration, sourceSpan) + frameDuration, 6),
+          ...(isWebmAlpha ? ['-c:v', 'libvpx-vp9'] : []),
           '-i', src.path,
         );
         if (sourceSpan < frameDuration / 2) {
@@ -394,7 +396,13 @@ export function windowArgs(o: WindowInput): WindowJob {
         }
       } else {
         const srcStart = (c.sourceInUs + Ls * 1e6 * c.speed) / 1e6;
-        inputs.push('-ss', n(Math.max(0, srcStart), 6), '-t', n(chainLen * c.speed + 0.5, 3), '-i', src.path);
+        const isWebmAlpha = src.path.toLowerCase().endsWith('.webm');
+        inputs.push(
+          '-ss', n(Math.max(0, srcStart), 6),
+          '-t', n(chainLen * c.speed + 0.5, 3),
+          ...(isWebmAlpha ? ['-c:v', 'libvpx-vp9'] : []),
+          '-i', src.path,
+        );
         chain.push(`[${inputIdx}:v:0]setpts=(PTS-STARTPTS)/${n(c.speed)}`);
       }
       const useSmoothBlend = src.kind === 'video' && (c.speed <= 0.82 || hasSpeedCurve(c)) && o.enc.quality >= 1 && chainLen <= 3.5;
@@ -421,7 +429,7 @@ export function windowArgs(o: WindowInput): WindowJob {
       const lutPath = o.colorLutPath?.(c);
       if (lutPath) {
         const escapedPath = lutPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
-        chain.push(`format=rgb24,lut3d=file='${escapedPath}':interp=trilinear`);
+        chain.push(`format=rgba,lut3d=file='${escapedPath}':interp=trilinear`);
       }
       const whipBlur = layer.transition?.transition === 'whip_pan'
         ? Math.max(0, Math.min(32, transitionNumber(layer.transition, 'blur', 8)))
@@ -431,7 +439,7 @@ export function windowArgs(o: WindowInput): WindowJob {
       const blur = sum(c, 'blur', 'amount') + whipBlur;
       if (blur > 0) chain.push(`gblur=sigma=${n(blur * kx, 3)}`);
       const rgb = Math.round(sum(c, 'rgb_split', 'amount') * kx);
-      if (rgb > 0) chain.push('format=gbrp', `rgbashift=rh=${-rgb}:bh=${rgb}`);
+      if (rgb > 0) chain.push('format=gbrap', `rgbashift=rh=${-rgb}:bh=${rgb}`);
       const vig = Math.max(
         0,
         ...c.effects.filter((f) => f.enabled && f.effect === 'color').map((f) => param(f, 'vignette')),
