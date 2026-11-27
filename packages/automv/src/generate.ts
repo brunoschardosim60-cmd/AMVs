@@ -15,6 +15,8 @@ import type { OrganizationMode } from './sequence-planner.js';
 export type { OrganizationMode } from './sequence-planner.js';
 import { editorialStyle, recommendStyle, styleDef, type EditorialDirection, type StyleDef, type StyleId } from './styles.js';
 import type { CreativeEmphasis } from './creative-profiles.js';
+import type { CreativeDirectionSession } from './creative-intelligence.js';
+import type { CreativeDirectionOverrides } from './narrative-director.js';
 import { matchLyricsSemantics } from './lyric-matcher.js';
 import { lyricCueKey } from './lyric-cue-key.js';
 import { layoutLyrics } from './lyrics-layout.js';
@@ -141,6 +143,10 @@ export interface GenerateOptions {
   dynamicTypography?: boolean;
   /** Controle anti-abafamento da música durante falas: 'smart' protege o refrão/drop, 'gentle' reduz suave (-6 dB), 'deep' reduz forte (-16 dB), 'off' mantém a música 100% limpa. */
   musicDucking?: MusicDuckingPreset;
+  /** Travas e diretrizes editoriais interativas aprovadas no Creative Direction Preview. */
+  creativeOverrides?: CreativeDirectionOverrides;
+  /** Sessão pré-calculada do AMV Creative Intelligence Engine para guiar decisões globais. */
+  creativeSession?: CreativeDirectionSession;
 }
 
 export interface GenerateResult {
@@ -1339,7 +1345,25 @@ export function resolveAutonomousOptions(
 }
 
 function generateInner(project: Project, music: MusicInput, episodes: EpisodeInput[], rawOpts: GenerateOptions): GenerateResult {
-  const opts = rawOpts.autonomous ? resolveAutonomousOptions(music, episodes, rawOpts) : rawOpts;
+  const baseOpts = rawOpts.autonomous ? resolveAutonomousOptions(music, episodes, rawOpts) : rawOpts;
+  const adjustedIntensity = baseOpts.creativeOverrides?.intensityBias
+    ? (Math.max(0, Math.min(3, baseOpts.intensity + baseOpts.creativeOverrides.intensityBias)) as 0 | 1 | 2 | 3)
+    : baseOpts.intensity;
+  const hasNonLinearDirection = Boolean(
+    (baseOpts.creativeOverrides?.narrativeModel && ['climax_opening', 'non_linear', 'flashback', 'foreshadowing', 'revenge', 'rivalry', 'hybrid'].includes(baseOpts.creativeOverrides.narrativeModel))
+      || (baseOpts.creativeSession && ['climax_opening', 'non_linear', 'flashback', 'foreshadowing', 'revenge', 'rivalry', 'hybrid'].includes(baseOpts.creativeSession.plan.narrativeModel))
+      || baseOpts.creativeOverrides?.openingSceneId
+      || baseOpts.creativeOverrides?.climaxSceneId
+      || baseOpts.creativeOverrides?.endingSceneId
+      || (baseOpts.creativeOverrides?.lockedScenes && Object.keys(baseOpts.creativeOverrides.lockedScenes).length > 0),
+  );
+  const opts: GenerateOptions = {
+    ...baseOpts,
+    intensity: adjustedIntensity,
+    ...(hasNonLinearDirection && !baseOpts.sequenceIds?.length && baseOpts.organizationMode !== 'chronological'
+      ? { focus: 'mix' as const, organizationMode: 'free' as const }
+      : {}),
+  };
   const organizationMode = opts.organizationMode ?? 'narrative';
   const editorialDirection = opts.editorialDirection ?? 'balanced';
   const style = editorialStyle(styleDef(opts.style), editorialDirection);
@@ -1351,7 +1375,10 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const sceneExclusions = new Set(project.sceneAnnotations
     .filter((annotation) => annotation.excludedFromAuto)
     .map((annotation) => `${annotation.assetId}@${annotation.sceneKey}`));
-  const exclude = new Set(opts.exclude ?? []);
+  const exclude = new Set([
+    ...(opts.exclude ?? []),
+    ...(opts.creativeOverrides?.rejectedSceneIds ?? []),
+  ]);
   const m = music.analysis;
   const beatOffsetS = Math.max(-500, Math.min(500, opts.beatOffsetMs ?? 0)) / 1000;
   if (m.bpmConfidence < 0.4) {
@@ -1764,8 +1791,12 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     }
   }
 
-  const effectiveLyricMatches = mergeLyricMatches(
+  const baseLyricMatches = mergeLyricMatches(
     opts.lyrics && opts.lyrics.length > 0 ? matchLyricsSemantics(opts.lyrics, candidates, (c) => visionOf(c.ep, c.shot)) : undefined,
+    opts.creativeSession?.lyricMatchMap,
+  );
+  const effectiveLyricMatches = mergeLyricMatches(
+    baseLyricMatches,
     opts.lyricSceneMatches,
   );
 
@@ -1843,7 +1874,40 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const dropSequenceBonus = sl.isDrop && opts.focus === 'mix' && previous?.ep.assetId === c.ep.assetId && c.sequenceOrder > previous.sequenceOrder
       ? MIX_SEQUENCE_DROP_BONUS
       : 0;
-    return { breakdown, score: breakdown.total + dropSequenceBonus };
+    let creativeDirectorBonus = 0;
+    const baseSceneId = `${c.ep.assetId}@${parentShotStartS.get(c.shot) ?? c.shot.startS}`;
+    const isOpeningSlot = Math.abs(sl.startS - (fitSlots[0]?.startS ?? 0)) < 1e-4;
+    const isEndingSlot = Math.abs(sl.endS - (fitSlots.at(-1)?.endS ?? D)) < 1e-4;
+    const targetOpeningId = opts.creativeOverrides?.openingSceneId ?? opts.creativeSession?.plan.openingSelection?.sceneId;
+    const targetClimaxId = opts.creativeOverrides?.climaxSceneId ?? opts.creativeSession?.plan.climaxSelection?.sceneId;
+    const targetEndingId = opts.creativeOverrides?.endingSceneId ?? opts.creativeSession?.plan.endingStrategy.sceneId;
+
+    if (isOpeningSlot && targetOpeningId && (c.id === targetOpeningId || baseSceneId === targetOpeningId)) {
+      creativeDirectorBonus += opts.creativeOverrides?.openingSceneId ? 8 : 2.4;
+    }
+    if (sl.isDrop && targetClimaxId && (c.id === targetClimaxId || baseSceneId === targetClimaxId)) {
+      creativeDirectorBonus += opts.creativeOverrides?.climaxSceneId ? 8 : 2.8;
+    }
+    if (isEndingSlot && targetEndingId && (c.id === targetEndingId || baseSceneId === targetEndingId)) {
+      creativeDirectorBonus += opts.creativeOverrides?.endingSceneId ? 8 : 2.2;
+    }
+    if (opts.creativeOverrides?.lockedScenes) {
+      const slotIdx = fitSlots.indexOf(sl);
+      const lockedForSlot = slotIdx >= 0 ? opts.creativeOverrides.lockedScenes[`slot:${slotIdx}`] : undefined;
+      if (lockedForSlot && (c.id === lockedForSlot || baseSceneId === lockedForSlot)) {
+        creativeDirectorBonus += 12;
+      }
+    }
+    if (opts.creativeSession) {
+      const slotMid = (sl.startS + sl.endS) / 2;
+      const guidedDecision = opts.creativeSession.solution.decisions.find(
+        (d) => slotMid >= d.startTime - 0.05 && slotMid <= d.endTime + 0.05,
+      );
+      if (guidedDecision && (c.id === guidedDecision.selectedSceneId || baseSceneId === guidedDecision.selectedSceneId)) {
+        creativeDirectorBonus += 1.6;
+      }
+    }
+    return { breakdown, score: breakdown.total + dropSequenceBonus + creativeDirectorBonus };
   };
 
   const sequencePlan = planSequence(fitSlots, candidates, {
@@ -2424,7 +2488,12 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     if (opts.useEffects && D >= 8 && slotIndex === fitSlots.length - 1 && !clipEffects.some((e) => e.effect === 'fade_out')) {
       clipEffects.push(fx('fade_out', { duration: Math.round(Math.min(0.65, len * 0.75) * 100) / 100 }));
     }
+    const slotMidS = (sl.startS + sl.endS) / 2;
+    const creativeDecision = opts.creativeSession?.solution.decisions.find(
+      (d) => slotMidS >= d.startTime - 0.05 && slotMidS <= d.endTime + 0.05,
+    );
     const why = [
+      creativeDecision ? `Direção (${opts.creativeSession!.plan.narrativeModelLabel}): ${creativeDecision.musicalRelationship}` : null,
       narrativeBeat ? `${narrativeRoleLabel(narrativeBeat.role)} (${narrativeBeat.section})` : null,
       sl.isDrop ? `Drop em ${fmt(sl.startS)}` : `${sl.section || 'trecho'} (energia ${sl.energy.toFixed(2)})`,
       sl.musicCue ?? null,
@@ -2456,7 +2525,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       && currentVision.confidence >= 0
       && currentVision.confidence <= 1
       ? currentVision.confidence
-      : null;
+      : creativeDecision?.confidence ?? null;
     const clip = baseClip(v1.id, c.ep.assetId, sl.startS, len, srcIn, why, {
       confidence: measuredVisionConf,
       speed,
