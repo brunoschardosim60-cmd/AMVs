@@ -345,6 +345,8 @@ export function windowArgs(o: WindowInput): WindowJob {
     const topLayer = `toplayer${filters.length}`;
     const alphaLayer = `alphalayer${filters.length}`;
     const alpha = `alpha${filters.length}`;
+    const baseKeep = `basekeep${filters.length}`;
+    const baseBlend = `baseblend${filters.length}`;
     const topRgb = `toprgb${filters.length}`;
     const bottomRgb = `bottomrgb${filters.length}`;
     const blendedRgb = `blendrgb${filters.length}`;
@@ -353,12 +355,13 @@ export function windowArgs(o: WindowInput): WindowJob {
     filters.push(`color=c=black@0:s=${W}x${H}:r=${FPS}:d=${n(Dw + 1, 3)},format=rgba[${transparent}]`);
     filters.push(`[${transparent}][${label}]overlay=x='${x}':y='${y}':eval=frame:eof_action=pass:format=rgb${enable ? `:enable='${enable}'` : ''}[${fullLayer}]`);
     filters.push(`[${fullLayer}]split=2[${topLayer}][${alphaLayer}]`);
+    filters.push(`[${cur}]split=2[${baseKeep}][${baseBlend}]`);
     filters.push(`[${topLayer}]format=gbrp[${topRgb}]`);
-    filters.push(`[${cur}]format=gbrp[${bottomRgb}]`);
+    filters.push(`[${baseBlend}]format=gbrp[${bottomRgb}]`);
     filters.push(`[${topRgb}][${bottomRgb}]blend=all_mode=${blendMode}[${blendedRgb}]`);
     filters.push(`[${alphaLayer}]alphaextract[${alpha}]`);
     filters.push(`[${blendedRgb}][${alpha}]alphamerge[${blended}]`);
-    filters.push(`[${cur}][${blended}]overlay=x=0:y=0:eval=frame:eof_action=pass:format=yuv420[${next}]`);
+    filters.push(`[${baseKeep}][${blended}]overlay=x=0:y=0:eval=frame:eof_action=pass:format=yuv420[${next}]`);
     cur = next;
   };
 

@@ -9,10 +9,10 @@ import { getAnalysisReadiness } from './analysis-readiness';
 import { Download, Flame, Heart, Mic, Music2, Sparkles, Type, Wand2, Zap } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectSession } from '../../core/session';
-import { upgradeGeneratedV2Cutouts } from '../../core/cutout';
+import { stripProvisionalV2Cutouts, upgradeGeneratedV2Cutouts } from '../../core/cutout';
 import { useApp, useLibraryVersion, useSessionVersion } from '../../store';
 import { displayTitle, recommend, STYLE_THEME } from '@amv/music';
-import { applyCommand, clipEndUs, newId, sourceTimeAt, type Clip, type Project } from '@amv/project';
+import { applyCommand, clipEndUs, isInternalCutoutAsset, newId, sourceTimeAt, type Clip, type Project } from '@amv/project';
 import { Button, Dialog } from '../../ui/controls';
 import { MusicalMap } from './MusicalMap';
 import { RegenerationCompare } from './RegenerationCompare';
@@ -77,7 +77,7 @@ export function GenerateDialog({
   useLibraryVersion(library);
   const project = session.project;
   const musics = project.assets.filter((a) => a.kind === 'audio' && !a.tags.includes('sfx'));
-  const episodes = project.assets.filter((a) => a.kind === 'video' && !a.tags.includes('alpha-cutout'));
+  const episodes = project.assets.filter((a) => a.kind === 'video' && !isInternalCutoutAsset(a));
   const initialMusicClip = localizedRange && project.tracks.find((track) => track.id === localizedRange.trackId)
     ? project.clips.find((clip) => {
         const track = project.tracks.find((item) => item.id === clip.trackId);
@@ -91,7 +91,7 @@ export function GenerateDialog({
   const [style, setStyle] = useState<StyleId>('hype');
   const [styleMode, setStyleMode] = useState<'auto' | 'manual'>('auto');
   const [musicDriveMode, setMusicDriveMode] = useState<'lyric-kinetic' | 'pure-rhythm' | 'lyric-verse' | 'narrative-climax'>('lyric-kinetic');
-  const [autoExtractMusicLyrics, setAutoExtractMusicLyrics] = useState(true);
+  const [autoExtractMusicLyrics, setAutoExtractMusicLyrics] = useState(false);
   const [intensity, setIntensity] = useState<0 | 1 | 2 | 3>(2);
   const [duration, setDuration] = useState(30);
   const [localizedStartS, setLocalizedStartS] = useState((localizedRange?.startUs ?? 0) / S);
@@ -129,7 +129,7 @@ export function GenerateDialog({
   const [matchLyrics, setMatchLyrics] = useState(false);
   const [lyricSceneMatches, setLyricSceneMatches] = useState<NonNullable<GenerateOptions['lyricSceneMatches']>>({});
   const [suggestedMatches, setSuggestedMatches] = useState<NonNullable<GenerateOptions['lyricSceneMatches']> | null>(null);
-  const [lyricStyle, setLyricStyle] = useState<LyricTypographyStyle>('anime-blend');
+  const [lyricStyle, setLyricStyle] = useState<LyricTypographyStyle>('anime-impact');
   const [seed, setSeed] = useState(1);
   const [result, setResult] = useState<{
     warnings: string[];
@@ -623,7 +623,7 @@ export function GenerateDialog({
       // Para voz cantada sobre música, desliga o filtro VAD para o Silero não descartar os vocais.
       const transcript = await transcribeMediaAsset(platform, selectedMusic, audioIndex, {
         model: 'small',
-        vadFilter: false,
+        vadFilter: true,
         signal: controller.signal,
         onProgress: ({ stage, progress, duration: d }) => setLyricsSyncProgress({
           stage: stage === 'extracting' ? 'Extraindo áudio da música' : stage === 'preparing' ? 'Carregando modelo Whisper' : 'Reconhecendo vocais',
@@ -702,7 +702,7 @@ export function GenerateDialog({
       const totalDuration = Math.max(1, (selectedMusic.probe?.durationUs ?? 0) / S);
       const transcript = await transcribeMediaAsset(platform, selectedMusic, audioIndex, {
         model: 'small',
-        vadFilter: false,
+        vadFilter: true,
         signal: controller.signal,
         onProgress: ({ stage, progress, duration: d }) => setLyricsSyncProgress({
           stage: stage === 'extracting' ? 'Extraindo áudio da música' : stage === 'preparing' ? 'Carregando modelo Whisper' : 'Ouvindo vocais da música',
@@ -1307,7 +1307,7 @@ export function GenerateDialog({
         autonomous: isAutonomous,
         useSfx: effectiveUseSfx,
         sfxMode,
-        animeHitAudio: true,
+        animeHitAudio: isAutonomous,
         sfxAssets,
         style: selectedStyle,
         intensity,
@@ -1471,16 +1471,20 @@ export function GenerateDialog({
       const label = isAutonomous
         ? `Modo Livre · ${STYLES.find((s) => s.id === effectiveStyleId)!.label} (${tournament.winner.score.total.toFixed(0)}/100)`
         : `${directionLabel} · ${styleMode === 'auto' ? 'Aberto · ' : ''}${STYLES.find((s) => s.id === selectedStyle)!.label}`;
-      // Converte máscaras V2 geradas em recortes PNG reais (falha não bloqueia a geração).
+      // Converte máscaras V2 geradas em recortes neurais reais; se indisponível, limpa provisórios V2 sem deixar máscaras falsas.
       let finalCommands = r.commands;
       if (platform) {
         try {
           const up = await upgradeGeneratedV2Cutouts(platform, session, session.project, r.commands);
           finalCommands = up.commands;
           if (up.upgraded > 0) r.warnings.push('Recortes reais gerados: ' + up.upgraded + (up.engine ? ' (' + up.engine + ')' : '') + '.');
-        } catch {}
+        } catch {
+          finalCommands = stripProvisionalV2Cutouts(session.project, r.commands);
+        }
+      } else {
+        finalCommands = stripProvisionalV2Cutouts(session.project, r.commands);
       }
-      session.history.transaction(`Gerar meu AMV — ${label}`, finalCommands);
+      session.execute({ type: 'batch', label: `Gerar meu AMV — ${label}`, commands: finalCommands }, `Gerar meu AMV — ${label}`);
       useEditor.getState().setPlayhead(0);
       useEditor.getState().setPlaying(false);
       try {

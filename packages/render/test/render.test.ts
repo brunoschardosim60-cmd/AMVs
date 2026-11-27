@@ -625,6 +625,34 @@ describe('exportação', () => {
     expect(result.frames).toBe(30);
     expect(existsSync(result.logPath)).toBe(true);
   });
+
+  it('preserva a resolução de exportação diferente da mídia de origem quando há textos com blendMode screen e difference', async () => {
+    const p = await project((p) => {
+      const mkText = (start: number, blendMode: Clip['blendMode']) =>
+        clip(track(p, 'Legendas'), '', start, Math.round(0.5 * S), 0, {
+          assetId: null,
+          blendMode,
+          text: TextContentSchema.parse({ text: 'TESTE', font: 'Inter', size: 42, color: '#ffffff', outlineColor: '#000000', outlineWidth: 4, shadow: true, animationIn: null, animationOut: null }),
+        });
+      return [
+        clip(track(p, 'V1'), 'rg', 0, S, 0),
+        mkText(0, 'screen'),
+        mkText(Math.round(0.5 * S), 'difference'),
+      ];
+    });
+    const e = env(p, 'blend-upscale');
+    e.textImage = async (_c, W, H, d) => {
+      await ff(['-f', 'lavfi', '-i', `color=c=white@0.8:s=${W}x${H},format=rgba`, '-frames:v', '1', join(d, 't.png')]);
+      return { path: join(d, 't.png'), sequence: false };
+    };
+    const out = join(dir, 'blend-upscale-640x360.mp4');
+    const result = await renderProject(p, out, {
+      width: 640, height: 360, enc: { codec: 'h264', quality: 0, encoder: 'cpu' }, audioBitrateK: 128,
+    }, e, () => undefined);
+    expect(result.validation.width).toBe(640);
+    expect(result.validation.height).toBe(360);
+    expect(result.frames).toBe(30);
+  });
 });
 
 describe('auxiliares de áudio', () => {

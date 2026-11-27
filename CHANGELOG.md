@@ -1,5 +1,16 @@
 # Novidades
 
+## 0.9.10
+
+**Auditoria e correção em todas as camadas (Render FFmpeg, V1/V2/Legendas/Vozes/Efeitos, Sessão, Preview WebGL e Sidecar Rust/Python).**
+
+- **Correção crítica de resolução na exportação com textos mesclados (`screen` / `difference`):** adicionado `split=2` no grafo `overlayOnto` de `packages/render/src/video.ts`; antes, o FFmpeg consumia a camada base duas vezes sem dividi-la e conectava o segundo pad ao vídeo bruto de origem (ex.: `1280×720`), fazendo toda exportação em `1080p`/`1440p`/`4K` falhar na validação final de resolução.
+- **Fim do clipping digital em AAC e do excesso de ruído em `Vozes` e `Efeitos`:** reservada margem de teto (`-1.0 dBFS`) no `alimiter` (`packages/render/src/audio.ts`) contra picos inter-sample da codificação AAC; tornados seletivos e mais suaves os acentos de `Efeitos` (`hits-only`) e limitados os transientes `Golpe anime` em `Vozes` (máx. 3 por montagem espaçados ≥ 5,5 s, desligados por padrão no modo manual).
+- **Higienização automática de projetos legados e de todas as trilhas (`V1`, `V2`, `Legendas`, Biblioteca):** `sanitizeLoadedProject` (`session.ts`) limpa automaticamente recortes heurísticos quebrados (`canvas-matting`), órfãos `Recorte · ...` da biblioteca (`MediaPanel.tsx`, `ProjectScreen.tsx`, `GenerateDialog.tsx`), instâncias duplicadas de `color` em `auto-repair.ts` e sobreposições residuais de `1 µs` em `V1` (`baseClip`); desativada extração cega de letra por padrão (com `vadFilter: true` quando acionada), definido estilo padrão nítido `anime-impact` (`blendMode: 'normal'`) e agrupados conectivos curtos em `splitKineticChunks`.
+- **Blindagem de Preview, Toasts de erro e Sidecar no Windows:** protegidos `ColorGradeGpu` (`texImage2D`), `captureVideoFrame` e `renderAt` (`player.ts`) contra `SecurityError` em canvas; filtrados `AbortError`/`ResizeObserver` com deduplicação em `errors.ts`; adicionado `CREATE_NO_WINDOW` em `src-tauri/src/lib.rs` (sem janelas pretas de console ao iniciar o analisador) e conferência de `/cutout/status` em `package_windows.py`.
+- **Verificação:** `cargo check` em `src-tauri`, `pytest` em `services/analyzer`, `pnpm typecheck`, `pnpm --filter @amv/desktop build` e suíte completa `pnpm test` validados com mídia sintética e integração FFmpeg (além de teste fim a fim sobre projeto real de 116 janelas).
+- **Limitações novas:** nenhuma.
+
 ## 0.9.9
 
 **Fluxo simplificado de download do vídeo ("Baixar vídeo" + escolha direta de qualidade) e correção definitiva dos bloqueios de exportação no Windows.**

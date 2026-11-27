@@ -36,12 +36,23 @@ struct AnalyzerConnection {
 }
 
 fn spawn_analyzer(program: &str, args: &[&str]) -> Result<(Child, String), String> {
-    let mut child = Command::new(program)
-        .args(args)
+    #[cfg(windows)]
+    if program.to_ascii_lowercase().contains("windowsapps\\python") {
+        return Err("atalho da Microsoft Store ignorado".to_owned());
+    }
+    let mut cmd = Command::new(program);
+    cmd.args(args)
         .env("PYTHONUNBUFFERED", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("não foi possível iniciar {program}: {e}"))?;
 

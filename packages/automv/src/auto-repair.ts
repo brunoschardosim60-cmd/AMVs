@@ -67,28 +67,50 @@ export function autoRepairAssembly(
     const targetDelta = diff * 0.65;
     const exposure = Math.round(Math.max(-0.65, Math.min(0.65, targetDelta / 0.35)) * 100) / 100;
     if (Math.abs(exposure) < 0.05) continue;
-    const colorEffect: EffectInstance = {
-      id: newId('fx'),
-      effect: 'color',
-      enabled: true,
-      params: {
-        brightness: 0,
-        contrast: 1,
-        saturation: 1,
-        exposure,
-        temperature: 0,
-        tint: 0,
-        hue: 0,
-        shadows: exposure > 0 ? 0.08 : 0,
-        midtones: 0,
-        highlights: exposure < 0 ? -0.06 : 0,
-        vignette: 0,
-      },
-    };
+    const existingColorIdx = currClip.effects.findIndex((fx) => fx.effect === 'color');
+    let nextEffects: EffectInstance[];
+    if (existingColorIdx >= 0) {
+      const existing = currClip.effects[existingColorIdx]!;
+      const prevExp = typeof existing.params.exposure === 'number' && Number.isFinite(existing.params.exposure) ? existing.params.exposure : 0;
+      const mergedExp = Math.round(Math.max(-0.65, Math.min(0.65, prevExp + exposure)) * 100) / 100;
+      nextEffects = currClip.effects.slice();
+      nextEffects[existingColorIdx] = {
+        ...existing,
+        enabled: true,
+        params: {
+          ...existing.params,
+          exposure: mergedExp,
+          shadows: mergedExp > 0 ? Math.max(Number(existing.params.shadows ?? 0), 0.08) : Number(existing.params.shadows ?? 0),
+          highlights: mergedExp < 0 ? Math.min(Number(existing.params.highlights ?? 0), -0.06) : Number(existing.params.highlights ?? 0),
+        },
+      };
+    } else {
+      nextEffects = [
+        ...currClip.effects,
+        {
+          id: newId('fx'),
+          effect: 'color',
+          enabled: true,
+          params: {
+            brightness: 0,
+            contrast: 1,
+            saturation: 1,
+            exposure,
+            temperature: 0,
+            tint: 0,
+            hue: 0,
+            shadows: exposure > 0 ? 0.08 : 0,
+            midtones: 0,
+            highlights: exposure < 0 ? -0.06 : 0,
+            vignette: 0,
+          },
+        },
+      ];
+    }
     commands.push({
       type: 'clip.update',
       clipId: currId,
-      patch: { effects: [...currClip.effects, colorEffect] },
+      patch: { effects: nextEffects },
     });
     brightnessFixedIds.add(currId);
     brightnessFixCount++;

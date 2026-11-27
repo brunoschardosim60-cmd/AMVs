@@ -1,13 +1,43 @@
 import { inspectFile, joinPath } from '@amv/media';
-import { clipEndUs, ClipSchema, newId, sourceTimeAt, type Asset, type Clip, type Command, type Project } from '@amv/project';
+import { ALPHA_CUTOUT_TAG, clipEndUs, ClipSchema, isInternalCutoutAsset, newId, sourceTimeAt, type Asset, type Clip, type Command, type Project } from '@amv/project';
 import type { Platform } from '../platform/types';
 import type { ProjectSession } from './session';
 
-/** Tag aplicada às camadas internas de recorte transparente para não poluir a lista de mídias nem gerar proxy opaco. */
-export const ALPHA_CUTOUT_TAG = 'alpha-cutout';
+export { ALPHA_CUTOUT_TAG };
 
-export function isAlphaCutoutAsset(asset: Pick<Asset, 'tags'>): boolean {
-  return asset.tags.includes(ALPHA_CUTOUT_TAG);
+export function isAlphaCutoutAsset(asset: Pick<Asset, 'tags' | 'name' | 'path'>): boolean {
+  return isInternalCutoutAsset(asset);
+}
+
+/** Remove clipes V2 provisórios (`subject-focus` / `manga-slash`) e restaura `behindCutout = false` nas letras correspondentes. */
+export function stripProvisionalV2Cutouts(project: Project, commands: Command[]): Command[] {
+  const v2Track = project.tracks.find((t) => t.kind === 'video' && t.name === 'V2')
+    ?? project.tracks.find((t) => t.kind === 'video');
+  if (!v2Track) return commands;
+  const removedRanges: Array<[number, number]> = [];
+  const kept: Command[] = [];
+  for (const cmd of commands) {
+    if (
+      cmd.type === 'clip.add'
+      && cmd.clip.trackId === v2Track.id
+      && (cmd.clip.mask === 'subject-focus' || cmd.clip.mask === 'manga-slash')
+    ) {
+      removedRanges.push([cmd.clip.timelineStartUs, clipEndUs(cmd.clip)]);
+      continue;
+    }
+    kept.push(cmd);
+  }
+  if (!removedRanges.length) return kept;
+  return kept.map((cmd) => {
+    if (cmd.type !== 'clip.add' || !cmd.clip.text?.behindCutout) return cmd;
+    const cStart = cmd.clip.timelineStartUs;
+    const cEnd = clipEndUs(cmd.clip);
+    if (!removedRanges.some(([a, b]) => cStart < b && cEnd > a)) return cmd;
+    return {
+      type: 'clip.add',
+      clip: { ...cmd.clip, text: { ...cmd.clip.text, behindCutout: false } },
+    };
+  });
 }
 
 async function runWithSidecarTimeout<T>(
@@ -204,6 +234,8 @@ export async function upgradeGeneratedV2Cutouts(
       const cutoutAsset: Asset = {
         ...inspected.asset,
         name: `Recorte V2 · ${asset.name}`,
+        status: 'ok',
+        error: null,
         tags: [...new Set([...inspected.asset.tags, ALPHA_CUTOUT_TAG])],
       };
       extraAssets.push({ type: 'asset.add', asset: cutoutAsset });
@@ -245,7 +277,21 @@ export async function upgradeGeneratedV2Cutouts(
   }
 
   const filtered = nextCommands.filter((c): c is Command => c !== null);
-  return { commands: [...extraAssets, ...filtered], upgraded, engine: lastEngine };
+  const removedClipIds = new Set(
+    filtered.flatMap((c) => (c.type === 'clip.remove' ? [c.clipId] : [])),
+  );
+  const usedAssetIds = new Set<string>();
+  for (const existingClip of project.clips) {
+    if (!removedClipIds.has(existingClip.id) && existingClip.assetId) usedAssetIds.add(existingClip.assetId);
+  }
+  for (const cmd of filtered) {
+    if (cmd.type === 'clip.add' && cmd.clip.assetId) usedAssetIds.add(cmd.clip.assetId);
+  }
+  const orphanRemovals: Command[] = project.assets
+    .filter((a) => isInternalCutoutAsset(a) && !usedAssetIds.has(a.id))
+    .map((a) => ({ type: 'asset.remove' as const, assetId: a.id }));
+
+  return { commands: [...extraAssets, ...filtered, ...orphanRemovals], upgraded, engine: lastEngine };
 }
 
 /**
@@ -293,6 +339,8 @@ export async function createCharacterCutoutOnV2(
   const cutoutAsset: Asset = existing ?? {
     ...inspected,
     name: `Recorte V2 · ${asset.name}`,
+    status: 'ok',
+    error: null,
     tags: [...new Set([...inspected.tags, ALPHA_CUTOUT_TAG])],
   };
 

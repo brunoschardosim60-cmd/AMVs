@@ -1,4 +1,4 @@
-import { isSfxAsset, type Asset } from '@amv/project';
+import { isInternalCutoutAsset, isSfxAsset, type Asset } from '@amv/project';
 import { AlertTriangle, Archive, AudioLines, Copy, Download, Film, FolderSearch, Image as ImageIcon, Plus, Redo2, Save, Search, ShieldCheck, Undo2, Wand2, History, Bot } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { duration, fpsLabel, mainCodec, resolution, bytes } from '../../format';
@@ -88,7 +88,7 @@ export function ProjectScreen() {
   const project = session!.project;
   // os efeitos sonoros internos e as máscaras de recorte transparente ficam no projeto, mas fora da lista de mídias do usuário
   const userAssets = useMemo(
-    () => project.assets.filter((a) => !isSfxAsset(a) && !a.tags.includes('alpha-cutout')),
+    () => project.assets.filter((a) => !isSfxAsset(a) && !isInternalCutoutAsset(a)),
     [project.assets],
   );
   const assets = useMemo(

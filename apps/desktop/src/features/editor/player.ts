@@ -172,15 +172,19 @@ class ColorGradeGpu {
   apply(source: HTMLCanvasElement, key: string, lut: ColorGradeLut): HTMLCanvasElement | null {
     const gl = this.gl;
     if (gl.isContextLost()) return null;
-    if (this.canvas.width !== source.width) this.canvas.width = source.width;
-    if (this.canvas.height !== source.height) this.canvas.height = source.height;
-    gl.viewport(0, 0, source.width, source.height);
-    gl.useProgram(this.program);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.sourceTexture);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+    try {
+      if (this.canvas.width !== source.width) this.canvas.width = source.width;
+      if (this.canvas.height !== source.height) this.canvas.height = source.height;
+      gl.viewport(0, 0, source.width, source.height);
+      gl.useProgram(this.program);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.sourceTexture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+    } catch {
+      return null;
+    }
 
     let lutTexture = this.lutTextures.get(key);
     if (!lutTexture) {
@@ -599,11 +603,15 @@ export class Player {
 
   private captureVideoFrame(v: HTMLVideoElement, slot: Slot): void {
     if (v.readyState < 2 || !v.videoWidth || !v.videoHeight) return;
-    slot.lastFrame ??= document.createElement('canvas');
-    if (slot.lastFrame.width !== v.videoWidth) slot.lastFrame.width = v.videoWidth;
-    if (slot.lastFrame.height !== v.videoHeight) slot.lastFrame.height = v.videoHeight;
-    slot.lastFrame.getContext('2d')?.drawImage(v, 0, 0);
-    slot.lastFrameTime = v.currentTime;
+    try {
+      slot.lastFrame ??= document.createElement('canvas');
+      if (slot.lastFrame.width !== v.videoWidth) slot.lastFrame.width = v.videoWidth;
+      if (slot.lastFrame.height !== v.videoHeight) slot.lastFrame.height = v.videoHeight;
+      slot.lastFrame.getContext('2d')?.drawImage(v, 0, 0);
+      slot.lastFrameTime = v.currentTime;
+    } catch {
+      slot.lastFrameTime = -1;
+    }
   }
 
   private prepareSlotForSeek(m: HTMLMediaElement, slot: Slot, targetS: number): void {
@@ -732,7 +740,11 @@ export class Player {
     if ((this.playing || this.dirty) && now - this.lastRenderAtMs >= frameIntervalMs - 2.5) {
       this.lastRenderAtMs = now;
       this.dirty = false;
-      this.renderAt(Math.min(t, end || t));
+      try {
+        this.renderAt(Math.min(t, end || t));
+      } catch (err) {
+        console.warn('[AMV Studio] Quadro ignorado no preview:', err);
+      }
     }
     const afterNow = performance.now();
     if (this.playing && afterNow - this.lastNotifyAtMs >= PLAYHEAD_UPDATE_MS) {

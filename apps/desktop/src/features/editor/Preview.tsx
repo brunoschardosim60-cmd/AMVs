@@ -1,5 +1,5 @@
 import { alignClipPeakToNearestBeat, harmonizeTextClipsWithScenes, readPlayheadInsight } from '@amv/automv';
-import { clipEndUs, evaluateKeyframes, formatTimecode, frameToUs, projectDurationUs, upsertKeyframe, usToFrame, type Clip, type Project } from '@amv/project';
+import { clipEndUs, evaluateKeyframes, formatTimecode, frameToUs, isInternalCutoutAsset, projectDurationUs, upsertKeyframe, usToFrame, type Clip, type Project } from '@amv/project';
 import { editSubtitleTextManually, LOOKS, restyleSubtitles, type SubtitleLook } from '@amv/subtitles';
 import { Activity, ChevronFirst, ChevronLast, Headphones, Maximize2, Minimize2, MonitorPlay, Pause, Pencil, Play, RotateCw, Sparkles, StepBack, StepForward, Wand2, Zap } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
@@ -46,7 +46,7 @@ export function createPlayer(session: ProjectSession, project: Project, original
     videoUrl: (id) => {
       const asset = session.project.assets.find((a) => a.id === id);
       if (!asset || asset.status === 'missing') return null;
-      if (asset.tags.includes('alpha-cutout')) return platform.fileUrl(asset.path);
+      if (isInternalCutoutAsset(asset)) return platform.fileUrl(asset.path);
       const useOriginal = original ?? useEditor.getState().previewOriginal;
       const proxyPath = session.assetRuntime(id).artifacts?.proxyPath ?? null;
       const path = useOriginal

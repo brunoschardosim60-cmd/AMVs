@@ -13,15 +13,34 @@ export interface ErrorRecord {
 }
 
 const recent: ErrorRecord[] = [];
+const lastToastByMessage = new Map<string, number>();
+const TOAST_COOLDOWN_MS = 15_000;
+
 let platform: Platform | null = null;
 let notify: ((r: ErrorRecord) => void) | null = null;
 let writing = Promise.resolve();
 
+function isIgnorableNoise(err: unknown): boolean {
+  if (!err) return false;
+  const name = (err as { name?: string })?.name ?? '';
+  const msg = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  if (name === 'AbortError' || name === 'CancelledError') return true;
+  if (/ResizeObserver loop/i.test(msg)) return true;
+  if (/transcrição cancelada|recorte cancelado|análise cancelada/i.test(msg)) return true;
+  return false;
+}
+
 export function setupErrorReporting(p: Platform, onError: (r: ErrorRecord) => void): void {
   platform = p;
   notify = onError;
-  window.addEventListener('error', (e) => reportError('janela', e.error ?? e.message));
-  window.addEventListener('unhandledrejection', (e) => reportError('tarefa em segundo plano', e.reason));
+  window.addEventListener('error', (e) => {
+    if (isIgnorableNoise(e.error ?? e.message)) return;
+    reportError('janela', e.error ?? e.message);
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    if (isIgnorableNoise(e.reason)) return;
+    reportError('tarefa em segundo plano', e.reason);
+  });
 }
 
 export function recentErrors(): readonly ErrorRecord[] {
@@ -29,6 +48,7 @@ export function recentErrors(): readonly ErrorRecord[] {
 }
 
 export function reportError(where: string, err: unknown, extra = ''): void {
+  if (isIgnorableNoise(err)) return;
   const e = err instanceof Error ? err : new Error(typeof err === 'string' ? err : JSON.stringify(err));
   const rec: ErrorRecord = {
     at: new Date().toISOString(),
@@ -39,7 +59,15 @@ export function reportError(where: string, err: unknown, extra = ''): void {
   recent.push(rec);
   if (recent.length > 50) recent.shift();
   console.error(`[AMV Studio] ${where}:`, e);
-  notify?.(rec);
+
+  const key = `${where}:${rec.message}`;
+  const now = Date.now();
+  const prevToastAt = lastToastByMessage.get(key) ?? 0;
+  if (now - prevToastAt >= TOAST_COOLDOWN_MS) {
+    lastToastByMessage.set(key, now);
+    notify?.(rec);
+  }
+
   const p = platform;
   if (!p) return;
   writing = writing

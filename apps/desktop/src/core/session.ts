@@ -11,6 +11,10 @@ import {
   type MediaEnv,
 } from '@amv/media';
 import {
+  aggregateColorGrade,
+  clipEndUs,
+  isColorGradeNeutral,
+  isInternalCutoutAsset,
   isSfxAsset,
   newId,
   SFX_TAG,
@@ -22,6 +26,7 @@ import {
   serializeProject,
   insertAsset,
   type Asset,
+  type Clip,
   type Command,
   type Project,
   type ProjectSettings,
@@ -150,7 +155,8 @@ export class ProjectSession {
     const parsed = parseProject(text);
     if (!parsed.ok) return { session: null, result: { ok: false, error: parsed.error, details: parsed.details } };
 
-    const s = new ProjectSession(platform, parsed.project, path);
+    const sanitizedProject = sanitizeLoadedProject(parsed.project);
+    const s = new ProjectSession(platform, sanitizedProject, path);
     const missing = await s.checkAssets();
     // projeto recuperado ainda não está salvo no arquivo principal
     if (recovered) s.history.markUnsaved();
@@ -453,13 +459,14 @@ export class ProjectSession {
   }
 
   private async touchRecent(): Promise<void> {
-    const firstVideo = this.project.assets.find((a) => a.kind === 'video' && this.runtime.get(a.id)?.artifacts?.posterPath);
+    const firstVideo = this.project.assets.find((a) => a.kind === 'video' && !isInternalCutoutAsset(a) && this.runtime.get(a.id)?.artifacts?.posterPath);
+    const userAssetsCount = this.project.assets.filter((a) => !isSfxAsset(a) && !isInternalCutoutAsset(a)).length;
     await rememberRecent(this.platform, {
       path: this.path,
       name: this.project.name,
       openedAt: new Date().toISOString(),
       durationUs: projectDurationUs(this.project),
-      assetCount: this.project.assets.length,
+      assetCount: userAssetsCount,
       posterPath: firstVideo ? this.runtime.get(firstVideo.id)!.artifacts!.posterPath : null,
     }).catch(() => undefined);
   }
@@ -998,9 +1005,9 @@ export class ProjectSession {
   /** Gera (ou reaproveita do cache) os artefatos de um asset e atualiza seu estado. */
   private async process(asset: Asset): Promise<void> {
     const mySeq = this.bumpProcessSeq(asset.id);
-    if (!asset.probe || asset.kind === 'image' || asset.tags.includes('alpha-cutout')) {
+    if (!asset.probe || asset.kind === 'image' || isInternalCutoutAsset(asset)) {
       const rt = this.assetRuntime(asset.id);
-      const isAlphaVideo = asset.kind === 'video' && asset.tags.includes('alpha-cutout');
+      const isAlphaVideo = asset.kind === 'video' && isInternalCutoutAsset(asset);
       this.runtime.set(asset.id, {
         ...rt,
         artifacts: {
@@ -1109,6 +1116,11 @@ export class ProjectSession {
     for (const a of ordered) {
       const exists = await this.platform.fs.exists(a.path);
       if (!exists) {
+        if (isInternalCutoutAsset(a)) {
+          // Recortes internos de cache ausentes são descartados sem travar o projeto nem acusar mídia do usuário faltando
+          this.history.applySystem({ type: 'asset.remove', assetId: a.id });
+          continue;
+        }
         missing++;
         this.setStatus(a.id, 'missing', 'arquivo não encontrado');
       } else {
@@ -1334,4 +1346,95 @@ async function recoverAtomicFile(platform: Platform, path: string): Promise<void
     else await platform.fs.rename(displaced, path);
   }
   if (await platform.fs.exists(tmp)) await platform.fs.remove(tmp);
+}
+
+/**
+ * Higieniza projetos salvos em versões anteriores ao abrir:
+ * - Remove clipes V2 heurísticos quebrados (`canvas-matting` ou máscaras provisórias órfãs) e órfãos de recorte interno.
+ * - Restaura `behindCutout = false` em textos sem clipe V2 ativo por cima.
+ * - Consolida efeitos `color` duplicados em clipes gerados por IA e apara sobreposições residuais de arredondamento (<= 5 ms).
+ */
+export function sanitizeLoadedProject(project: Project): Project {
+  const bottomVideoId = [...project.tracks].reverse().find((t) => t.kind === 'video')?.id;
+  const overlayTrackIds = new Set(
+    project.tracks.filter((t) => t.kind === 'video' && t.id !== bottomVideoId).map((t) => t.id),
+  );
+
+  // 1) Remove recortes V2 legados defeituosos (canvas-matting ou máscaras geométricas provisórias de IA)
+  let clips: Clip[] = project.clips.filter((c) => {
+    if (!overlayTrackIds.has(c.trackId)) return true;
+    if (/canvas-matting/i.test(c.reason ?? '')) return false;
+    if (c.origin === 'ai' && (c.mask === 'manga-slash' || c.mask === 'subject-focus')) return false;
+    return true;
+  });
+
+  // 2) Desativa behindCutout em textos que não têm sobreposição de vídeo ativa acima
+  const activeOverlayClips = clips.filter((c) => overlayTrackIds.has(c.trackId));
+  clips = clips.map((c) => {
+    if (!c.text?.behindCutout) return c;
+    const cEnd = clipEndUs(c);
+    const hasOverlayAbove = activeOverlayClips.some(
+      (ov) => ov.timelineStartUs < cEnd && clipEndUs(ov) > c.timelineStartUs,
+    );
+    return hasOverlayAbove ? c : { ...c, text: { ...c.text, behindCutout: false } };
+  });
+
+  // 3) Consolida efeitos `color` duplicados em clipes gerados automaticamente
+  clips = clips.map((c) => {
+    if (c.origin !== 'ai') return c;
+    const colorFxs = c.effects.filter((fx) => fx.effect === 'color');
+    if (colorFxs.length <= 1) return c;
+    const agg = aggregateColorGrade(c.effects);
+    const others = c.effects.filter((fx) => fx.effect !== 'color');
+    if (isColorGradeNeutral(agg)) return { ...c, effects: others };
+    return {
+      ...c,
+      effects: [
+        {
+          id: colorFxs[0]!.id,
+          effect: 'color',
+          enabled: true,
+          params: { ...agg },
+        },
+        ...others,
+      ],
+    };
+  });
+
+  // 4) Apara sobreposições residuais de microssegundos (<= 5 ms) entre clipes de IA na mesma trilha
+  const byTrack = new Map<string, Clip[]>();
+  for (const c of clips) {
+    const arr = byTrack.get(c.trackId) ?? [];
+    arr.push(c);
+    byTrack.set(c.trackId, arr);
+  }
+  const trimmedMap = new Map<string, Clip>();
+  for (const arr of byTrack.values()) {
+    arr.sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+    for (let i = 0; i + 1 < arr.length; i++) {
+      const prev = arr[i]!;
+      const next = arr[i + 1]!;
+      const prevEnd = prev.timelineStartUs + prev.durationUs;
+      const overlap = prevEnd - next.timelineStartUs;
+      if (overlap > 0 && overlap <= 5_000 && prev.origin === 'ai' && next.timelineStartUs > prev.timelineStartUs) {
+        const newDur = Math.max(1000, prev.durationUs - overlap);
+        trimmedMap.set(prev.id, {
+          ...prev,
+          durationUs: newDur,
+          sourceOutUs: !prev.text && prev.sourceOutUs > prev.sourceInUs + 1000
+            ? Math.max(prev.sourceInUs + 1000, prev.sourceOutUs - Math.round(overlap * (prev.speed || 1)))
+            : prev.sourceOutUs,
+        });
+      }
+    }
+  }
+  if (trimmedMap.size > 0) {
+    clips = clips.map((c) => trimmedMap.get(c.id) ?? c);
+  }
+
+  // 5) Remove assets internos de recorte órfãos (não referenciados por nenhum clipe)
+  const usedAssetIds = new Set(clips.map((c) => c.assetId).filter(Boolean));
+  const assets = project.assets.filter((a) => !isInternalCutoutAsset(a) || usedAssetIds.has(a.id));
+
+  return { ...project, assets, clips };
 }

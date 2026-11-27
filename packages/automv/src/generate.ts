@@ -683,14 +683,18 @@ function generatedVoiceAndMusicAreAudible(project: Project, musicTrack: Track, v
 }
 
 function baseClip(trackId: string, assetId: string | null, startS: number, durS: number, srcIn: number, reason: string, extra: Partial<Clip> = {}): Clip {
+  const startUs = us(startS);
+  const endUs = us(startS + durS);
+  const durationUs = Math.max(1000, endUs - startUs);
+  const srcInUs = us(srcIn);
   return {
     id: newId('clp'),
     trackId,
     assetId,
-    timelineStartUs: us(startS),
-    durationUs: Math.max(1000, us(durS)),
-    sourceInUs: us(srcIn),
-    sourceOutUs: us(srcIn) + Math.max(1000, us(durS)),
+    timelineStartUs: startUs,
+    durationUs,
+    sourceInUs: srcInUs,
+    sourceOutUs: srcInUs + durationUs,
     speed: 1,
     reverse: false,
     transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, crop: { left: 0, top: 0, right: 0, bottom: 0 } },
@@ -803,18 +807,31 @@ function buildProportionalWordTimings(
   });
 }
 
+const CONNECTOR_WORDS = new Set([
+  'a', 'o', 'e', 'é', 'de', 'do', 'da', 'dos', 'das', 'em', 'no', 'na', 'nos', 'nas',
+  'um', 'uma', 'por', 'pra', 'pro', 'com', 'sem', 'que', 'se', 'me', 'te', 'eu', 'tu',
+  'to', 'in', 'on', 'at', 'of', 'the', 'and', 'for', 'my', 'is', 'it',
+]);
+
+function isShortConnector(word: string): boolean {
+  const clean = word.replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase();
+  return clean.length <= 2 || CONNECTOR_WORDS.has(clean);
+}
+
 function splitKineticChunks(text: string, durS: number): string[] {
   const words = text.trim().split(/\s+/).filter(Boolean);
-  if (words.length <= 1 || durS < 0.32) return words.length ? [words.join(' ')] : [];
-  const canDoSingleWords = words.length <= 4 && durS / words.length >= 0.24;
+  if (words.length <= 1 || durS < 0.42) return words.length ? [words.join(' ')] : [];
+  const canDoSingleWords = words.length <= 4 && durS / words.length >= 0.34;
   if (canDoSingleWords) {
-    // Une apenas preposições/artigos muito curtos (<= 2 letras) para manter ritmo forte
+    // Une conectivos/artigos curtos com a palavra vizinha para leitura limpa e forte
     const merged: string[] = [];
     for (let i = 0; i < words.length; i++) {
       const curr = words[i]!;
-      if (curr.length <= 2 && i + 1 < words.length && words.length > 2) {
+      if (isShortConnector(curr) && i + 1 < words.length) {
         merged.push(`${curr} ${words[i + 1]!}`);
         i++;
+      } else if (isShortConnector(curr) && merged.length > 0) {
+        merged[merged.length - 1] = `${merged[merged.length - 1]!} ${curr}`;
       } else {
         merged.push(curr);
       }
@@ -825,7 +842,7 @@ function splitKineticChunks(text: string, durS: number): string[] {
   for (let i = 0; i < words.length; i++) {
     const w1 = words[i]!;
     const w2 = words[i + 1];
-    if (w2 && w1.length + w2.length <= 12) {
+    if (w2 && (isShortConnector(w1) || isShortConnector(w2) || w1.length + w2.length <= 13)) {
       chunks.push(`${w1} ${w2}`);
       i++;
     } else {
@@ -2558,17 +2575,17 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         if (c.hitAtS !== null && c.energy >= 0.45) {
           const hitKind: SfxKind = assets.clash && hitIdx % 3 === 1 ? 'clash' : 'hit';
           hitIdx++;
-          const burst = opts.animeHitAudio !== false && c.hasAudio && c.peakSrcS !== null
+          const burst = opts.animeHitAudio !== false && c.hasAudio && c.peakSrcS !== null && c.intensity >= 0.65
             ? { assetId: c.assetId, peakSrcS: c.peakSrcS, streamIndex: c.streamIndex }
             : undefined;
-          anchored(hitKind, c.hitAtS, -5.5, 80 + 40 * c.intensity, hitKind === 'clash' ? 'Golpe cortante na batida' : 'Golpe na batida', burst);
+          anchored(hitKind, c.hitAtS, -8.5, 80 + 40 * c.intensity, hitKind === 'clash' ? 'Golpe cortante na batida' : 'Golpe na batida', burst);
         } else if (
           unifiedSfx
           && (c.transitionKind === 'whip_pan' || c.transitionKind === 'zoom_through')
           && c.energy >= 0.38
           && c.energy <= 0.85
         ) {
-          anchored('whoosh', c.startS, -9.5, 45, `Transição rápida (${c.transitionKind})`);
+          anchored('whoosh', c.startS, -10.5, 45, `Transição rápida (${c.transitionKind})`);
         }
       } else {
         if (c.hitAtS !== null && c.energy >= 0.5 && r2() < 0.5 * perHit) anchored('hit', c.hitAtS, -6, 50 + 40 * c.intensity, 'Golpe');
@@ -2577,8 +2594,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     }
     cands.sort((a, b) => b.prio - a.prio || a.startS - b.startS);
     const kept: Cand[] = [];
-    const maxN = hitsOnly ? Math.max(6, Math.ceil(D / 1.1)) : Math.max(4, Math.ceil(D / 1.6));
-    const SPACING_S = hitsOnly ? 0.45 : 0.75;
+    const selectiveSfx = hitsOnly || unifiedSfx;
+    const maxN = selectiveSfx ? Math.max(4, Math.ceil(D / 2.8)) : Math.max(4, Math.ceil(D / 1.6));
+    const SPACING_S = selectiveSfx ? 1.6 : 0.75;
     for (const c of cands) {
       if (kept.length >= maxN) break;
       const end = c.startS + c.durS;
@@ -2589,7 +2607,9 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       kept.push(c);
     }
     kept.sort((a, b) => a.startS - b.startS);
-    const usedVoiceBursts: Array<[number, number]> = blocks.map((b) => [b.atS - 0.08, b.atS + b.len + 0.08]);
+    const usedVoiceBursts: Array<[number, number]> = blocks.map((b) => [b.atS - 0.25, b.atS + b.len + 0.25]);
+    const maxAnimeBursts = Math.max(1, Math.min(3, Math.floor(D / 10)));
+    let animeBurstsPlaced = 0;
     for (const k of kept) {
       cmds.push({
         type: 'clip.add',
@@ -2597,20 +2617,21 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
           audio: { gainDb: k.gainDb, fadeInUs: k.kind === 'riser' ? us(0.08) : 0, fadeOutUs: k.kind === 'riser' ? 0 : us(0.03), pitchSemitones: 0, pitchMode: 'preserve', streamIndex: null },
         }),
       });
-      // Micro-burst do impacto real do episódio (apenas o transiente do golpe 0,24s na trilha de voz livre)
-      if (k.animeBurst && voice && opts.style !== 'discurso') {
+      // Micro-burst pontual (máx. 3 na montagem, espaçados >= 5,5s) para nunca poluir a faixa de Vozes
+      if (k.animeBurst && voice && opts.style !== 'discurso' && animeBurstsPlaced < maxAnimeBursts) {
         const burstDur = 0.24;
         const burstStart = Math.max(0, Math.min(D - burstDur, k.startS - 0.03));
         const burstSrcIn = Math.max(0, k.animeBurst.peakSrcS - 0.04);
         const overlapsVoice = usedVoiceBursts.some(([a, b]) => burstStart < b && burstStart + burstDur > a);
         if (!overlapsVoice && burstDur > 0.1) {
-          usedVoiceBursts.push([burstStart - 0.15, burstStart + burstDur + 0.15]);
+          usedVoiceBursts.push([burstStart - 5.5, burstStart + burstDur + 5.5]);
+          animeBurstsPlaced++;
           cmds.push({
             type: 'clip.add',
             clip: baseClip(voice.id, k.animeBurst.assetId, burstStart, burstDur, burstSrcIn, 'Som real do golpe no anime (imersão)', {
               label: 'Golpe anime',
               audio: {
-                gainDb: -7.5,
+                gainDb: -11.5,
                 fadeInUs: us(0.025),
                 fadeOutUs: us(0.09),
                 pitchSemitones: 0,
@@ -2881,6 +2902,30 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
           },
         );
         cmds.push({ type: 'clip.add', clip: v2Clip });
+      }
+    }
+  }
+
+  // Garante zero sobreposição de microssegundos entre clipes adicionados na mesma trilha
+  const addedByTrack = new Map<string, Clip[]>();
+  for (const cmd of cmds) {
+    if (cmd.type !== 'clip.add') continue;
+    const list = addedByTrack.get(cmd.clip.trackId) ?? [];
+    list.push(cmd.clip);
+    addedByTrack.set(cmd.clip.trackId, list);
+  }
+  for (const list of addedByTrack.values()) {
+    list.sort((a, b) => a.timelineStartUs - b.timelineStartUs);
+    for (let i = 0; i + 1 < list.length; i++) {
+      const prev = list[i]!;
+      const next = list[i + 1]!;
+      const prevEnd = prev.timelineStartUs + prev.durationUs;
+      if (prevEnd > next.timelineStartUs && next.timelineStartUs > prev.timelineStartUs) {
+        const delta = prevEnd - next.timelineStartUs;
+        prev.durationUs = Math.max(1000, prev.durationUs - delta);
+        if (!prev.text && prev.sourceOutUs > prev.sourceInUs + 1000) {
+          prev.sourceOutUs = Math.max(prev.sourceInUs + 1000, prev.sourceOutUs - Math.round(delta * (prev.speed || 1)));
+        }
       }
     }
   }

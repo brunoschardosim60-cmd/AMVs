@@ -194,7 +194,11 @@ export function audioArgs(o: AudioJobInput): string[] {
     master.push(`loudnorm=I=${n(o.project.audioMix.targetLufs, 2)}:TP=${n(Math.max(-9, o.project.audioMix.limiterCeilingDb), 2)}:LRA=11:linear=false:print_format=summary`);
   }
   if (o.project.audioMix.limiterEnabled) {
-    const limit = Math.pow(10, o.project.audioMix.limiterCeilingDb / 20);
+    // Reserva margem (-1.0 dBFS quando no padrão -0.3) para evitar clipping inter-sample após codificação AAC.
+    const effectiveCeilingDb = o.project.audioMix.limiterCeilingDb > -0.8
+      ? -1.0
+      : o.project.audioMix.limiterCeilingDb;
+    const limit = Math.pow(10, effectiveCeilingDb / 20);
     master.push(`alimiter=limit=${n(limit, 6)}:attack=5:release=50:level=false`);
   }
   master.push(`atrim=end=${n(D)}`);

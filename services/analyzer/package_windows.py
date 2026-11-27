@@ -103,6 +103,15 @@ def smoke_test() -> None:
             modules = json.loads(response.read())
         if not modules.get("speech", {}).get("available"):
             raise RuntimeError("faster-whisper não está disponível no runtime empacotado")
+        if importlib.util.find_spec("onnxruntime") is not None:
+            cutout_req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/cutout/status",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            with urllib.request.urlopen(cutout_req, timeout=10) as cutout_resp:
+                cutout_info = json.loads(cutout_resp.read())
+            if not cutout_info.get("canAutoDownload"):
+                raise RuntimeError(f"onnxruntime não ficou disponível no runtime empacotado: {cutout_info}")
         segmentation = modules.get("segmentation", {})
         if segmentation.get("available"):
             raise RuntimeError("o runtime SAM 2 não deve ser incluído no pacote distribuído")

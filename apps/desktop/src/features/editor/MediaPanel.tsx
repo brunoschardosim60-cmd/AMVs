@@ -1,4 +1,4 @@
-import { isSfxAsset, type Asset } from '@amv/project';
+import { isInternalCutoutAsset, isSfxAsset, type Asset } from '@amv/project';
 import { AudioLines, Film, Image as ImageIcon, LibraryBig, Play, Plus, Volume2, X } from 'lucide-react';
 import { useEffect, useState, type PointerEvent as RPointerEvent } from 'react';
 import type { ProjectSession } from '../../core/session';
@@ -17,7 +17,7 @@ export function MediaPanel({ session }: { session: ProjectSession }) {
   const { platform, importMedia, selectedAssetId, selectAsset } = useApp();
   const setAssetDrag = useEditor((s) => s.setAssetDrag);
   const select = useEditor((s) => s.select);
-  const assets = session.project.assets.filter((a) => !isSfxAsset(a));
+  const assets = session.project.assets.filter((a) => !isSfxAsset(a) && !isInternalCutoutAsset(a));
   const [tab, setTab] = useState<'media' | 'scenes' | 'lines' | 'subs'>('media');
   const [previewAssetId, setPreviewAssetId] = useState<string | null>(null);
   const previewAsset = previewAssetId ? assets.find((a) => a.id === previewAssetId && a.status !== 'missing') : undefined;
