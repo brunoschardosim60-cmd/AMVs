@@ -234,7 +234,9 @@ export function gainCurve(kf: { atUs: number; value: number }[]): string {
     const b = pts[i + 1]!;
     const ta = n(a.atUs / 1e6);
     const tb = n(b.atUs / 1e6);
-    const seg = `${lin(a.value)}+(${lin(b.value)}-${lin(a.value)})*(t-${ta})/(${tb}-${ta})`;
+    const seg = ta === tb
+      ? lin(a.value)
+      : `${lin(a.value)}+(${lin(b.value)}-${lin(a.value)})*(t-${ta})/(${tb}-${ta})`;
     expr = `if(lt(t,${tb}),${seg},${expr})`;
   }
   return `if(lt(t,${n(pts[0]!.atUs / 1e6)}),${lin(pts[0]!.value)},${expr})`;

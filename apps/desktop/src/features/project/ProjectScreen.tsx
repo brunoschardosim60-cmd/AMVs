@@ -247,8 +247,8 @@ export function ProjectScreen() {
           <Button size="sm" icon={<Save size={14} />} onClick={save} disabled={!s.dirty} title="Salvar (Ctrl+S)">
             Salvar
           </Button>
-          <Button size="sm" variant="primary" icon={<Download size={15} />} onClick={() => setExporting(true)} title="Exportar vídeo (Ctrl+E)">
-            Exportar
+          <Button size="sm" variant="primary" icon={<Download size={15} />} onClick={() => setExporting(true)} title="Baixar vídeo em MP4 (Ctrl+E)">
+            Baixar vídeo
           </Button>
           </div>
         </div>
@@ -399,7 +399,16 @@ export function ProjectScreen() {
         {selected && <AssetDetail asset={selected} session={s} />}
       </div>
       )}
-      {generating && <GenerateDialog session={s} onClose={() => setGenerating(false)} />}
+      {generating && (
+        <GenerateDialog
+          session={s}
+          onClose={() => setGenerating(false)}
+          onRequestExport={() => {
+            setGenerating(false);
+            setExporting(true);
+          }}
+        />
+      )}
       {exporting && <ExportDialog session={s} onClose={() => setExporting(false)} />}
     </div>
   );

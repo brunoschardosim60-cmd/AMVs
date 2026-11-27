@@ -6,7 +6,7 @@ import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
 import { loadCreativeProfiles, saveCreativeProfiles } from '../../core/creativeProfiles';
 import { extractTranscriptWords, mergeSpeechSegments, transcribeAudioSlice, transcribeMediaAsset, translateTextsAuto } from '../../core/transcription';
 import { getAnalysisReadiness } from './analysis-readiness';
-import { Flame, Heart, Mic, Music2, Sparkles, Type, Wand2, Zap } from 'lucide-react';
+import { Download, Flame, Heart, Mic, Music2, Sparkles, Type, Wand2, Zap } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectSession } from '../../core/session';
 import { upgradeGeneratedV2Cutouts } from '../../core/cutout';
@@ -61,13 +61,23 @@ interface LocalizedCandidate {
   seed: number;
 }
 
-export function GenerateDialog({ session, onClose, localizedRange }: { session: ProjectSession; onClose: () => void; localizedRange?: LocalizedRange }) {
+export function GenerateDialog({
+  session,
+  onClose,
+  localizedRange,
+  onRequestExport,
+}: {
+  session: ProjectSession;
+  onClose: () => void;
+  localizedRange?: LocalizedRange;
+  onRequestExport?: () => void;
+}) {
   useSessionVersion(session);
   const { platform, toast, library } = useApp();
   useLibraryVersion(library);
   const project = session.project;
   const musics = project.assets.filter((a) => a.kind === 'audio' && !a.tags.includes('sfx'));
-  const episodes = project.assets.filter((a) => a.kind === 'video');
+  const episodes = project.assets.filter((a) => a.kind === 'video' && !a.tags.includes('alpha-cutout'));
   const initialMusicClip = localizedRange && project.tracks.find((track) => track.id === localizedRange.trackId)
     ? project.clips.find((clip) => {
         const track = project.tracks.find((item) => item.id === clip.trackId);
@@ -1705,7 +1715,7 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             <Button icon={<Wand2 size={15} />} disabled={busy} onClick={() => generate(seed + 7)}>
               Gerar outra versão
             </Button>
-            <Button variant="primary" onClick={() => {
+            <Button onClick={() => {
               useEditor.getState().setPlayhead(0);
               try {
                 getPlayer(session).seek(0);
@@ -1714,6 +1724,11 @@ export function GenerateDialog({ session, onClose, localizedRange }: { session: 
             }}>
               Editar na timeline
             </Button>
+            {onRequestExport && (
+              <Button variant="primary" icon={<Download size={15} />} onClick={onRequestExport}>
+                Baixar vídeo
+              </Button>
+            )}
           </>
         }
       >

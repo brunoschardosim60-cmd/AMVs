@@ -41,13 +41,39 @@ function hardwareEncoder(encoder: HardwareEncoder, codec: Exclude<VideoEncoding[
   return HARDWARE_ENCODERS[encoder][codec];
 }
 
+const PROBE_TIMEOUT_MS = 4_000;
+
+async function runProbeWithTimeout(
+  runner: ProcessRunner,
+  args: string[],
+  timeoutMs = PROBE_TIMEOUT_MS,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const ctrl = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      runner.run('ffmpeg', args, { signal: ctrl.signal }),
+      new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
+        timer = setTimeout(() => {
+          ctrl.abort();
+          resolve({ code: 1, stdout: '', stderr: 'timeout ao testar encoder de hardware' });
+        }, timeoutMs);
+      }),
+    ]);
+  } catch {
+    return { code: 1, stdout: '', stderr: 'erro ao iniciar teste de encoder' };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 async function testEncoder(runner: ProcessRunner, name: string, rateControl: VideoEncoding['rateControl'] = 'crf'): Promise<boolean> {
   const args = ['-hide_banner', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=1', '-frames:v', '1', '-c:v', name];
   if (name.endsWith('_amf')) args.push('-rc', rateControl === 'bitrate' ? 'cbr' : 'cqp', ...(rateControl === 'bitrate' ? ['-b:v', '500k'] : ['-qp_i', '28', '-qp_p', '28']));
   else if (name.endsWith('_nvenc')) args.push('-preset', 'p1', ...(rateControl === 'bitrate' ? ['-b:v', '500k'] : ['-rc', 'vbr', '-cq', '28', '-b:v', '0']));
   else if (name.endsWith('_qsv')) args.push('-preset', 'veryfast', ...(rateControl === 'bitrate' ? ['-b:v', '500k'] : ['-global_quality', '28']));
   args.push('-f', 'null', '-');
-  const result = await runner.run('ffmpeg', args);
+  const result = await runProbeWithTimeout(runner, args);
   return result.code === 0;
 }
 
@@ -57,7 +83,7 @@ export async function availableHardwareEncoders(
   codec: Exclude<VideoEncoding['codec'], 'prores'>,
   rateControl: VideoEncoding['rateControl'] = 'crf',
 ): Promise<HardwareEncoder[]> {
-  const listed = await runner.run('ffmpeg', ['-hide_banner', '-encoders']);
+  const listed = await runProbeWithTimeout(runner, ['-hide_banner', '-encoders']);
   if (listed.code !== 0) throw new Error(`Não foi possível consultar os encoders do FFmpeg: ${listed.stderr.trim()}`);
   const available: HardwareEncoder[] = [];
   for (const candidate of ['amf', 'nvenc', 'qsv'] as const) {
@@ -72,7 +98,13 @@ export async function resolveVideoEncoder(runner: ProcessRunner, encoding: Video
   if (encoding.codec === 'prores') return 'cpu';
   const target = encoding.encoder ?? 'cpu';
   if (target === 'cpu') return 'cpu';
-  const available = await availableHardwareEncoders(runner, encoding.codec, encoding.rateControl);
+  let available: HardwareEncoder[];
+  try {
+    available = await availableHardwareEncoders(runner, encoding.codec, encoding.rateControl);
+  } catch (error) {
+    if (target === 'auto') return 'cpu';
+    throw error;
+  }
   if (target === 'auto') return available[0] ?? 'cpu';
   if (!available.includes(target)) {
     throw new Error(`O encoder ${target.toUpperCase()} não está disponível ou falhou no teste do FFmpeg. Escolha CPU ou outro encoder disponível.`);
@@ -98,7 +130,7 @@ function keyframeExpr(keyframes: Keyframe[] | undefined, fallback: number, T: st
     const next = sorted[i]!;
     const endS = next.atUs / 1e6;
     const spanS = (next.atUs - previous.atUs) / 1e6;
-    const t = `clip(((${T})-${n(previous.atUs / 1e6)})/${n(spanS)},0,1)`;
+    const t = spanS <= 1e-6 ? '1' : `clip(((${T})-${n(previous.atUs / 1e6)})/${n(spanS)},0,1)`;
     const eased =
       next.easing === 'hold' ? '0' :
       next.easing === 'ease-in' ? `((${t})*(${t}))` :

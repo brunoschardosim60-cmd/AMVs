@@ -1,5 +1,15 @@
 # Novidades
 
+## 0.9.9
+
+**Fluxo simplificado de download do vídeo ("Baixar vídeo" + escolha direta de qualidade) e correção definitiva dos bloqueios de exportação no Windows.**
+
+- **Fluxo simples de download e qualidade:** botão principal renomeado para **Baixar vídeo** no topo do projeto e adicionado diretamente na tela pós-geração (**AMV gerado**); `ExportDialog` redesenhado com 3 cartões diretos de qualidade em MP4 universal (**Leve e Rápido · 720p HD**, **Alta Qualidade · 1080p Full HD** recomendado por padrão e **Máxima · Ultra HD 1440p/4K**), mantendo formatos, FPS, encoders e CRF/bitrate recolhidos em **Opções avançadas**.
+- **Correção de permissões de arquivo e discos secundários no Tauri Windows:** expandido `fs:scope` e `opener:allow-open-path` em `capabilities/default.json` para pastas padrão do usuário (`$DOWNLOAD`, `$VIDEO`, `$DESKTOP`, `$DOCUMENT`, `$HOME`, `$APPCACHE`, etc.) e adicionado fallback automático em `renderProject` quando o escopo do diálogo `save()` autoriza apenas o caminho final ou quando a exportação cruza unidades de disco (`C:` → `D:`), além de retentativa de limpeza de temporários contra locks transitórios do Windows Defender.
+- **Fim do botão travado por teste de GPU, congelamento em textos e falso erro no último quadro:** removido o bloqueio do botão de download durante a sondagem de hardware (com timeout de 4 s por encoder em `video.ts`), adicionada tolerância de arredondamento de borda de concatenação em `validateVideoOutput`, eliminada divisão por zero em keyframes simultâneos (`gainCurve` e `keyframeExpr`) e acelerado `rasterizeText` com cache de quadros estáveis (`textSteadyKey`) e escrita de PNGs em lotes paralelos.
+- **Verificação:** `pnpm typecheck`, `pnpm --filter @amv/desktop build` e suíte completa (`pnpm test`, incluindo novo teste de exportação sob escopo restrito e entre discos) validados com mídia sintética e integração FFmpeg.
+- **Limitações novas:** nenhuma.
+
 ## 0.9.8
 
 **Alinhamento do workflow de Release no GitHub Actions com a concorrência controlada de testes (`--workspace-concurrency=2`) e PATH do FFmpeg empacotado.**

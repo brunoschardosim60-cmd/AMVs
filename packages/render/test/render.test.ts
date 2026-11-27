@@ -584,6 +584,47 @@ describe('exportação', () => {
     p = applyCommand(p, { type: 'asset.update', assetId: 'rg', patch: { status: 'missing' } }).project;
     await expect(renderProject(p, join(dir, 'x.mp4'), { width: 320, height: 180, enc: { codec: 'h264', quality: 0 }, audioBitrateK: 128 }, env(p, 'g'), () => undefined)).rejects.toThrow(/faltam arquivos: rg/);
   });
+
+  it('salva o vídeo mesmo quando o escopo de arquivos autoriza apenas o caminho final escolhido pelo usuário', async () => {
+    const p = await project((p) => [
+      clip(track(p, 'V1'), 'rg', 0, S, 0),
+      clip(track(p, 'Música'), 'tone', 0, S, 0),
+    ]);
+    const out = join(dir, 'scoped-only-output.mp4');
+    const base = env(p, 'scoped-fs');
+    const guardSibling = (target: string) => {
+      if (target === `${out}.backup` || target === `${out}.part.mp4` || target === `${out}.log`) {
+        throw new Error(`forbidden path: ${target}`);
+      }
+    };
+    const scopedEnv: RenderEnv = {
+      ...base,
+      fs: {
+        ...nodeFs,
+        exists: async (target) => {
+          guardSibling(target);
+          return nodeFs.exists(target);
+        },
+        writeFile: async (target, bytes) => {
+          guardSibling(target);
+          return nodeFs.writeFile(target, bytes);
+        },
+        rename: async (from, to) => {
+          guardSibling(from);
+          guardSibling(to);
+          if (to === out) throw new Error('EXDEV: cross-device link not permitted');
+          return nodeFs.rename(from, to);
+        },
+      },
+    };
+    const result = await renderProject(p, out, {
+      width: 320, height: 180, enc: { codec: 'h264', quality: 0, encoder: 'cpu' }, audioBitrateK: 128,
+    }, scopedEnv, () => undefined);
+    expect(existsSync(out)).toBe(true);
+    expect(result.validation.videoCodec).toBe('h264');
+    expect(result.frames).toBe(30);
+    expect(existsSync(result.logPath)).toBe(true);
+  });
 });
 
 describe('auxiliares de áudio', () => {
@@ -592,6 +633,8 @@ describe('auxiliares de áudio', () => {
     expect(atempoChain(0.25)).toEqual(['atempo=0.5', 'atempo=0.5']);
     expect(atempoChain(2)).toEqual(['atempo=2']);
     expect(gainCurve([{ atUs: 0, value: 0 }, { atUs: S, value: -20 }])).toContain('if(lt(t,1)');
+    const sameTime = gainCurve([{ atUs: 0, value: 0 }, { atUs: S, value: -12 }, { atUs: S, value: 0 }]);
+    expect(sameTime).not.toContain('/(1-1)');
   });
 });
 

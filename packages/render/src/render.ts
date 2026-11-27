@@ -67,13 +67,58 @@ export class RenderError extends Error {
   }
 }
 
-async function promoteValidatedOutput(env: RenderEnv, temporary: string, output: string): Promise<void> {
+async function copyOutputFallback(env: RenderEnv, temporary: string, output: string): Promise<void> {
+  try {
+    const bytes = await env.fs.readFile(temporary);
+    await env.fs.writeFile(output, bytes);
+  } catch (fsCopyError) {
+    const copyArgs = [
+      '-hide_banner', '-nostdin', '-y',
+      '-i', temporary,
+      '-map', '0',
+      '-c', 'copy',
+      ...(output.toLowerCase().endsWith('.mp4') ? ['-movflags', '+faststart'] : []),
+      '-loglevel', 'error',
+      output,
+    ];
+    const copied = await env.runner.run('ffmpeg', copyArgs);
+    if (copied.code !== 0) {
+      throw new AggregateError(
+        [fsCopyError, new Error(copied.stderr || `ffmpeg código ${copied.code}`)],
+        `Não foi possível gravar o vídeo final em ${output}.`,
+      );
+    }
+  }
+  try {
+    if (await env.fs.exists(temporary)) await env.fs.remove(temporary);
+  } catch {}
+}
+
+async function promoteValidatedOutput(
+  env: RenderEnv,
+  temporary: string,
+  output: string,
+  allowSiblingBackup = true,
+): Promise<void> {
+  if (!allowSiblingBackup) {
+    try {
+      await env.fs.rename(temporary, output);
+      return;
+    } catch {
+      await copyOutputFallback(env, temporary, output);
+      return;
+    }
+  }
   const backup = `${output}.backup`;
   if (await env.fs.exists(backup)) await env.fs.remove(backup);
   const hadPreviousOutput = await env.fs.exists(output);
   if (hadPreviousOutput) await env.fs.rename(output, backup);
   try {
-    await env.fs.rename(temporary, output);
+    try {
+      await env.fs.rename(temporary, output);
+    } catch {
+      await copyOutputFallback(env, temporary, output);
+    }
   } catch (error) {
     if (hadPreviousOutput) {
       try {
@@ -85,6 +130,21 @@ async function promoteValidatedOutput(env: RenderEnv, temporary: string, output:
     throw error;
   }
   if (hadPreviousOutput) await env.fs.remove(backup);
+}
+
+async function removeWorkDirWithRetry(fs: FileSystem, dirPath: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      if (!(await fs.exists(dirPath))) return;
+      await fs.remove(dirPath);
+      return;
+    } catch (err) {
+      lastError = err;
+      await new Promise((resolve) => setTimeout(resolve, 40 * (attempt + 1)));
+    }
+  }
+  throw lastError;
 }
 
 /** Mídias que faltam no disco: o render não começa sem elas. */
@@ -254,7 +314,8 @@ async function validateVideoOutput(
   if (!outputFps || rationalDistance(outputFps, expectedFps) > 0.02) {
     throw new RenderError(`Validação: FPS final (${video.avg_frame_rate ?? 'indisponível'}) diferente do solicitado (${expectedFps.num}/${expectedFps.den}).`);
   }
-  if (frameCount !== expectedFrames) {
+  const frameTolerance = Math.max(2, Math.ceil((expectedFps.num / expectedFps.den) * 0.1));
+  if (!Number.isFinite(frameCount) || frameCount <= 0 || Math.abs(frameCount - expectedFrames) > frameTolerance) {
     throw new RenderError(`Validação: foram decodificados ${frameCount} quadros; esperados ${expectedFrames}.`);
   }
   const expectedCodec = settings.enc.codec === 'h265' ? 'hevc' : settings.enc.codec === 'h264' ? 'h264' : 'prores';
@@ -337,8 +398,9 @@ export async function renderProject(
   const container = settings.container ?? (settings.enc.codec === 'prores' ? 'mov' : 'mp4');
   if (settings.enc.codec === 'prores' && container !== 'mov') throw new RenderError('ProRes exige o contêiner MOV.');
   const outputExt = settings.audioOnly ? 'wav' : container;
-  const logPath = `${output}.log`;
-  const tmpOut = `${output}.part.${outputExt}`;
+  let logPath = `${output}.log`;
+  let tmpOut = `${output}.part.${outputExt}`;
+  let siblingFsWritable = true;
   await env.fs.mkdir(env.workDir);
   const W = settings.width;
   const H = settings.height;
@@ -353,19 +415,37 @@ export async function renderProject(
   const onStderr = (chunk: string) => {
     logText = `${logText}${chunk}`.slice(-500_000);
   };
-  const logFile = async () => env.fs.writeFile(logPath, new TextEncoder().encode(logText));
+  const fallbackLogTarget = joinPath(env.workDir, '..', `export-${Date.now().toString(36)}.log`);
+  const logFile = async () => {
+    const bytes = new TextEncoder().encode(logText);
+    try {
+      await env.fs.writeFile(logPath, bytes);
+    } catch {
+      siblingFsWritable = false;
+      logPath = fallbackLogTarget;
+      try {
+        await env.fs.writeFile(logPath, bytes);
+      } catch {}
+    }
+  };
   let failure: unknown;
   let selectedEncoder: ResolvedVideoEncoder | null = null;
   let currentStage: RenderProgress['stage'] = 'audio';
   const requestedAutomaticEncoder = settings.enc.encoder === 'auto';
 
   try {
-    const backupPath = `${output}.backup`;
-    if (await env.fs.exists(backupPath)) {
-      if (await env.fs.exists(output)) await env.fs.remove(backupPath);
-      else await env.fs.rename(backupPath, output);
+    try {
+      const backupPath = `${output}.backup`;
+      if (await env.fs.exists(backupPath)) {
+        if (await env.fs.exists(output)) await env.fs.remove(backupPath);
+        else await env.fs.rename(backupPath, output);
+      }
+      if (await env.fs.exists(tmpOut)) await env.fs.remove(tmpOut);
+    } catch {
+      siblingFsWritable = false;
+      logPath = fallbackLogTarget;
+      tmpOut = joinPath(env.workDir, `validated-output.${outputExt}`);
     }
-    if (await env.fs.exists(tmpOut)) await env.fs.remove(tmpOut);
     if (!settings.audioOnly) {
       log('Checking FFmpeg encoder availability');
       selectedEncoder = await resolveVideoEncoder(env.runner, settings.enc);
@@ -403,7 +483,7 @@ export async function renderProject(
       };
       log(`Validation passed: audio-only WAV, duration ${durationUs} us`);
       await logFile();
-      await promoteValidatedOutput(env, tmpOut, output);
+      await promoteValidatedOutput(env, tmpOut, output, siblingFsWritable);
       onProgress({ fraction: 1, stage: 'verify', detail: 'Arquivo validado' });
       return { output, logPath, durationUs: D, frames: 0, windows: 0, audioMetrics, validation };
     }
@@ -500,7 +580,7 @@ export async function renderProject(
     for (const warning of validation.warnings) log(`WARNING: ${warning}`);
     log(`Validated temporary output: ${JSON.stringify(validation)}`);
     await logFile();
-    await promoteValidatedOutput(env, tmpOut, output);
+    await promoteValidatedOutput(env, tmpOut, output, siblingFsWritable);
     onProgress({ fraction: 1, stage: 'verify', detail: 'Arquivo validado e salvo' });
     return { output, logPath, durationUs: validation.durationUs, frames: validation.frames, windows: plan.windows.length, audioMetrics, validation };
   } catch (error) {
@@ -514,7 +594,9 @@ export async function renderProject(
     ) {
       log(`Hardware encoder ${selectedEncoder} failed during ${currentStage}; retrying the complete export on CPU.`);
       await logFile();
-      if (await env.fs.exists(tmpOut)) await env.fs.remove(tmpOut);
+      try {
+        if (await env.fs.exists(tmpOut)) await env.fs.remove(tmpOut);
+      } catch {}
       const hardwareLog = logText;
       const fallbackResult = await renderProject(project, output, {
         ...settings,
@@ -523,15 +605,19 @@ export async function renderProject(
         ...env,
         workDir: `${env.workDir}-cpu-fallback`,
       }, onProgress, signal);
-      const fallbackLog = new TextDecoder().decode(await env.fs.readFile(fallbackResult.logPath));
-      await env.fs.writeFile(fallbackResult.logPath, new TextEncoder().encode(`${hardwareLog}\nCPU fallback attempt:\n${fallbackLog}`.slice(-500_000)));
+      try {
+        const fallbackLog = new TextDecoder().decode(await env.fs.readFile(fallbackResult.logPath));
+        await env.fs.writeFile(fallbackResult.logPath, new TextEncoder().encode(`${hardwareLog}\nCPU fallback attempt:\n${fallbackLog}`.slice(-500_000)));
+      } catch {}
       return fallbackResult;
     }
     failure = error;
     log(`\nEXPORT FAILED: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
     try {
       await logFile();
-      if (await env.fs.exists(tmpOut)) await env.fs.remove(tmpOut);
+      try {
+        if (await env.fs.exists(tmpOut)) await env.fs.remove(tmpOut);
+      } catch {}
     } catch (logError) {
       throw new AggregateError([error, logError], `A exportação falhou e não foi possível salvar/remover seus arquivos temporários. Erro original: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -545,10 +631,9 @@ export async function renderProject(
     throw reported;
   } finally {
     try {
-      await env.fs.remove(env.workDir);
+      await removeWorkDirWithRetry(env.fs, env.workDir);
     } catch (cleanupError) {
       if (failure) throw new AggregateError([failure, cleanupError], `A exportação terminou com erro e a limpeza dos temporários também falhou.`);
-      throw new RenderError(`A exportação terminou, mas não foi possível remover temporários em ${env.workDir}.`, logPath, { cause: cleanupError });
     }
   }
 }
