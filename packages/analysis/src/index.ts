@@ -7,3 +7,5 @@ export * from './audio-lang.js';
 export * from './frames.js';
 export * from './vision.js';
 export * from './local-vision.js';
+export * from './creative-cache.js';
+export * from './music-understanding.js';
