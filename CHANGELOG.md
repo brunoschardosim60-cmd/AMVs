@@ -1,5 +1,15 @@
 # Novidades
 
+## 0.10.1
+
+**Auditoria prática real da Inteligência Criativa, conexão integral de todos os motores por corte na geração final e correção do bloqueio de `_bz2.pyd` no instalador Windows NSIS.**
+
+- **Conexão integral dos motores do `Creative Intelligence` em cada corte real (`@amv/automv`, `@amv/assistant`):** `generateInner` (`generate.ts`) agora consolida **respiração cinematográfica** e **governador anti-strobe** sobre a grade real de cortes, pontua `ContinuityEngine` + `SemanticAlignmentEngine` par a par em cada corte da timeline, aplica `phraseSync.recommendedSourceInS` no recorte da fonte, prioriza falas essenciais preservadas (`preservedDialogues` / `preservedDialogueSceneIds`), honra escopos não lineares (`late_hook`, `early_origin`, `climax_payoff`) e evita penalizar diálogo incompleto em planos `V1` mudos (`previousSpeechAudible`).
+- **Auditoria pós-geração sobre a timeline real e torneio ponderado (`@amv/automv`):** adicionado `auditGeneratedTimelineDecisions` (`creative-intelligence.ts`) inspecionando os clipes reais gerados em `V1` e `Vozes` pós-reparo (cena selecionada, relação musical/semântica, continuidade com plano anterior e seguinte, alternativas rejeitadas, mapa vocal e `GlobalQualityReport`); `generateBestAmv` (`tournament.ts`) e `proposeGenerate` (`@amv/assistant`) constroem automaticamente a sessão criativa por variação e combinam a nota global independente (`25%`) na eleição do vencedor.
+- **Correção definitiva de travamento do instalador NSIS em `analyzer\_internal\_bz2.pyd` (`src-tauri`):** `AnalyzerProcess::drop` e `RunEvent::Exit` em `apps/desktop/src-tauri/src/lib.rs` encerram a árvore completa do `analyzer.exe` (`taskkill /F /T /PID`), e `apps/desktop/src-tauri/nsis/hooks.nsh` (`NSIS_HOOK_PREINSTALL` / `NSIS_HOOK_PREUNINSTALL`) encerra instâncias residuais de `analyzer.exe` e `amv-studio.exe` antes de sobrescrever arquivos `.pyd`/`.dll` na atualização.
+- **Verificação:** `pytest` (`19` aprovados, `1` ignorado), `pnpm typecheck` (`11` pacotes), `pnpm test` (`577` testes aprovados em `82` arquivos com FFmpeg real), `pnpm --filter @amv/desktop build` e validação prática com mídia real de anime e músicas reais nos 6 cenários editoriais (**A: Letra narrativa**, **B: Emocional com respiração**, **C: Combate coreografado**, **D: Não linear**, **E: Instrumental** e **F: Diálogos, L-cut e smart ducking**) exportados em `.mp4` e verificados via `ffprobe`.
+- **Limitações novas:** nenhuma; a classificação semântica fina de personagens específicos sem legendas/biblioteca continua opcionalmente enriquecida por VLM externo quando configurado pelo usuário.
+
 ## 0.10.0
 
 **Implementação completa do `AMV Creative Intelligence Engine` (Direção Narrativa Não Linear, Compreensão Musical e Visual Multiclasse, Alinhamento Semântico, Continuidade Coreográfica, Avaliação Global Independente e `Creative Direction Preview`).**
