@@ -227,8 +227,17 @@ export function evaluateContinuityRelation(
   // 1. Coreografia de Combate (0..100)
   let combatScore = 60;
   const validFollowups = VALID_COMBAT_FOLLOWUPS[fromScene.actionPhase] ?? [];
+  const unrelatedForeignFightJump = !sameCharacter
+    && fromScene.characterNames.length > 0
+    && toScene.characterNames.length > 0
+    && fromScene.sequenceId !== toScene.sequenceId
+    && !options.musicalTransitionCue;
+
   if (isCombatPair) {
-    if (fromScene.actionPhase === 'preparation' && toScene.actionPhase === 'attack') {
+    if (unrelatedForeignFightJump && ['attack', 'counter', 'impact'].includes(fromScene.actionPhase) && ['attack', 'counter', 'impact'].includes(toScene.actionPhase)) {
+      combatScore = 22;
+      notes.push('golpes/impactos isolados desconexos de lutas e personagens diferentes sem preparação');
+    } else if (fromScene.actionPhase === 'preparation' && toScene.actionPhase === 'attack') {
       combatScore = 94;
       notes.push('preparação seguida diretamente de ataque');
     } else if (fromScene.actionPhase === 'attack' && (toScene.actionPhase === 'impact' || toScene.actionPhase === 'defense' || toScene.actionPhase === 'dodge')) {
@@ -243,9 +252,6 @@ export function evaluateContinuityRelation(
     } else if (validFollowups.includes(toScene.actionPhase)) {
       combatScore = 82;
       notes.push(`encadeamento coreográfico válido (${fromScene.actionPhase} → ${toScene.actionPhase})`);
-    } else if (fromScene.actionPhase === 'impact' && toScene.actionPhase === 'impact' && !sameCharacter && fromScene.sequenceId !== toScene.sequenceId && !options.musicalTransitionCue) {
-      combatScore = 24;
-      notes.push('impactos isolados desconexos de lutas/personagens diferentes sem preparação');
     } else {
       combatScore = 42;
     }

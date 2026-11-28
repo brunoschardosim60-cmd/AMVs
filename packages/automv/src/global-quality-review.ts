@@ -167,6 +167,32 @@ export function evaluateGlobalAmvQuality(input: EvaluateGlobalQualityInput): Glo
     };
   }
 
+  const [rangeStart, rangeEnd] = plan.musicRange;
+
+  // Reavalia independentemente o alinhamento semântico/narrativo REAL de cada cena escolhida
+  const independentAlignments = decisions.map((d) => {
+    const actualScene = scenesById.get(d.selectedSceneId);
+    if (!actualScene) return d.semanticAlignment;
+    const absStart = rangeStart + d.startTime;
+    const absEnd = rangeStart + d.endTime;
+    const beat = plan.narrativeBeats.find(
+      (b) => d.startTime >= b.startTime - 0.05 && d.startTime < b.endTime + 0.05,
+    );
+    const activeEv = musicUnderstanding.events.find(
+      (e) => e.eventType === 'vocal_phrase' && e.startTime < absEnd - 0.05 && e.endTime > absStart + 0.05,
+    ) ?? musicUnderstanding.events.find(
+      (e) => ['drop', 'pause', 'build', 'climax', 'ending', 'section'].includes(e.eventType)
+        && (absStart + absEnd) / 2 >= e.startTime
+        && (absStart + absEnd) / 2 <= e.endTime,
+    );
+    if (!activeEv) return d.semanticAlignment;
+    return evaluateSemanticAlignment(activeEv, actualScene, {
+      narrativeTargetTags: beat?.targetTags,
+      narrativeRole: beat?.role,
+      allowIntentionalContrast: beat?.allowIntentionalContrast,
+    });
+  });
+
   // Reavalia independentemente cada par consecutivo de cenas na montagem
   const pairRelations = [];
   for (let i = 1; i < decisions.length; i++) {
@@ -179,7 +205,7 @@ export function evaluateGlobalAmvQuality(input: EvaluateGlobalQualityInput): Glo
     const rel = evaluateContinuityRelation(prevScene, currScene, undefined, {
       musicalTransitionCue: decisions[i]!.cutType === 'sonic_impact' ? 'entrada do drop' : null,
       allowFlashback: beat?.nonLinearFunction === 'origin_flashback' || beat?.nonLinearFunction === 'memory_echo',
-      allowIntentionalContrast: beat?.allowIntentionalContrast || decisions[i]!.semanticAlignment.alignmentType === 'intentional_contrast',
+      allowIntentionalContrast: beat?.allowIntentionalContrast || independentAlignments[i]!.alignmentType === 'intentional_contrast',
     });
     pairRelations.push({ index: i, decision: decisions[i]!, rel });
   }
@@ -214,6 +240,12 @@ export function evaluateGlobalAmvQuality(input: EvaluateGlobalQualityInput): Glo
   const maxIntensity = Math.max(0, ...intensities);
   const intensitySpan = maxIntensity - Math.min(1, ...intensities);
 
+  let sawtoothSwings = 0;
+  for (let i = 1; i < intensities.length; i++) {
+    if (Math.abs(intensities[i]! - intensities[i - 1]!) >= 0.48) sawtoothSwings++;
+  }
+  const sawtoothRatio = intensities.length > 2 ? sawtoothSwings / (intensities.length - 1) : 0;
+
   let emotionalBuildPenalty = 0;
   if (decisions.length >= 4 && intensitySpan < 0.14 && plan.narrativeModel !== 'combat_sequence') {
     emotionalBuildPenalty += 22;
@@ -225,6 +257,17 @@ export function evaluateGlobalAmvQuality(input: EvaluateGlobalQualityInput): Glo
       endTime: decisions.at(-1)!.endTime,
       explanation: `Intensidade visual chapada (variação de apenas ${(intensitySpan * 100).toFixed(0)}%) sem construção dramática progressiva.`,
       replanSuggestion: 'Inserir planos de preparação, memória ou tensão contida antes do clímax.',
+    });
+  } else if (decisions.length >= 4 && sawtoothRatio >= 0.65) {
+    emotionalBuildPenalty += 28;
+    findings.push({
+      code: 'missing_emotional_build',
+      dimension: 'emotionalContinuity',
+      severity: 'high',
+      startTime: decisions[0]!.startTime,
+      endTime: decisions.at(-1)!.endTime,
+      explanation: `Oscilação errática de intensidade em ${Math.round(sawtoothRatio * 100)}% dos cortes sem arco emocional progressivo.`,
+      replanSuggestion: 'Agrupar planos por progressão dramática em vez de alternar calma e impacto a cada corte.',
     });
   }
   const emotionalContinuity = clamp(avgEmoCont - emotionalBuildPenalty - jarringPairs.filter((p) => p.rel.dimensions.emotionalTransition < 35).length * 10, 0, 100);
@@ -239,7 +282,7 @@ export function evaluateGlobalAmvQuality(input: EvaluateGlobalQualityInput): Glo
       unmotivatedSwitches++;
     }
   }
-  const purposelessDecisions = decisions.filter((d) => d.semanticAlignment.components.generalNarrative < 48 && !d.lockedByUser);
+  const purposelessDecisions = decisions.filter((d, idx) => independentAlignments[idx]!.components.generalNarrative < 48 && !d.lockedByUser);
   if (purposelessDecisions.length >= Math.ceil(decisions.length * 0.35)) {
     findings.push({
       code: 'purposeless_scenes',
@@ -283,11 +326,13 @@ export function evaluateGlobalAmvQuality(input: EvaluateGlobalQualityInput): Glo
     }
   }
 
-  // Sequência globalmente confusa: muitos saltos desconexos ou troca constante de personagens sem fio condutor
+  // Sequência globalmente confusa: muitos saltos desconexos, oscilação errática ou repetição ping-pong
+  const uniqueIdsCount = new Set(decisions.map((d) => d.selectedSceneId)).size;
+  const uniqueSceneRatio = uniqueIdsCount / decisions.length;
   let confusingPenalty = 0;
   const jarringRatio = pairRelations.length ? jarringPairs.length / pairRelations.length : 0;
   const switchRatio = decisions.length > 2 ? unmotivatedSwitches / (decisions.length - 1) : 0;
-  if (jarringRatio >= 0.4 || (switchRatio >= 0.75 && plan.narrativeModel !== 'rivalry')) {
+  if (jarringRatio >= 0.4 || (switchRatio >= 0.75 && plan.narrativeModel !== 'rivalry') || (decisions.length >= 4 && uniqueSceneRatio <= 0.5 && input.scenes.length >= 4)) {
     confusingPenalty = 36;
     findings.push({
       code: 'confusing_sequence',
@@ -295,8 +340,8 @@ export function evaluateGlobalAmvQuality(input: EvaluateGlobalQualityInput): Glo
       severity: 'high',
       startTime: decisions[0]!.startTime,
       endTime: decisions.at(-1)!.endTime,
-      explanation: `Montagem globalmente confusa (${jarringPairs.length} cortes desconexos, ${Math.round(switchRatio * 100)}% de trocas abruptas de elenco/contexto), ainda que cenas isoladas tenham intensidade.`,
-      replanSuggestion: 'Replanejar a sequência inteira priorizando fio condutor de personagem e continuidade coreográfica.',
+      explanation: `Montagem globalmente confusa ou repetitiva (${jarringPairs.length} cortes desconexos, variedade ${Math.round(uniqueSceneRatio * 100)}%, ${Math.round(switchRatio * 100)}% de trocas de elenco), ainda que cenas isoladas tenham intensidade.`,
+      replanSuggestion: 'Replanejar a sequência inteira priorizando fio condutor de personagem, variedade e continuidade coreográfica.',
     });
   }
 
@@ -315,11 +360,10 @@ export function evaluateGlobalAmvQuality(input: EvaluateGlobalQualityInput): Glo
     });
   }
 
-  const baseNarrative = decisions.reduce((s, d) => s + d.semanticAlignment.components.generalNarrative, 0) / decisions.length;
+  const baseNarrative = independentAlignments.reduce((s, a) => s + a.components.generalNarrative, 0) / decisions.length;
   const narrativeCoherence = clamp(baseNarrative + (firstHalfAvg < maxIntensity ? 8 : 0) - unpreparedClimaxPenalty - confusingPenalty - speechPenalty, 0, 100);
 
   // 4. Alinhamento Música-Imagem (20%) — Checa frases importantes sem correspondência
-  const [rangeStart, rangeEnd] = plan.musicRange;
   const keyVocalEvents = musicUnderstanding.events.filter(
     (e) => e.eventType === 'vocal_phrase'
       && e.semanticMeaning?.primaryTheme !== null
@@ -330,10 +374,12 @@ export function evaluateGlobalAmvQuality(input: EvaluateGlobalQualityInput): Glo
   for (const vEv of keyVocalEvents) {
     const tStart = Math.max(0, vEv.startTime - rangeStart);
     const tEnd = vEv.endTime - rangeStart;
-    const overlapping = decisions.filter((d) => d.startTime < tEnd - 0.05 && d.endTime > tStart + 0.05);
-    const bestOverlapScore = Math.max(0, ...overlapping.map((d) => d.semanticAlignment.score));
+    const overlappingIdxs = decisions
+      .map((d, idx) => ({ d, idx }))
+      .filter(({ d }) => d.startTime < tEnd - 0.05 && d.endTime > tStart + 0.05);
+    const bestOverlapScore = Math.max(0, ...overlappingIdxs.map(({ idx }) => independentAlignments[idx]!.score));
     const betterExistsInPool = input.scenes.some((s) => !s.excluded && evaluateSemanticAlignment(vEv, s).score >= 78);
-    if (overlapping.length > 0 && bestOverlapScore < 58 && betterExistsInPool) {
+    if (overlappingIdxs.length > 0 && bestOverlapScore < 58 && betterExistsInPool) {
       unmatchedPhrases++;
     }
   }
@@ -348,7 +394,7 @@ export function evaluateGlobalAmvQuality(input: EvaluateGlobalQualityInput): Glo
       replanSuggestion: 'Usar "Encontrar outra cena para esta frase" no Creative Direction Preview para alinhar os versos focais.',
     });
   }
-  const avgSemantic = decisions.reduce((s, d) => s + d.semanticAlignment.score, 0) / decisions.length;
+  const avgSemantic = independentAlignments.reduce((s, a) => s + a.score, 0) / decisions.length;
   const musicImageAlignment = clamp(avgSemantic - unmatchedPhrases * 12, 0, 100);
 
   // 5. Ritmo, Dinâmica e Respiração Cinematográfica (10%)
