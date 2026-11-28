@@ -1,9 +1,11 @@
-# Status do Projeto — AMV Studio (v0.9.5)
+# Status do Projeto — AMV Studio (v0.10.0)
 
 | Área | Status | Evidência / Observações |
 |---|---|---|
 | Núcleo do projeto, histórico undo/redo e persistência atômica (`@amv/project`, `session.ts`) | **Estável (validado com mídia sintética)** | Schema Zod versionado, migrações, autosave, recuperação e proteção contra corrida em undo/redo de importação. |
 | Pipeline de mídia e proxies (`@amv/media`) | **Estável (validado com mídia sintética + FFmpeg real)** | Probe, pôster, tira de miniaturas, waveform multi-nível e proxy H.264 CFR com GOP curto. |
+| AMV Creative Intelligence Engine (`@amv/analysis`, `@amv/automv`) | **Implementado e validado em suíte A–L (avaliação artística humana complementar)** | Compreensão musical (arquétipos A–E), compreensão visual multiclasse (24 tags + fases coreográficas), alinhamento semântico (5 tipos, contraste intencional), diretor narrativo não linear (12 modelos), memória de continuidade, respiração cinematográfica, avaliação global independente (8 dimensões) e cache por hash. Ver [CREATIVE_INTELLIGENCE_AUDIT.md](./CREATIVE_INTELLIGENCE_AUDIT.md). |
+| Creative Direction Preview & Controle Editorial (`apps/desktop`, `@amv/assistant`) | **Estável (validado em build e testes automatizados)** | Prévia interativa antes de gerar, travas por corte, escolha de abertura/clímax, preservação de falas e consultas *"Por que escolheu?"* / *"Cena para frase"* no diálogo, Inspector e Assistente. |
 | Preview interativo no editor (`player.ts`, `Preview.tsx`, `textLayer.ts`) | **Aguardando confirmação em mídia real** | Pool limitado abaixo do teto de conexões do WebView2, sprites de texto pré-aquecidos e proteção contra auto-seek. Seguir [VALIDACAO_REAL.md](./VALIDACAO_REAL.md) e [TESTE_MANUAL_WINDOWS.md](./TESTE_MANUAL_WINDOWS.md). |
 | Gerador automático e avaliação técnica (`@amv/automv`) | **Estável em suíte sintética; correlação humana pendente** | Torneio multi-candidato, auto-reparo, leitura audiovisual e blindagem contra `NaN`/listas vazias. Correlação humana pendente em [VALIDACAO_REAL.md](./VALIDACAO_REAL.md). |
 | Tipografia e legendas (`@amv/subtitles`, `textLayer.ts`, `rasterizeText.ts`) | **Estável (validado com mídia sintética)** | Fontes locais embutidas, estilos anime, alinhamento de letras, tradução com cache e exportação PNG/sequência. |
