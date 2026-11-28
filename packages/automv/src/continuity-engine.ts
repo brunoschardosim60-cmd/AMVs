@@ -68,6 +68,8 @@ export interface EvaluateContinuityOptions {
   allowIntentionalContrast?: boolean;
   /** Indica que a voz do plano anterior continua em L-cut/narração sobre este corte. */
   voiceoverBridgeActive?: boolean;
+  /** Indica se a fala original do plano anterior estava audível na montagem (padrão: true). Quando false (V1 mudo sob música), cortar visualmente não interrompe fala audível. */
+  previousSpeechAudible?: boolean;
 }
 
 const VALID_COMBAT_FOLLOWUPS: Record<ActionPhase, ActionPhase[]> = {
@@ -334,7 +336,8 @@ export function evaluateContinuityRelation(
 
   // 5. Continuidade de Diálogo (0..100)
   let dialogueScore = 75;
-  if (fromScene.context.hasDialogue && !fromScene.context.isCompleteThought && !options.voiceoverBridgeActive && fromScene.sceneId !== toScene.sceneId) {
+  const prevSpeechAudible = options.previousSpeechAudible !== false;
+  if (prevSpeechAudible && fromScene.context.hasDialogue && !fromScene.context.isCompleteThought && !options.voiceoverBridgeActive && fromScene.sceneId !== toScene.sceneId) {
     dialogueScore = 25;
     notes.push('risco de cortar fala incompleta sem manter a voz em L-cut/narração');
   } else if (fromScene.context.hasDialogue && options.voiceoverBridgeActive) {

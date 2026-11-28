@@ -18,10 +18,29 @@ struct AnalyzerProcess {
     token: String,
 }
 
+fn terminate_child_tree(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let pid = child.id();
+        if pid > 0 {
+            let _ = Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 impl Drop for AnalyzerProcess {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        terminate_child_tree(&mut self.child);
     }
 }
 
@@ -58,8 +77,7 @@ fn spawn_analyzer(program: &str, args: &[&str]) -> Result<(Child, String), Strin
 
     let mut ready = String::new();
     let stdout = child.stdout.take().ok_or_else(|| {
-        let _ = child.kill();
-        let _ = child.wait();
+        terminate_child_tree(&mut child);
         "saída do analisador indisponível".to_owned()
     })?;
     let read_result = BufReader::new(stdout).read_line(&mut ready);
@@ -69,8 +87,7 @@ fn spawn_analyzer(program: &str, args: &[&str]) -> Result<(Child, String), Strin
             use std::io::Read;
             let _ = output.read_to_string(&mut stderr);
         }
-        let _ = child.kill();
-        let _ = child.wait();
+        terminate_child_tree(&mut child);
         let detail = stderr.trim();
         return Err(if detail.is_empty() {
             format!("o analisador encerrou antes de iniciar ({} -m amv_analyzer)", program)
@@ -116,8 +133,7 @@ fn start_analyzer_process(app: &tauri::AppHandle) -> Result<AnalyzerProcess, Str
                 match parsed {
                     Ok((port, token)) => return Ok(AnalyzerProcess { child, port, token }),
                     Err(error) => {
-                        let _ = child.kill();
-                        let _ = child.wait();
+                        terminate_child_tree(&mut child);
                         errors.push(error);
                     }
                 }
@@ -202,6 +218,13 @@ pub fn run() {
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("erro ao iniciar o AMV Studio");
+        .build(tauri::generate_context!())
+        .expect("erro ao iniciar o AMV Studio")
+        .run(|app_handle, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Ok(mut current) = app_handle.state::<AnalyzerState>().0.lock() {
+                    *current = None;
+                }
+            }
+        });
 }

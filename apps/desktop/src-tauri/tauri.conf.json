@@ -63,7 +63,8 @@
       },
       "nsis": {
         "installMode": "currentUser",
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "installerHooks": "nsis/hooks.nsh"
       }
     },
     "createUpdaterArtifacts": true

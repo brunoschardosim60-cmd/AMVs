@@ -17,6 +17,8 @@ import { editorialStyle, recommendStyle, styleDef, type EditorialDirection, type
 import type { CreativeEmphasis } from './creative-profiles.js';
 import type { CreativeDirectionSession } from './creative-intelligence.js';
 import type { CreativeDirectionOverrides } from './narrative-director.js';
+import { evaluateContinuityRelation } from './continuity-engine.js';
+import { evaluateSemanticAlignment } from './semantic-alignment.js';
 import { matchLyricsSemantics } from './lyric-matcher.js';
 import { lyricCueKey } from './lyric-cue-key.js';
 import { layoutLyrics } from './lyrics-layout.js';
@@ -147,6 +149,8 @@ export interface GenerateOptions {
   creativeOverrides?: CreativeDirectionOverrides;
   /** Sessão pré-calculada do AMV Creative Intelligence Engine para guiar decisões globais. */
   creativeSession?: CreativeDirectionSession;
+  /** Marca explicitamente a música como instrumental (nunca inventa nem renderiza letras). */
+  isInstrumental?: boolean;
 }
 
 export interface GenerateResult {
@@ -1359,6 +1363,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   );
   const opts: GenerateOptions = {
     ...baseOpts,
+    lyrics: baseOpts.isInstrumental ? undefined : baseOpts.lyrics,
     intensity: adjustedIntensity,
     ...(hasNonLinearDirection && !baseOpts.sequenceIds?.length && baseOpts.organizationMode !== 'chronological'
       ? { focus: 'mix' as const, organizationMode: 'free' as const }
@@ -1455,12 +1460,33 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const speechVisualMode = opts.speechVisualMode ?? 'scene';
   const showSpeechVideo = (b: VoiceBlock) => speechVisualMode === 'voiceover' ? false : speechVisualMode === 'hybrid' ? b.preDrop : true;
   const wantVoice = opts.useSpeech && voice && opts.style !== 'discurso';
-  const totalVoice = wantVoice ? Math.max(0, Math.min(6, Math.round(opts.voiceMoments ?? (style.speechBeforeDrop ? 1 : 0)))) : 0;
+  const preservedSpeechSceneIds = new Set([
+    ...(opts.creativeOverrides?.preservedDialogueSceneIds ?? []),
+    ...(opts.creativeSession?.plan.preservedDialogues.map((d) => d.sceneId) ?? []),
+  ]);
+  const isPreservedSpeech = (ep: EpisodeInput, sp: SpeechSegment): boolean => {
+    if (!preservedSpeechSceneIds.size) return false;
+    const mid = (sp.startS + sp.endS) / 2;
+    return ep.analysis.shots.some(
+      (sh) => mid >= sh.startS - 0.15 && mid <= sh.endS + 0.15 && preservedSpeechSceneIds.has(`${ep.assetId}@${sh.startS}`),
+    );
+  };
+  const totalVoice = wantVoice
+    ? Math.max(
+        preservedSpeechSceneIds.size > 0 ? 1 : 0,
+        Math.min(6, Math.round(opts.voiceMoments ?? (style.speechBeforeDrop || preservedSpeechSceneIds.size > 0 ? 1 : 0))),
+      )
+    : 0;
   const preferCaptionedSpeech = Boolean(opts.showText && opts.showSpeechCaptions !== false);
   if (wantVoice && totalVoice > 0 && style.speechBeforeDrop && dropT !== null) {
     const acceptSpeech = (ep: EpisodeInput, speech: SpeechSegment) =>
       hasRequestedSpeechAudio(ep, lang) && speechMatchesWanted(ep, speech);
-    let pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) => nearPool(ep, speech) && acceptSpeech(ep, speech), preferCaptionedSpeech);
+    let pick = preservedSpeechSceneIds.size > 0
+      ? pickSpeech(episodes, Math.min(4.8, dropT - 0.2), exclude, (ep, speech) => isPreservedSpeech(ep, speech) && acceptSpeech(ep, speech), preferCaptionedSpeech)
+      : null;
+    if (!pick) {
+      pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) => nearPool(ep, speech) && acceptSpeech(ep, speech), preferCaptionedSpeech);
+    }
     if (!pick && fight && !strictFightSelection && !plan.wanted) {
       pick = pickSpeech(episodes, Math.min(4, dropT - 0.2), exclude, (ep, speech) =>
         poolEps.has(ep.assetId) && acceptSpeech(ep, speech), preferCaptionedSpeech);
@@ -1473,15 +1499,18 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
   const extraWanted = totalVoice - blocks.length;
   if (wantVoice && extraWanted > 0) {
     const taken = new Set(blocks.map((b) => `${b.ep.assetId}@${b.s.startS}`));
-    const speechRank = (s: SpeechSegment) => scoreSpeechCandidate(s) + (preferCaptionedSpeech && (s.text?.trim().length ?? 0) >= 3 ? 0.32 : 0);
+    const speechRank = (ep: EpisodeInput, s: SpeechSegment) =>
+      scoreSpeechCandidate(s)
+      + (preferCaptionedSpeech && (s.text?.trim().length ?? 0) >= 3 ? 0.32 : 0)
+      + (isPreservedSpeech(ep, s) ? 2.5 : 0);
     const lines = episodes
       .filter((e) => e.hasAudio && !exclude.has(e.assetId) && hasRequestedSpeechAudio(e, lang))
       .flatMap((ep) => ep.analysis.speech
-        .filter((sp) => speechMatchesWanted(ep, sp) && (nearPool(ep, sp) || (fight && !strictFightSelection && !plan.wanted && poolEps.has(ep.assetId))))
+        .filter((sp) => speechMatchesWanted(ep, sp) && (isPreservedSpeech(ep, sp) || nearPool(ep, sp) || (fight && !strictFightSelection && !plan.wanted && poolEps.has(ep.assetId))))
         .map((sp) => ({ ep, sp })))
-      .filter(({ sp }) => sp.endS - sp.startS >= 0.8 && sp.endS - sp.startS <= 4)
+      .filter(({ ep, sp }) => sp.endS - sp.startS >= 0.8 && sp.endS - sp.startS <= (isPreservedSpeech(ep, sp) ? 5.2 : 4))
       .filter(({ ep, sp }) => !taken.has(`${ep.assetId}@${sp.startS}`))
-      .sort((a, b) => speechRank(b.sp) - speechRank(a.sp) || a.sp.startS - b.sp.startS);
+      .sort((a, b) => speechRank(b.ep, b.sp) - speechRank(a.ep, a.sp) || a.sp.startS - b.sp.startS);
     // onde cabe: começa num compasso, prefere janelas com menos vocal cantado / respiro rítmico e afastado das outras falas e do drop
     const quiet = (a: number, b: number) => {
       let sum = 0;
@@ -1653,7 +1682,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     const isLikelyOpEd = !strictFightSelection
       && ep.analysis.durationS >= 1080
       && (shot.startS < 92 || shot.endS > ep.analysis.durationS - 92);
-    const targetList = shot.tags.includes('escura') || isDeadFrame
+    const targetList = shot.tags.includes('escura') || shot.brightness < 0.16 || isDeadFrame
       ? darkReserve
       : isLikelyOpEd || isClutteredCredit
         ? opEdReserve
@@ -1755,9 +1784,54 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     visualSlots.push(...pieces);
   }
 
+  // Governador Editorial de Cadência & Respiração Cinematográfica:
+  // - Sustenta planos longos em zonas contemplativas/emocionais.
+  // - Quando guiado pelo Creative Intelligence Engine, evita cortes mecânicos sub-batida (< 0,62s no clímax
+  //   ou < 0,88s fora do clímax) e absorve micro-frestas iniciais/finais sem atravessar o drop.
+  const longest = Math.max(...candidates.map((c) => c.shot.endS - c.shot.startS));
+  const breathingZones = opts.creativeSession?.plan.breathingZones ?? [];
+  const canSustainBreathing = opts.style !== 'letra' && opts.style !== 'rapido' && longest >= 2.2
+    && (breathingZones.length > 0 || opts.style === 'emocional' || editorialDirection === 'cinematic');
+  const antiStrobeActive = Boolean(opts.creativeSession && opts.style !== 'letra' && longest >= 1.2);
+  const consolidatedVisualSlots: Slot[] = [];
+  for (const sl of visualSlots) {
+    const prevSl = consolidatedVisualSlots.at(-1);
+    if (prevSl && !sl.isDrop && !prevSl.word && !sl.word) {
+      const contiguous = Math.abs(sl.startS - prevSl.endS) <= 0.025;
+      const midS = (prevSl.startS + sl.endS) / 2;
+      const mergedDur = sl.endS - prevSl.startS;
+      const prevDur = prevSl.endS - prevSl.startS;
+      const currDur = sl.endS - sl.startS;
+      const inBreathingZone = canSustainBreathing && (
+        breathingZones.some((z) => midS >= z.startTime - 0.1 && midS <= z.endTime + 0.1)
+        || (opts.style === 'emocional' && prevSl.energy <= 0.42 && sl.energy <= 0.42)
+      );
+      const maxHoldS = Math.min(longest * 0.92, opts.style === 'emocional' ? 4.8 : 3.8);
+      if (contiguous && inBreathingZone && !prevSl.isDrop && prevSl.energy <= 0.5 && sl.energy <= 0.5 && mergedDur <= maxHoldS) {
+        prevSl.endS = sl.endS;
+        prevSl.energy = (prevSl.energy + sl.energy) / 2;
+        prevSl.musicCue = 'respiração cinematográfica sustentada';
+        continue;
+      }
+      if (contiguous && antiStrobeActive && mergedDur <= Math.min(longest * 0.9, 3.6)) {
+        const highEnergyZone = prevSl.isDrop || prevSl.energy >= 0.7 || sl.energy >= 0.7;
+        const minIntentionalCutS = highEnergyZone
+          ? (opts.style === 'rapido' ? 0.58 : 0.72)
+          : (opts.style === 'emocional' ? 1.8 : 0.92);
+        const isTrailingEndSliver = sl.endS >= D - 0.08 && currDur < 0.95;
+        const isLeadingSliver = prevSl.startS <= 0.05 && prevDur < 0.55;
+        if (prevDur < minIntentionalCutS || isTrailingEndSliver || isLeadingSliver) {
+          prevSl.endS = sl.endS;
+          prevSl.energy = Math.max(prevSl.energy, sl.energy);
+          continue;
+        }
+      }
+    }
+    consolidatedVisualSlots.push({ ...sl });
+  }
+
   // cenas curtas demais para um slot longo (intro lenta, episódio com cortes rápidos):
   // divide o slot na batida mais perto do meio, para nunca deixar buraco
-  const longest = Math.max(...candidates.map((c) => c.shot.endS - c.shot.startS));
   const fitSlots: Slot[] = [];
   const splitFit = (sl: Slot) => {
     const len = sl.endS - sl.startS;
@@ -1774,7 +1848,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     splitFit({ ...sl, endS: cut });
     splitFit({ ...sl, startS: cut, isDrop: false, word: undefined });
   };
-  for (const sl of visualSlots) splitFit(sl);
+  for (const sl of consolidatedVisualSlots) splitFit(sl);
   // Quantiza todas as fronteiras à grade de frames. A mesma fronteira compartilhada
   // recebe sempre o mesmo arredondamento, evitando lacunas e sobreposições acumuladas.
   {
@@ -1799,6 +1873,37 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     baseLyricMatches,
     opts.lyricSceneMatches,
   );
+
+  const creativeSceneById = opts.creativeSession
+    ? new Map(opts.creativeSession.scenes.map((s) => [s.sceneId, s]))
+    : null;
+  const findCreativeMusicAtSlot = (sl: Slot) => {
+    const mu = opts.creativeSession?.musicUnderstanding;
+    if (!mu) return null;
+    const absStart = range[0] + sl.startS;
+    const absEnd = range[0] + sl.endS;
+    const absMid = (absStart + absEnd) / 2;
+    if (sl.isDrop) {
+      const dropEv = mu.events.find((e) => e.eventType === 'drop' && Math.abs(e.startTime - absStart) <= 0.35);
+      if (dropEv) return { event: dropEv, keyword: null };
+    }
+    if (!mu.isInstrumental) {
+      const vocal = mu.events.find(
+        (e) => e.eventType === 'vocal_phrase' && e.startTime < absEnd - 0.04 && e.endTime > absStart + 0.04,
+      );
+      if (vocal) {
+        const kw = mu.events.find(
+          (e) => e.eventType === 'lyric_keyword' && e.startTime >= absStart - 0.08 && e.startTime <= absEnd + 0.08,
+        ) ?? null;
+        return { event: vocal, keyword: kw };
+      }
+    }
+    const structural = mu.events.find(
+      (e) => ['pause', 'build', 'climax', 'ending', 'instrumental_passage', 'section'].includes(e.eventType)
+        && absMid >= e.startTime && absMid <= e.endTime,
+    );
+    return structural ? { event: structural, keyword: null } : null;
+  };
 
   const RECENT_WINDOW = 6;
 
@@ -1898,13 +2003,76 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
         creativeDirectorBonus += 12;
       }
     }
-    if (opts.creativeSession) {
+    if (opts.creativeSession && creativeSceneById) {
       const slotMid = (sl.startS + sl.endS) / 2;
       const guidedDecision = opts.creativeSession.solution.decisions.find(
         (d) => slotMid >= d.startTime - 0.05 && slotMid <= d.endTime + 0.05,
       );
       if (guidedDecision && (c.id === guidedDecision.selectedSceneId || baseSceneId === guidedDecision.selectedSceneId)) {
-        creativeDirectorBonus += 1.6;
+        creativeDirectorBonus += 1.4;
+      }
+      const currCreativeScene = creativeSceneById.get(c.id) ?? creativeSceneById.get(baseSceneId);
+      if (currCreativeScene) {
+        const planBeat = opts.creativeSession.plan.narrativeBeats.find(
+          (b) => slotMid >= b.startTime - 0.02 && slotMid <= b.endTime + 0.02,
+        );
+        if (episodes.length >= 2 && planBeat) {
+          if (planBeat.preferredEpisodeScope === 'late_hook' && currCreativeScene.episodeIndex === episodes.length - 1) {
+            creativeDirectorBonus += 1.65;
+          } else if (planBeat.preferredEpisodeScope === 'early_origin' && currCreativeScene.episodeIndex === 0) {
+            creativeDirectorBonus += 1.85;
+            breakdown.reasons.push('flashback de origem no episódio inicial');
+          } else if (planBeat.preferredEpisodeScope === 'climax_payoff' && currCreativeScene.episodeIndex === episodes.length - 1) {
+            creativeDirectorBonus += 1.25;
+          }
+        }
+        const activeMusic = findCreativeMusicAtSlot(sl);
+        if (activeMusic) {
+          const sem = evaluateSemanticAlignment(activeMusic.event, currCreativeScene, {
+            keywordEvent: activeMusic.keyword,
+            allowIntentionalContrast: planBeat?.allowIntentionalContrast,
+            narrativeTargetTags: planBeat?.targetTags,
+            narrativeRole: planBeat?.role,
+            focusCharacters: opts.characters,
+          });
+          creativeDirectorBonus += ((sem.score - 50) / 50) * (activeMusic.event.lyrics ? 1.55 : 0.8);
+          if (sem.score >= 70 && activeMusic.event.lyrics) {
+            breakdown.reasons.push(`alinhamento ${sem.alignmentType} (${sem.score.toFixed(0)}/100)`);
+          }
+        }
+        if (previous) {
+          const prevBaseId = `${previous.ep.assetId}@${parentShotStartS.get(previous.shot) ?? previous.shot.startS}`;
+          const prevCreativeScene = creativeSceneById.get(previous.id) ?? creativeSceneById.get(prevBaseId);
+          if (prevCreativeScene) {
+            const voiceoverBridgeActive = blocks.some(
+              (b) => !showSpeechVideo(b) && sl.startS > b.atS + 0.05 && sl.startS < b.atS + b.len - 0.05,
+            );
+            const previousSpeechAudible = blocks.some(
+              (b) => b.ep.assetId === previous.ep.assetId
+                && b.s.startS >= previous.shot.startS - 0.25
+                && b.s.endS <= previous.shot.endS + 0.25,
+            );
+            const cont = evaluateContinuityRelation(prevCreativeScene, currCreativeScene, undefined, {
+              musicalTransitionCue: transitionCue,
+              allowFlashback: hasNonLinearDirection || planBeat?.nonLinearFunction === 'origin_flashback',
+              allowIntentionalContrast: planBeat?.allowIntentionalContrast,
+              voiceoverBridgeActive,
+              previousSpeechAudible,
+            });
+            if (cont.rejected) {
+              creativeDirectorBonus -= 2.2;
+            } else {
+              creativeDirectorBonus += ((cont.continuityScore - 50) / 50) * 1.4;
+              if (cont.relationKind === 'combat_chain') {
+                breakdown.reasons.push(`cadeia de combate (${prevCreativeScene.actionPhase} → ${currCreativeScene.actionPhase})`);
+              } else if (cont.relationKind === 'directional_match' || cont.relationKind === 'cross_episode_match') {
+                breakdown.reasons.push('continuidade direcional entre planos');
+              } else if (cont.relationKind === 'dialogue_bridge' && voiceoverBridgeActive) {
+                breakdown.reasons.push('continuidade de diálogo em narração');
+              }
+            }
+          }
+        }
       }
     }
     return { breakdown, score: breakdown.total + dropSequenceBonus + creativeDirectorBonus };
@@ -2177,6 +2345,13 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
     }
     const narrativeBeat = narrativeAt(direction, (sl.startS + sl.endS) / 2);
     const target = Math.min(1, Math.max(0, lowI + (highI - lowI) * sl.energy + boost + (sl.isDrop ? 0.15 : 0)));
+    const chosenBaseSceneId = `${c.ep.assetId}@${parentShotStartS.get(c.shot) ?? c.shot.startS}`;
+    const chosenCreativeScene = creativeSceneById?.get(c.id) ?? creativeSceneById?.get(chosenBaseSceneId);
+    const activeSlotMusic = findCreativeMusicAtSlot(sl);
+    const slotSemanticSync = chosenCreativeScene && activeSlotMusic && activeSlotMusic.event.lyrics
+      ? evaluateSemanticAlignment(activeSlotMusic.event, chosenCreativeScene, { keywordEvent: activeSlotMusic.keyword }).phraseSync
+      : null;
+    let phraseSyncReason: string | null = null;
     const best = {
       c,
       score: scored.score,
@@ -2194,6 +2369,16 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
           }
           return clamped;
         };
+        if (
+          slotSemanticSync
+          && slotSemanticSync.mode !== 'rhythm_only'
+          && Number.isFinite(slotSemanticSync.recommendedSourceInS)
+          && slotSemanticSync.recommendedSourceInS >= c.shot.startS
+          && slotSemanticSync.recommendedSourceInS <= c.shot.endS
+        ) {
+          phraseSyncReason = `sincronia sub-frasal (${slotSemanticSync.mode})`;
+          return pickFreeWindow(slotSemanticSync.recommendedSourceInS);
+        }
         const jitter = margin * 0.15 * (rand() - 0.5); // variação por seed
         const visual = visionOf(c.ep, c.shot);
         const local = visual?.local;
@@ -2508,6 +2693,7 @@ function generateInner(project: Project, music: MusicInput, episodes: EpisodeInp
       sequencePlan.repeatedSlots.includes(slotIndex) ? 'cena repetida por falta de material novo' : null,
       hit ? 'golpe na batida' : internalBeatHit ? 'impacto sincronizado na batida interna' : null,
       characterFramingReason,
+      phraseSyncReason,
       motionCropReason,
       speed < 1 ? `câmera lenta ${speed.toFixed(2)}×` : null,
       adaptiveSpeedReason,

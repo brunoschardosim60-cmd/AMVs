@@ -1,6 +1,11 @@
 import { shotKey } from '@amv/analysis';
 import { applyCommand, clipEndUs, sourceTimeAt, type Clip, type Project } from '@amv/project';
 import { buildCreativeBrief, qualityIssueSummary, reviewGeneratedAssembly, type CreativeBrief, type CreativeReview } from './creative-director.js';
+import {
+  auditGeneratedTimelineDecisions,
+  prepareCreativeDirectionSession,
+  type PostGenerationEditorialAudit,
+} from './creative-intelligence.js';
 import { generateAmv, resolveAutonomousOptions, type EpisodeInput, type GenerateOptions, type GenerateResult, type MusicInput } from './generate.js';
 
 const SECOND = 1_000_000;
@@ -28,6 +33,7 @@ export interface TournamentCandidateResult {
   brief: CreativeBrief;
   review: CreativeReview;
   score: AssemblyScoreBreakdown;
+  editorialAudit: PostGenerationEditorialAudit;
 }
 
 export interface GenerateBestAmvResult {
@@ -269,9 +275,46 @@ export function generateBestAmv(input: {
   }
 
   const evaluated: TournamentCandidateResult[] = [];
+  const sessionBySignature = new Map<string, NonNullable<GenerateOptions['creativeSession']>>();
+  if (options.creativeSession) {
+    const initSig = `${options.style}:${options.intensity}:${options.organizationMode ?? 'free'}:${Boolean(options.isInstrumental)}`;
+    sessionBySignature.set(initSig, options.creativeSession);
+  }
   for (const variant of variations) {
-    const generated = generateAmv(project, music, episodes, variant.opts);
-    const effectiveOpts = variant.opts.autonomous ? resolveAutonomousOptions(music, episodes, variant.opts) : variant.opts;
+    const resolvedPre = variant.opts.autonomous ? resolveAutonomousOptions(music, episodes, variant.opts) : variant.opts;
+    const sig = `${resolvedPre.style}:${resolvedPre.intensity}:${resolvedPre.organizationMode ?? 'free'}:${Boolean(resolvedPre.isInstrumental)}`;
+    let activeSession = variant.opts.creativeSession && sig === `${options.style}:${options.intensity}:${options.organizationMode ?? 'free'}:${Boolean(options.isInstrumental)}`
+      ? variant.opts.creativeSession
+      : sessionBySignature.get(sig);
+    if (!activeSession) {
+      activeSession = prepareCreativeDirectionSession({
+        project,
+        music,
+        episodes,
+        options: {
+          style: resolvedPre.style,
+          intensity: resolvedPre.intensity,
+          durationS: resolvedPre.durationS,
+          musicStartS: resolvedPre.musicStartS,
+          lyrics: resolvedPre.isInstrumental ? undefined : resolvedPre.lyrics,
+          useSpeech: resolvedPre.useSpeech,
+          organizationMode: resolvedPre.organizationMode,
+          exclude: resolvedPre.exclude,
+          beatOffsetMs: resolvedPre.beatOffsetMs,
+        },
+        isInstrumental: resolvedPre.isInstrumental,
+        overrides: resolvedPre.creativeOverrides,
+      });
+      sessionBySignature.set(sig, activeSession);
+    }
+    const variantOptsWithIntelligence: GenerateOptions = {
+      ...variant.opts,
+      creativeSession: activeSession,
+    };
+    const generated = generateAmv(project, music, episodes, variantOptsWithIntelligence);
+    const effectiveOpts = variantOptsWithIntelligence.autonomous
+      ? resolveAutonomousOptions(music, episodes, variantOptsWithIntelligence)
+      : variantOptsWithIntelligence;
     const brief = buildCreativeBrief({
       style: effectiveOpts.style,
       episodes,
@@ -285,7 +328,7 @@ export function generateBestAmv(input: {
         voiceMoments: effectiveOpts.voiceMoments,
       },
       direction: generated.summary.direction,
-      hasTimedLyrics: Boolean(effectiveOpts.lyrics?.length),
+      hasTimedLyrics: Boolean(!effectiveOpts.isInstrumental && effectiveOpts.lyrics?.length),
     });
     const review = reviewGeneratedAssembly({
       project,
@@ -301,23 +344,40 @@ export function generateBestAmv(input: {
       commands: review.commands,
     };
     const generatedIds = new Set(
-      generated.commands.flatMap((cmd) => (cmd.type === 'clip.add' ? [cmd.clip.id] : [])),
+      review.commands.flatMap((cmd) => (cmd.type === 'clip.add' ? [cmd.clip.id] : [])),
     );
     const preview = applyCommand(project, {
       type: 'batch',
       label: 'Avaliação de candidato do torneio',
       commands: review.commands,
     }).project;
-    const score = scoreAssemblyQuality({
+    const editorialAudit = auditGeneratedTimelineDecisions({
+      project: preview,
+      generatedClipIds: generatedIds,
+      music,
+      episodes,
+      lyrics: effectiveOpts.isInstrumental ? undefined : effectiveOpts.lyrics,
+      isInstrumental: effectiveOpts.isInstrumental,
+      style: effectiveOpts.style,
+      organizationMode: effectiveOpts.organizationMode,
+      useSpeech: effectiveOpts.useSpeech,
+      overrides: effectiveOpts.creativeOverrides,
+    });
+    const baseScore = scoreAssemblyQuality({
       project: preview,
       generatedClipIds: generatedIds,
       summary: generated.summary,
       brief,
       review,
       episodes,
-      hasLyrics: Boolean(effectiveOpts.lyrics?.length),
+      hasLyrics: Boolean(!effectiveOpts.isInstrumental && effectiveOpts.lyrics?.length),
       sfxRequested: Boolean(effectiveOpts.useSfx !== false && effectiveOpts.sfxMode !== 'off' && effectiveOpts.sfxAssets),
     });
+    const blendedTotal = Math.round((baseScore.total * 0.75 + editorialAudit.qualityReview.overallScore * 0.25) * 10) / 10;
+    const score: AssemblyScoreBreakdown = {
+      ...baseScore,
+      total: Math.min(100, Math.max(0, blendedTotal)),
+    };
     evaluated.push({
       seed: variant.opts.seed,
       label: variant.label,
@@ -326,6 +386,7 @@ export function generateBestAmv(input: {
       brief,
       review,
       score,
+      editorialAudit,
     });
   }
 

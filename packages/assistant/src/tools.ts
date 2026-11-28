@@ -1,5 +1,5 @@
 import { analyzeEpisodeScenes, shotKey, type EpisodeAnalysis, type EpisodeVision, type MusicAnalysis, type Shot } from '@amv/analysis';
-import { explainTimelineClipChoice, findAlternativeScenesForPhrase, generateAmv, STYLES, type StyleId } from '@amv/automv';
+import { explainTimelineClipChoice, findAlternativeScenesForPhrase, generateAmv, prepareCreativeDirectionSession, STYLES, type StyleId } from '@amv/automv';
 import { applyCommand, clipEndUs, newId, sourceTimeAt, splitClip, TextContentSchema, timelineLocalAtSource, type Clip, type Command, type EffectInstance, type Project } from '@amv/project';
 import type { ChangeItem, ChangeSet } from './changeset.js';
 
@@ -311,11 +311,34 @@ export function proposeGenerate(ctx: AssistantContext, args: { style: StyleId; i
   const eps = [...ctx.episodes.entries()];
   if (!eps.length) return 'Importe pelo menos um episódio (e espere a análise) antes.';
   const style = STYLES.find((s) => s.id === args.style) ? args.style : 'hype';
+  const intensity = Math.max(0, Math.min(3, Math.round(args.intensity ?? 2))) as 0 | 1 | 2 | 3;
+  const durationS = args.durationS ?? 30;
+  const musicInput = { assetId: musicAsset, name: assetName(p, musicAsset), analysis: ctx.music.get(musicAsset)! };
+  const episodeInputs = eps.map(([id, a]) => ({
+    assetId: id,
+    name: assetName(p, id),
+    analysis: a,
+    hasAudio: (p.assets.find((x) => x.id === id)?.probe?.audio.length ?? 0) > 0,
+    vision: ctx.visions?.get(id),
+  }));
+  const creativeSession = prepareCreativeDirectionSession({
+    project: p,
+    music: musicInput,
+    episodes: episodeInputs,
+    options: {
+      style,
+      intensity,
+      durationS,
+      musicStartS: null,
+      useSpeech: true,
+      organizationMode: 'free',
+    },
+  });
   const r = generateAmv(
     p,
-    { assetId: musicAsset, name: assetName(p, musicAsset), analysis: ctx.music.get(musicAsset)! },
-    eps.map(([id, a]) => ({ assetId: id, name: assetName(p, id), analysis: a, hasAudio: (p.assets.find((x) => x.id === id)?.probe?.audio.length ?? 0) > 0 })),
-    { style, intensity: Math.max(0, Math.min(3, Math.round(args.intensity ?? 2))) as 0 | 1 | 2 | 3, durationS: args.durationS ?? 30, musicStartS: null, useSpeech: true, useEffects: true, showText: true, seed: args.seed ?? 1 },
+    musicInput,
+    episodeInputs,
+    { style, intensity, durationS, musicStartS: null, useSpeech: true, useEffects: true, showText: true, seed: args.seed ?? 1, creativeSession },
   );
   return {
     id: newId('cs'),

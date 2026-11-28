@@ -354,6 +354,8 @@ function selectOpeningAnchor(
 
   const scoreOpening = (s: SceneAnalysis): { score: number; reason: string } => {
     let sc = s.confidence * 25 + (s.favorite ? 15 : 0) - s.textClutterScore * 30;
+    if (s.durationS >= 1.5) sc += 14;
+    else if (s.durationS < 0.85) sc -= 18;
     const isLate = s.context.episodeProgress >= 0.65 || s.episodeIndex > 0;
     if (model === 'climax_opening' || model === 'non_linear' || model === 'foreshadowing') {
       if (isLate) sc += 32;
