@@ -1,5 +1,5 @@
 import { impactScore, parseSubtitles, decodeSubtitleBytes, SCENE_EMOTIONS, shotKey, type Cue, type SceneEmotion, type SpeechSegment } from '@amv/analysis';
-import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, generateBestAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, planNarrative, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, scoreSpeechCandidate, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type AssemblyScoreBreakdown, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type LocalizedRegenerationResult, type LyricTypographyStyle, type OrganizationMode, type StyleId } from '@amv/automv';
+import { buildCreativeBrief, canonicalizeEpisodeVision, chooseMusicRange, creativeEmphasis, DEFAULT_CREATIVE_PROFILES, generateAmv, generateBestAmv, isBuiltInCreativeProfile, lyricCueKey, planFootage, planNarrative, prepareCreativeDirectionSession, prepareLocalizedRegeneration, qualityIssueSummary, recommendEpisodePreset, recommendStyle, reviewGeneratedAssembly, scoreSpeechCandidate, STYLE_EDITORIAL_GOALS, STYLES, suggestMusicRanges, type AssemblyScoreBreakdown, type CreativeDirectionOverrides, type CreativeProfile, type EditorialDirection, type EpisodeInput, type GenerateOptions, type GlobalQualityReport, type LocalizedRegenerationResult, type LyricTypographyStyle, type OrganizationMode, type StyleId } from '@amv/automv';
 import { characterCounts, normLabel, pickAudioStreamByLanguage, type EpisodeVision, type VisionScope } from '@amv/analysis';
 import { alignUntimedLyrics, alignUntimedLyricsWithFallback, promoteAlignedCuesForTypography } from '@amv/subtitles';
 import { isLocal, loadAiSettings, secretName } from '../../core/aiSettings';
@@ -14,6 +14,7 @@ import { useApp, useLibraryVersion, useSessionVersion } from '../../store';
 import { displayTitle, recommend, STYLE_THEME } from '@amv/music';
 import { applyCommand, clipEndUs, isInternalCutoutAsset, newId, sourceTimeAt, type Clip, type Project } from '@amv/project';
 import { Button, Dialog } from '../../ui/controls';
+import { CreativeDirectionPreview } from './CreativeDirectionPreview';
 import { MusicalMap } from './MusicalMap';
 import { RegenerationCompare } from './RegenerationCompare';
 import { SceneSuggestions } from './SceneSuggestions';
@@ -153,7 +154,10 @@ export function GenerateDialog({
       winnerLabel: string;
       unifiedHighlights: string[];
     };
+    globalQuality?: GlobalQualityReport;
   } | null>(null);
+  const [previewDirectionOpen, setPreviewDirectionOpen] = useState(false);
+  const [creativeOverrides, setCreativeOverrides] = useState<CreativeDirectionOverrides>({});
   const [localizedCandidates, setLocalizedCandidates] = useState<LocalizedCandidate[]>([]);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const [candidateMode, setCandidateMode] = useState(false);
@@ -293,6 +297,44 @@ export function GenerateDialog({
   // o trecho escolhido só vale enquanto ainda é uma das sugestões (mudou duração/estilo/luta: volta ao automático)
   const chosenStart = ranges.some((r) => r.startS === musicStart) ? musicStart : null;
   const musicMapRange = music ? chooseMusicRange(music, duration, chosenStart) : null;
+  const creativePreviewSession = useMemo(() => {
+    if (!previewDirectionOpen || !music || !inputs.length || !selectedMusic) return null;
+    return prepareCreativeDirectionSession({
+      project,
+      music: { assetId: selectedMusic.id, name: selectedMusic.name, analysis: music },
+      episodes: inputs,
+      options: {
+        style: selectedStyle,
+        intensity,
+        durationS: duration,
+        musicStartS: chosenStart,
+        lyrics: lyrics?.cues,
+        useSpeech: directorMode === 'autonomous' ? autonomousSpeech : voiceMoments > 0,
+        organizationMode: directorMode === 'autonomous' ? 'free' : organizationMode,
+        exclude: excluded,
+        beatOffsetMs,
+      },
+      overrides: creativeOverrides,
+    });
+  }, [
+    previewDirectionOpen,
+    project,
+    music,
+    selectedMusic,
+    inputs,
+    selectedStyle,
+    intensity,
+    duration,
+    chosenStart,
+    lyrics?.cues,
+    directorMode,
+    autonomousSpeech,
+    voiceMoments,
+    organizationMode,
+    excluded,
+    beatOffsetMs,
+    creativeOverrides,
+  ]);
 
   // carrega do cache a visão já feita (uma vez por episódio)
   useEffect(() => {
@@ -1340,6 +1382,25 @@ export function GenerateDialog({
         creativeEmphasis: creativeEmphasis({ actionEmphasis, emotionEmphasis, preferredEmotion: preferredEmotion || null }),
       };
       const m = musics.find((a) => a.id === musicId)!;
+      const activeCreativeSession = prepareCreativeDirectionSession({
+        project: session.project,
+        music: { assetId: m.id, name: m.name, analysis: music },
+        episodes: directorInputs,
+        options: {
+          style: selectedStyle,
+          intensity,
+          durationS: duration,
+          musicStartS: chosenStart,
+          lyrics: resolvedLyrics,
+          useSpeech: effectiveVoiceMoments > 0,
+          organizationMode: isAutonomous ? 'free' : organizationMode,
+          exclude: excluded,
+          beatOffsetMs,
+        },
+        overrides: creativeOverrides,
+      });
+      opts.creativeOverrides = creativeOverrides;
+      opts.creativeSession = activeCreativeSession;
       setGenerationStep(
         isAutonomous
           ? 'Modo Livre · Avaliando 5 montagens completas e auto-reparando a melhor...'
@@ -1535,7 +1596,9 @@ export function GenerateDialog({
           winnerLabel: tournament.winner.label,
           unifiedHighlights: tournament.unifiedHighlights,
         },
+        globalQuality: activeCreativeSession.qualityReview,
       });
+      setPreviewDirectionOpen(false);
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
         toast({ tone: 'info', title: 'Geração cancelada', body: 'A montagem não foi aplicada.' });
@@ -1716,6 +1779,12 @@ export function GenerateDialog({
             <Button variant="ghost" onClick={() => setResult(null)}>
               Mudar opções
             </Button>
+            <Button variant="ghost" onClick={() => {
+              setResult(null);
+              setPreviewDirectionOpen(true);
+            }}>
+              Rever Direção Criativa
+            </Button>
             <Button icon={<Wand2 size={15} />} disabled={busy} onClick={() => generate(seed + 7)}>
               Gerar outra versão
             </Button>
@@ -1841,6 +1910,25 @@ export function GenerateDialog({
     );
   }
 
+  if (!localizedRange && previewDirectionOpen && creativePreviewSession) {
+    return (
+      <Dialog
+        title="Creative Direction Preview · Direção Narrativa, Musical e Cinematográfica"
+        onClose={() => setPreviewDirectionOpen(false)}
+        width="w-[1160px]"
+      >
+        <CreativeDirectionPreview
+          creativeSession={creativePreviewSession}
+          overrides={creativeOverrides}
+          onChangeOverrides={setCreativeOverrides}
+          onBackToOptions={() => setPreviewDirectionOpen(false)}
+          onApproveAndGenerate={() => void generate(seed)}
+          busy={busy}
+        />
+      </Dialog>
+    );
+  }
+
   return (
     <Dialog
       title={localizedRange ? 'Regenerar intervalo selecionado' : 'Gerar meu AMV'}
@@ -1874,6 +1962,16 @@ export function GenerateDialog({
           <Button variant="ghost" disabled={busy} onClick={onClose}>
             Cancelar
           </Button>
+          {!localizedRange && (
+            <Button
+              variant="secondary"
+              icon={<Sparkles size={14} />}
+              disabled={!music || ready.length === 0 || !analysisReadiness.canGenerate || busy || lyricsSyncing}
+              onClick={() => setPreviewDirectionOpen(true)}
+            >
+              Prévia da Direção
+            </Button>
+          )}
           <Button variant="primary" icon={<Wand2 size={15} />} disabled={!music || ready.length === 0 || !analysisReadiness.canGenerate || busy || lyricsSyncing || (localizedRange !== undefined && localizedRange.clipIds.length === 0)} onClick={() => void generate(seed)}>
             {localizedRange ? 'Gerar alternativa' : directorMode === 'autonomous' ? 'Gerar melhor AMV' : 'Gerar e revisar'}
           </Button>

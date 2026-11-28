@@ -1,6 +1,7 @@
-import { findBestReplacementShots } from '@amv/automv';
+import { analyzeEpisodeScenes } from '@amv/analysis';
+import { explainTimelineClipChoice, findAlternativeScenesForPhrase, findBestReplacementShots } from '@amv/automv';
 import { clipEndUs, colorGradingPreset, COLOR_GRADING_PRESETS, defaultParams, isSfxAsset, EFFECTS, evaluateKeyframes, fillScale, formatTimecode, newId, param, removeKeyframeAt, sourceDurationUs, SPEED_PRESETS, speedAt, speedFactorAt, speedKeyframesForPreset, TRANSITIONS, trimClip, upsertKeyframe, type Clip, type Command, type EffectId, type Keyframe, type Project, type TextWordTiming } from '@amv/project';
-import { Eye, EyeOff, Headphones, Languages, Pause, Pencil, Play, Plus, RotateCcw, SkipForward, Sparkles, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Headphones, HelpCircle, Languages, Pause, Pencil, Play, Plus, RotateCcw, Search, SkipForward, Sparkles, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { applyTranslation, editSubtitleTextManually, langLabel, LOOKS, originalText, restyleSubtitles, selectSubtitleTextVariant } from '@amv/subtitles';
 import type { ProjectSession } from '../../core/session';
@@ -279,6 +280,12 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
   const asset = clip.assetId ? project.assets.find((a) => a.id === clip.assetId) : null;
   const fps = project.settings.fps;
   const [playheadUs, setPlayheadUs] = useState(() => useEditor.getState().playheadUs);
+  const [showWhyScene, setShowWhyScene] = useState(false);
+  const [phraseSearchText, setPhraseSearchText] = useState('');
+  useEffect(() => {
+    setShowWhyScene(false);
+    setPhraseSearchText('');
+  }, [clip.id]);
   useEffect(() => {
     setPlayheadUs(useEditor.getState().playheadUs);
     return useEditor.subscribe((state, prev) => {
@@ -290,6 +297,36 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
     () => (track.kind === 'video' ? buildSessionReadingInputs(session) : { episodes: [], musics: [] }),
     [track.kind, session, session.changes, project.assets],
   );
+  const whySceneExplanation = useMemo(() => {
+    if (!showWhyScene || track.kind !== 'video') return '';
+    return explainTimelineClipChoice({
+      project,
+      clip,
+      episodes: readingInputs.episodes,
+    });
+  }, [showWhyScene, track.kind, project, clip, readingInputs.episodes]);
+  const phraseMatchedScenes = useMemo(() => {
+    if (track.kind !== 'video' || phraseSearchText.trim().length < 2) return [];
+    const allScenes = readingInputs.episodes.flatMap((ep, idx) => {
+      const epAsset = project.assets.find((a) => a.id === ep.assetId);
+      return analyzeEpisodeScenes({
+        assetId: ep.assetId,
+        assetHash: epAsset?.hash,
+        sourceFile: epAsset?.path ?? ep.name,
+        sourceEpisode: ep.name,
+        episodeIndex: idx,
+        analysis: ep.analysis,
+        vision: ep.vision,
+        characterLibrary: project.characterLibrary,
+        sceneAnnotations: project.sceneAnnotations,
+      });
+    });
+    return findAlternativeScenesForPhrase({
+      phraseText: phraseSearchText.trim(),
+      scenes: allScenes,
+      limit: 4,
+    });
+  }, [track.kind, phraseSearchText, readingInputs.episodes, project]);
   const suggestedShots = useMemo(
     () => (track.kind === 'video' && !track.locked
       ? findBestReplacementShots({ project, clipId: clip.id, ...readingInputs, limit: 3 })
@@ -547,6 +584,56 @@ function ClipInspector({ session, project, clip }: { session: ProjectSession; pr
               >
                 Recortar personagem (V2 + letra atrás)
               </button>
+              <button
+                type="button"
+                onClick={() => setShowWhyScene((v) => !v)}
+                className="flex h-7 w-full items-center justify-center gap-1.5 rounded-control border border-line bg-base px-2 text-xs font-medium text-ink-soft hover:border-violet/45 hover:text-ink"
+              >
+                <HelpCircle size={12} />
+                {showWhyScene ? 'Ocultar justificativa da cena' : 'Por que você escolheu essa cena?'}
+              </button>
+              {showWhyScene && (
+                <pre className="whitespace-pre-wrap rounded-control border border-violet/35 bg-violet/5 p-2 font-sans text-2xs text-ink-soft">
+                  {whySceneExplanation}
+                </pre>
+              )}
+              <div className="space-y-1.5 rounded-control border border-line-soft bg-base/60 p-2">
+                <label className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-azure">
+                  <Search size={10} /> Encontrar cena para frase da música
+                </label>
+                <input
+                  type="text"
+                  value={phraseSearchText}
+                  onChange={(e) => setPhraseSearchText(e.target.value)}
+                  placeholder="Digite um verso (ex.: espada em chamas)..."
+                  className="h-7 w-full rounded-control border border-line bg-base px-2 text-2xs text-ink"
+                />
+                {phraseMatchedScenes.length > 0 && (
+                  <div className="space-y-1 pt-0.5">
+                    {phraseMatchedScenes.map((m) => (
+                      <div key={m.scene.sceneId} className="flex items-center justify-between gap-2 rounded bg-panel/80 px-2 py-1 text-2xs">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-medium text-ink">
+                            {m.scene.sourceEpisode} · {m.scene.startTime.toFixed(1)}s ({m.combinedScore.toFixed(0)} pts)
+                          </div>
+                          <div className="truncate text-[10px] text-muted">{m.alignment.explanation}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextPatch = clipSceneShotPatch(project, clip, { startS: m.alignment.phraseSync.recommendedSourceInS, endS: m.scene.endTime });
+                            patch('Alinhar cena à frase', m.scene.assetId !== clip.assetId ? { ...nextPatch, assetId: m.scene.assetId, reason: `Alinhada à frase "${phraseSearchText.trim()}": ${m.alignment.explanation}` } : { ...nextPatch, reason: `Alinhada à frase "${phraseSearchText.trim()}": ${m.alignment.explanation}` });
+                            toast({ tone: 'ok', title: 'Cena alinhada à frase' });
+                          }}
+                          className="shrink-0 rounded border border-azure/45 bg-azure/15 px-1.5 py-0.5 text-[10px] font-medium text-ink hover:bg-azure/25"
+                        >
+                          Aplicar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               {suggestedShots.length > 0 && (
                 <div className="mt-1 space-y-1 rounded-control border border-line-soft bg-base/60 p-2">
                   <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-violet-strong">

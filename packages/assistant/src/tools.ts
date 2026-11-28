@@ -1,5 +1,5 @@
-import { shotKey, type EpisodeAnalysis, type EpisodeVision, type MusicAnalysis, type Shot } from '@amv/analysis';
-import { generateAmv, STYLES, type StyleId } from '@amv/automv';
+import { analyzeEpisodeScenes, shotKey, type EpisodeAnalysis, type EpisodeVision, type MusicAnalysis, type Shot } from '@amv/analysis';
+import { explainTimelineClipChoice, findAlternativeScenesForPhrase, generateAmv, STYLES, type StyleId } from '@amv/automv';
 import { applyCommand, clipEndUs, newId, sourceTimeAt, splitClip, TextContentSchema, timelineLocalAtSource, type Clip, type Command, type EffectInstance, type Project } from '@amv/project';
 import type { ChangeItem, ChangeSet } from './changeset.js';
 
@@ -377,4 +377,94 @@ export function ideas(ctx: AssistantContext): string[] {
   if (ctx.episodes.size === 1) out.push('Com um episódio só as cenas se repetem rápido. Para superação, importe também o episódio da derrota e o da revanche (o "antes e depois" dá força à virada).');
   if (!ctx.music.size) out.push('Nenhuma música no projeto: vá em Músicas → Recomendadas e escolha pelo tema.');
   return out;
+}
+
+/** Explica com dados reais por que a cena do clipe selecionado/playhead foi escolhida. */
+export function explainClipChoice(ctx: AssistantContext, args: { clipIds?: string[] } = {}): string {
+  const clips = targetClips(ctx, args.clipIds);
+  if (!clips.length) return 'Selecione um clipe de vídeo (ou deixe o playhead sobre ele) para ver a justificativa detalhada.';
+  const episodes = [...ctx.episodes.entries()].map(([assetId, analysis]) => ({
+    assetId,
+    name: assetName(ctx.project, assetId),
+    analysis,
+    hasAudio: (ctx.project.assets.find((a) => a.id === assetId)?.probe?.audio.length ?? 0) > 0,
+    vision: ctx.visions?.get(assetId),
+  }));
+  return clips
+    .slice(0, 3)
+    .map((clip) => explainTimelineClipChoice({ project: ctx.project, clip, episodes }))
+    .join('\n\n');
+}
+
+/** Encontra cenas analisadas que combinam semanticamente/contextualmente com uma frase e propõe a troca. */
+export function proposeSceneForPhrase(
+  ctx: AssistantContext,
+  args: { phrase: string; clipIds?: string[]; allowContrast?: boolean },
+): ChangeSet | string {
+  const phrase = args.phrase?.trim();
+  if (!phrase) return 'Informe a frase ou verso da música para buscar uma cena compatível.';
+  const allScenes = [...ctx.episodes.entries()].flatMap(([assetId, analysis], idx) => {
+    const asset = ctx.project.assets.find((a) => a.id === assetId);
+    return analyzeEpisodeScenes({
+      assetId,
+      assetHash: asset?.hash,
+      sourceFile: asset?.path ?? assetName(ctx.project, assetId),
+      sourceEpisode: assetName(ctx.project, assetId),
+      episodeIndex: idx,
+      analysis,
+      vision: ctx.visions?.get(assetId),
+      characterLibrary: ctx.project.characterLibrary,
+      sceneAnnotations: ctx.project.sceneAnnotations,
+    });
+  });
+  if (!allScenes.length) return 'Nenhuma cena analisada disponível nos episódios do projeto.';
+
+  const ranked = findAlternativeScenesForPhrase({
+    phraseText: phrase,
+    scenes: allScenes,
+    allowIntentionalContrast: args.allowContrast,
+    limit: 5,
+  });
+  if (!ranked.length) return `Não encontrei cenas compatíveis para a frase "${phrase}".`;
+
+  const clips = targetClips(ctx, args.clipIds);
+  if (!clips.length) {
+    return `Melhores cenas para "${phrase}":\n` + ranked
+      .slice(0, 3)
+      .map((r, i) => `${i + 1}. ${r.scene.sourceEpisode} (${mmss(r.scene.startTime)}–${mmss(r.scene.endTime)}) — nota ${r.combinedScore.toFixed(0)}/100 · ${r.alignment.explanation}`)
+      .join('\n');
+  }
+
+  const target = clips[0]!;
+  const best = ranked.find((r) => !(r.scene.assetId === target.assetId && Math.abs(r.scene.startTime - target.sourceInUs / S) < 0.4)) ?? ranked[0]!;
+  const lenS = target.durationUs / S;
+  const speed = Math.max(0.6, Math.min(target.speed || 1, best.scene.durationS / Math.max(0.2, lenS)));
+  const srcInUs = us(best.alignment.phraseSync.recommendedSourceInS);
+  const srcOutUs = Math.min(us(best.scene.endTime), srcInUs + Math.max(200_000, Math.round(target.durationUs * speed)));
+
+  return {
+    id: newId('cs'),
+    title: 'Alinhar cena à frase',
+    reason: `${best.scene.sourceEpisode} (${mmss(best.scene.startTime)}) — ${best.alignment.explanation}`,
+    items: [
+      item(
+        'modify',
+        `Trocar clipe em ${mmss(target.timelineStartUs / S)} para alinhar com "${phrase.slice(0, 36)}" (nota ${best.combinedScore.toFixed(0)}/100)`,
+        target.timelineStartUs,
+        [{
+          type: 'clip.update',
+          clipId: target.id,
+          patch: {
+            assetId: best.scene.assetId,
+            speed,
+            sourceInUs: srcInUs,
+            sourceOutUs: srcOutUs,
+            origin: 'ai',
+            confidence: best.alignment.confidence,
+            reason: `Alinhamento (${best.alignment.alignmentType}) com "${phrase}": ${best.alignment.explanation}`,
+          },
+        }],
+      ),
+    ],
+  };
 }

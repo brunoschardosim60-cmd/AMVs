@@ -1,6 +1,7 @@
 import type { ChangeSet } from './changeset.js';
 import { chat, type ChatMessage, type FetchLike, type ProviderConfig, type ToolSpec } from './providers.js';
 import {
+  explainClipChoice,
   findLines,
   findScenes,
   findWeakPoints,
@@ -12,6 +13,7 @@ import {
   proposeGenerate,
   proposeRemove,
   proposeReplaceScene,
+  proposeSceneForPhrase,
   proposeSpeechBeforeDrop,
   targetClips,
   type AssistantContext,
@@ -35,6 +37,8 @@ export const TOOLS: ToolSpec[] = [
   { name: 'propose_faster_cuts', description: 'Deixa os cortes mais rápidos cortando os clipes nas batidas (selecionados ou um trecho em segundos).', parameters: { type: 'object', properties: { beatsPerCut: { type: 'number' }, fromS: { type: 'number' }, toS: { type: 'number' } } } },
   { name: 'propose_speech_before_drop', description: 'Coloca uma fala/grito marcante terminando exatamente no drop, com legenda e a música abaixando.', parameters: { type: 'object', properties: { text: { type: 'string', description: 'trecho da fala desejada (opcional)' } } } },
   { name: 'propose_remove', description: 'Remove clipes pelo id.', parameters: { type: 'object', properties: { clipIds: { type: 'array', items: { type: 'string' } } }, required: ['clipIds'] } },
+  { name: 'explain_clip_choice', description: 'Responde objetivamente por que uma cena/clipe foi escolhida pelo diretor criativo.', parameters: { type: 'object', properties: { clipIds: { type: 'array', items: { type: 'string' } } } } },
+  { name: 'propose_scene_for_phrase', description: 'Encontra outra cena que combine semanticamente ou por contraste com uma frase da letra e propõe a substituição.', parameters: { type: 'object', properties: { phrase: { type: 'string' }, allowContrast: { type: 'boolean' } }, required: ['phrase'] } },
 ];
 
 export interface ToolOutcome {
@@ -71,6 +75,10 @@ export function runTool(ctx: AssistantContext, name: string, args: Record<string
         return asProposal(proposeSpeechBeforeDrop(ctx, args));
       case 'propose_remove':
         return asProposal(proposeRemove(ctx, args as { clipIds: string[] }));
+      case 'explain_clip_choice':
+        return { content: explainClipChoice(ctx, args as { clipIds?: string[] }), proposal: null };
+      case 'propose_scene_for_phrase':
+        return asProposal(proposeSceneForPhrase(ctx, args as { phrase: string; clipIds?: string[]; allowContrast?: boolean }));
       default:
         return { content: `ferramenta desconhecida: ${name}`, proposal: null };
     }
@@ -154,6 +162,15 @@ export function localTurn(ctx: AssistantContext, question: string): { reply: str
     const o = runTool(ctx, name, args);
     return o.proposal ? { reply: `${o.proposal.title}: ${o.proposal.reason}. Revise abaixo.`, proposals: [o.proposal] } : { reply: o.content, proposals: [] };
   };
+  if (/(por que|motivo|justific).*(escolh|cena|clipe)/.test(q)) {
+    return { reply: explainClipChoice(ctx), proposals: [] };
+  }
+  if (/(encontr|ach|outra cena|cena).*(frase|verso|letra)/.test(q)) {
+    const quoted = question.match(/["“”'‘’]([^"“”'‘’]+)["“”'‘’]/)?.[1]
+      ?? question.split(/[:\-–]/).slice(1).join(':').trim();
+    if (quoted) return prop('propose_scene_for_phrase', { phrase: quoted, allowContrast: /contraste/.test(q) });
+    return { reply: 'Coloque a frase entre aspas (ex.: Encontre outra cena para a frase "minha espada em chamas").', proposals: [] };
+  }
   if (/melhor/.test(q) && /(cena|clipe|aqui|isso)/.test(q)) {
     const clips = targetClips(ctx);
     if (!clips.length) return { reply: 'Selecione um clipe (ou deixe o playhead em cima dele) e pergunte de novo.', proposals: [] };

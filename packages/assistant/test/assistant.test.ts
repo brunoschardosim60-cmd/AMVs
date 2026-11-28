@@ -91,6 +91,19 @@ describe('chat local (sem modelo)', () => {
     expect(localTurn(setup(), 'qual o sentido da vida').reply).toMatch(/cortes mais rápidos/);
   });
 
+  it('responde "Por que você escolheu essa cena?" e "Encontre outra cena para a frase" com dados objetivos', () => {
+    const ctx = setup();
+    const firstVideo = ctx.project.clips.find((c) => c.assetId === 'ep')!;
+    ctx.selection = [firstVideo.id];
+
+    const why = localTurn(ctx, 'Por que você escolheu essa cena?');
+    expect(why.reply).toMatch(/Dados medidos do plano|Origem:/i);
+
+    const phraseSwap = localTurn(ctx, 'Encontre outra cena que combine melhor com a frase "minha espada na batalha"');
+    expect(phraseSwap.proposals).toHaveLength(1);
+    expect(phraseSwap.proposals[0]!.title).toBe('Alinhar cena à frase');
+  });
+
   it('revalidação pega proposta que ficou inválida', () => {
     const ctx = setup();
     const cs = localTurn(ctx, 'clarão nas batidas').proposals[0]!;
